@@ -36,6 +36,10 @@
     },
     { "name": "diff", "description": "Compare two files as a unified diff." },
     { "name": "read", "description": "Read text files whole, by line range, head, or tail." },
+    {
+      "name": "read_pdf_pages",
+      "description": "Render PDF pages to images, with their text layer."
+    },
     { "name": "create", "description": "Create, overwrite, or append to text files." },
     { "name": "edit", "description": "Apply literal string replacements to files." },
     { "name": "move", "description": "Move, rename, or copy files and directories." },

@@ -28,6 +28,10 @@ LABEL org.opencontainers.image.title="Filesystem MCP" \
       org.opencontainers.image.licenses="MIT" \
       io.modelcontextprotocol.server.name="io.github.j0hanz/filesystem-mcp"
 
+# poppler-utils renders PDF pages for read_pdf_pages; poppler-data and a base
+# font cover CJK CMaps and non-embedded standard fonts.
+RUN apk add --no-cache poppler-utils poppler-data font-dejavu
+
 # Create non-root user
 RUN adduser -D mcp
 
