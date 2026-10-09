@@ -1,17 +1,14 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
-import { execFile } from 'node:child_process';
 import { basename } from 'node:path';
-import { promisify } from 'node:util';
 
 import * as z from 'zod/v4';
 
-import { ErrorCode, FsError, isNodeError } from '../core/errors.ts';
+import { ErrorCode, FsError } from '../core/errors.ts';
+import { runBinary } from '../core/exec.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { MIB } from '../core/util.ts';
 import { defineTool } from './define.ts';
-
-const execFileAsync = promisify(execFile);
 
 /** Pages rendered per call; a longer range is cut and a continuation is returned. */
 const MAX_PAGES_PER_CALL = 10;
@@ -20,9 +17,10 @@ const MAX_TOTAL_IMAGE_BYTES = 12 * MIB;
 const MAX_TEXT_CHARS_PER_PAGE = 4000;
 const PAGE_RENDER_TIMEOUT_MS = 60_000;
 const PDF_MAGIC = '%PDF-';
+const DJVU_MAGIC = 'AT&TFORM';
 
 const ReadPdfPagesInputSchema = z.strictObject({
-  path: RequiredPath.describe('PDF file inside an allowed workspace root.'),
+  path: RequiredPath.describe('PDF or DjVu file inside an allowed workspace root.'),
   pages: z
     .string()
     .regex(/^\s*\d+\s*(-\s*\d+\s*)?$/u, { message: 'Use a page or range like "3" or "1-3"' })
@@ -70,51 +68,102 @@ function parsePageRange(spec: string): { first: number; last: number } {
   return { first, last };
 }
 
-/** Runs a poppler binary; a missing binary becomes an actionable error instead of ENOENT. */
-async function runPoppler(
-  bin: string,
-  args: readonly string[],
-  signal: AbortSignal,
-  encoding: 'buffer' | 'utf8',
-): Promise<Buffer | string> {
-  try {
-    const { stdout } = await execFileAsync(bin, args, {
-      encoding,
-      maxBuffer: MAX_TOTAL_IMAGE_BYTES + 4 * MIB,
-      timeout: PAGE_RENDER_TIMEOUT_MS,
-      signal,
-      windowsHide: true,
-    });
-    return stdout;
-  } catch (error) {
-    signal.throwIfAborted();
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      throw new FsError(
-        ErrorCode.IO_ERROR,
-        `${bin} is not installed on the server (install poppler-utils).`,
-      );
-    }
-    const stderr =
-      typeof error === 'object' && error !== null && 'stderr' in error
-        ? String(error.stderr).trim()
-        : '';
-    throw new FsError(ErrorCode.IO_ERROR, `${bin} failed: ${stderr || String(error)}`);
-  }
+interface PageSource {
+  readonly kind: 'PDF' | 'DjVu';
+  countPages(): Promise<number>;
+  renderPng(page: number, dpi: number): Promise<Buffer>;
+  /** Text layer per page, in order, for pages first..last. */
+  pageTexts(first: number, last: number): Promise<string[]>;
 }
 
-async function countPages(validPath: string, signal: AbortSignal): Promise<number> {
-  const info = (await runPoppler('pdfinfo', [validPath], signal, 'utf8')) as string;
-  const match = /^Pages:\s+(\d+)/mu.exec(info);
-  if (!match?.[1]) throw new FsError(ErrorCode.IO_ERROR, 'pdfinfo did not report a page count.');
-  return Number.parseInt(match[1], 10);
+const IMAGE_OUTPUT_LIMIT = MAX_TOTAL_IMAGE_BYTES + 4 * MIB;
+
+function pdfSource(validPath: string, signal: AbortSignal): PageSource {
+  const opts = { signal, timeoutMs: PAGE_RENDER_TIMEOUT_MS, maxOutputBytes: IMAGE_OUTPUT_LIMIT };
+  return {
+    kind: 'PDF',
+    countPages: async () => {
+      const info = (await runBinary('pdfinfo', [validPath], opts)).toString('utf8');
+      const match = /^Pages:\s+(\d+)/mu.exec(info);
+      if (!match?.[1])
+        throw new FsError(ErrorCode.IO_ERROR, 'pdfinfo did not report a page count.');
+      return Number.parseInt(match[1], 10);
+    },
+    renderPng: (page, dpi) => {
+      const p = String(page);
+      return runBinary(
+        'pdftoppm',
+        ['-f', p, '-l', p, '-r', String(dpi), '-png', '-singlefile', validPath],
+        opts,
+      );
+    },
+    pageTexts: async (first, last) => {
+      const text = await runBinary(
+        'pdftotext',
+        ['-f', String(first), '-l', String(last), '-layout', '-enc', 'UTF-8', validPath, '-'],
+        opts,
+      );
+      // pdftotext ends every page with a form feed.
+      return text.toString('utf8').split('\f');
+    },
+  };
+}
+
+function djvuSource(validPath: string, signal: AbortSignal): PageSource {
+  const opts = { signal, timeoutMs: PAGE_RENDER_TIMEOUT_MS, maxOutputBytes: 256 * MIB };
+  return {
+    kind: 'DjVu',
+    countPages: async () => {
+      const out = (await runBinary('djvused', ['-e', 'n', validPath], opts)).toString('utf8');
+      const count = Number.parseInt(out.trim(), 10);
+      if (!Number.isFinite(count))
+        throw new FsError(ErrorCode.IO_ERROR, 'djvused did not report a page count.');
+      return count;
+    },
+    // ddjvu's -scale is the output resolution in dpi; it only writes PNM, so ffmpeg re-encodes to PNG.
+    renderPng: async (page, dpi) => {
+      const pnm = await runBinary(
+        'ddjvu',
+        ['-format=pnm', `-page=${String(page)}`, `-scale=${String(dpi)}`, validPath, '-'],
+        opts,
+      );
+      return runBinary(
+        'ffmpeg',
+        [
+          '-loglevel',
+          'error',
+          '-f',
+          'image2pipe',
+          '-i',
+          'pipe:0',
+          '-frames:v',
+          '1',
+          '-c:v',
+          'png',
+          '-f',
+          'image2pipe',
+          'pipe:1',
+        ],
+        { ...opts, input: pnm, maxOutputBytes: IMAGE_OUTPUT_LIMIT },
+      );
+    },
+    pageTexts: async (first, last) => {
+      const texts: string[] = [];
+      for (let page = first; page <= last; page += 1) {
+        const out = await runBinary('djvutxt', [`--page=${String(page)}`, validPath], opts);
+        texts.push(out.toString('utf8'));
+      }
+      return texts;
+    },
+  };
 }
 
 export const READ_PDF_PAGES = defineTool<typeof ReadPdfPagesInputSchema, ReadPdfPagesOutput>({
   name: 'read_pdf_pages',
   title: 'Read PDF Pages',
   description:
-    'Render PDF pages to PNG images (returned as image content) plus the text layer, so scanned or ' +
-    `oddly-encoded PDFs can be read visually. Up to ${String(MAX_PAGES_PER_CALL)} pages per call.`,
+    'Render PDF or DjVu pages to PNG images (returned as image content) plus the text layer, so scanned or ' +
+    `oddly-encoded documents can be read visually. Up to ${String(MAX_PAGES_PER_CALL)} pages per call.`,
   input: ReadPdfPagesInputSchema,
   readOnlyHint: true,
   timeoutMs: PAGE_RENDER_TIMEOUT_MS * 3,
@@ -124,21 +173,24 @@ export const READ_PDF_PAGES = defineTool<typeof ReadPdfPagesInputSchema, ReadPdf
   run: async (args, ctx) => {
     const { stats, validPath } = await ctx.fs.stat(args.path, { signal: ctx.signal });
     if (!stats.isFile()) throw new FsError(ErrorCode.NOT_FILE, 'Not a file.', args.path);
-    const head = await ctx.fs.readLeadingSample(args.path, PDF_MAGIC.length);
-    if (head.toString('latin1') !== PDF_MAGIC) {
+    const head = (await ctx.fs.readLeadingSample(args.path, DJVU_MAGIC.length)).toString('latin1');
+    let source: PageSource;
+    if (head.startsWith(PDF_MAGIC)) source = pdfSource(validPath, ctx.signal);
+    else if (head === DJVU_MAGIC) source = djvuSource(validPath, ctx.signal);
+    else {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
-        'Not a PDF file (missing %PDF- header).',
+        'Not a PDF or DjVu file (missing %PDF- or AT&TFORM header).',
         args.path,
       );
     }
 
-    const totalPages = await countPages(validPath, ctx.signal);
+    const totalPages = await source.countPages();
     const { first, last: requestedLast } = parsePageRange(args.pages);
     if (first > totalPages) {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
-        `Page ${String(first)} is out of range: the PDF has ${String(totalPages)} pages.`,
+        `Page ${String(first)} is out of range: the ${source.kind} has ${String(totalPages)} pages.`,
         args.path,
       );
     }
@@ -151,13 +203,7 @@ export const READ_PDF_PAGES = defineTool<typeof ReadPdfPagesInputSchema, ReadPdf
     let budgetHit = false;
     for (let page = first; page <= cappedLast; page += 1) {
       ctx.onProgress({ current: page - first, total: cappedLast - first + 1 });
-      const p = String(page);
-      const png = (await runPoppler(
-        'pdftoppm',
-        ['-f', p, '-l', p, '-r', String(args.dpi), '-png', '-singlefile', validPath],
-        ctx.signal,
-        'buffer',
-      )) as Buffer;
+      const png = await source.renderPng(page, args.dpi);
       // Always return at least one page, even when it alone exceeds the budget.
       if (rendered.length > 0 && totalBytes + png.length > MAX_TOTAL_IMAGE_BYTES) {
         budgetHit = true;
@@ -189,26 +235,9 @@ export const READ_PDF_PAGES = defineTool<typeof ReadPdfPagesInputSchema, ReadPdf
         `// truncated: ${next.reason}. Continue: read_pdf_pages ${JSON.stringify(next.args)}`,
       );
     if (args.includeText) {
-      const text = (await runPoppler(
-        'pdftotext',
-        [
-          '-f',
-          String(first),
-          '-l',
-          String(lastRendered),
-          '-layout',
-          '-enc',
-          'UTF-8',
-          validPath,
-          '-',
-        ],
-        ctx.signal,
-        'utf8',
-      )) as string;
-      // pdftotext ends every page with a form feed.
-      const pageTexts = text.split('\f');
+      const pageTexts = await source.pageTexts(first, lastRendered);
       lines.push(
-        '// Text layer below can be garbled when the PDF fonts lack Unicode maps; the images are authoritative.',
+        '// Text layer below can be garbled or missing (fonts without Unicode maps, scans); the images are authoritative.',
       );
       rendered.forEach(({ page }, i) => {
         const body = (pageTexts[i] ?? '').trim();

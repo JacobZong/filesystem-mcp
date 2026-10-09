@@ -329,7 +329,8 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   title: 'Read File',
   description:
     'Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. ' +
-    'Images and audio return as media; other binary files are rejected.',
+    'Images and audio return as media; for other binary files use read_pdf_pages (PDF/DjVu), ' +
+    'read_document (e-books, Office, archives) or read_video_frames (video).',
   input: ReadFileInputSchema,
   readOnlyHint: true,
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
