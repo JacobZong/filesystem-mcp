@@ -12,7 +12,9 @@ import { LIST_ROOTS } from './list-roots.ts';
 import { LIST } from './list.ts';
 import { MOVE } from './move.ts';
 import { PATCH } from './patch.ts';
+import { READ_DOCUMENT } from './read-document.ts';
 import { READ_PDF_PAGES } from './read-pdf-pages.ts';
+import { READ_VIDEO_FRAMES } from './read-video-frames.ts';
 import { READ } from './read.ts';
 import { REPLACE_TEXT } from './replace-text.ts';
 import { SEARCH_TEXT } from './search-text.ts';
@@ -27,7 +29,9 @@ export const ALL_TOOLS = [
   MOVE,
   PATCH,
   READ,
+  READ_DOCUMENT,
   READ_PDF_PAGES,
+  READ_VIDEO_FRAMES,
   REPLACE_TEXT,
   LIST_ROOTS,
   SEARCH_TEXT,

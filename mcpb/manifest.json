@@ -37,9 +37,14 @@
     { "name": "diff", "description": "Compare two files as a unified diff." },
     { "name": "read", "description": "Read text files whole, by line range, head, or tail." },
     {
-      "name": "read_pdf_pages",
-      "description": "Render PDF pages to images, with their text layer."
+      "name": "read_document",
+      "description": "Convert e-books, Office files and archives to Markdown."
     },
+    {
+      "name": "read_pdf_pages",
+      "description": "Render PDF or DjVu pages to images, with their text layer."
+    },
+    { "name": "read_video_frames", "description": "Return evenly spaced video frames as images." },
     { "name": "create", "description": "Create, overwrite, or append to text files." },
     { "name": "edit", "description": "Apply literal string replacements to files." },
     { "name": "move", "description": "Move, rename, or copy files and directories." },
