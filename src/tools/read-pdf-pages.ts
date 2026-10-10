@@ -8,6 +8,7 @@ import { ErrorCode, FsError } from '../core/errors.ts';
 import { runBinary } from '../core/exec.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { MIB } from '../core/util.ts';
+import type { ToolDef } from './define.ts';
 import { defineTool } from './define.ts';
 
 /** Pages rendered per call; a longer range is cut and a continuation is returned. */
@@ -158,7 +159,7 @@ function djvuSource(validPath: string, signal: AbortSignal): PageSource {
   };
 }
 
-export const READ_PDF_PAGES = defineTool<typeof ReadPdfPagesInputSchema, ReadPdfPagesOutput>({
+const readPdfPagesDef: ToolDef<typeof ReadPdfPagesInputSchema, ReadPdfPagesOutput> = {
   name: 'read_pdf_pages',
   title: 'Read PDF Pages',
   description:
@@ -261,4 +262,10 @@ export const READ_PDF_PAGES = defineTool<typeof ReadPdfPagesInputSchema, ReadPdf
       resources: images,
     };
   },
-});
+};
+
+export const READ_PDF_PAGES = defineTool(readPdfPagesDef);
+/** The tool body, reused by `read` when it routes a binary file here. */
+export const runReadPdfPages: ToolDef<typeof ReadPdfPagesInputSchema, ReadPdfPagesOutput>['run'] =
+  readPdfPagesDef.run;
+export { ReadPdfPagesInputSchema };

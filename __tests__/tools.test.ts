@@ -3476,15 +3476,16 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // follow (issue #51).
   // Raised 2026-10-09 to 20000 full / 10150 read-only for `read_pdf_pages`
   // (measured 19578 / 9964), then to 22100 / 12300 for `read_document` and
-  // `read_video_frames` (measured 21650 / 12036).
+  // `read_video_frames` (measured 21650 / 12036), then to 23100 / 13300 for
+  // `locate` and read's auto-routing note (measured 22608 / 12994).
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 22_100;
-    const BUDGET_CHARS_READ_ONLY = 12_300;
+    const BUDGET_CHARS = 23_100;
+    const BUDGET_CHARS_READ_ONLY = 13_300;
 
     const full = await createTestClientPair([tmpDir]);
     try {
       const { tools } = await full.client.listTools();
-      assert.strictEqual(tools.length, 16, 'tool count changed; update the budget deliberately');
+      assert.strictEqual(tools.length, 17, 'tool count changed; update the budget deliberately');
       const size = JSON.stringify(tools).length;
       assert.ok(
         size <= BUDGET_CHARS,

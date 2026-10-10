@@ -9,6 +9,7 @@ import { runBinary } from '../core/exec.ts';
 import { detectMimeType } from '../core/mime.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { MIB, parseEnvInt } from '../core/util.ts';
+import type { ToolDef } from './define.ts';
 import { defineTool } from './define.ts';
 
 const CONVERT_TIMEOUT_MS = 180_000;
@@ -178,7 +179,7 @@ async function convert(validPath: string, ext: string, signal: AbortSignal): Pro
   return { text: await convertWithServer(bytes, basename(validPath), signal), via: 'converter' };
 }
 
-export const READ_DOCUMENT = defineTool<typeof ReadDocumentInputSchema, ReadDocumentOutput>({
+const readDocumentDef: ToolDef<typeof ReadDocumentInputSchema, ReadDocumentOutput> = {
   name: 'read_document',
   title: 'Read Document',
   description:
@@ -273,4 +274,10 @@ export const READ_DOCUMENT = defineTool<typeof ReadDocumentInputSchema, ReadDocu
       text: lines.join('\n'),
     };
   },
-});
+};
+
+export const READ_DOCUMENT = defineTool(readDocumentDef);
+/** The tool body, reused by `read` when it routes a binary file here. */
+export const runReadDocument: ToolDef<typeof ReadDocumentInputSchema, ReadDocumentOutput>['run'] =
+  readDocumentDef.run;
+export { ReadDocumentInputSchema };

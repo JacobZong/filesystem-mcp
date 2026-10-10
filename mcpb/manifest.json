@@ -25,6 +25,7 @@
   "tools": [
     { "name": "list_roots", "description": "List the allowed directories. Call this first." },
     { "name": "list", "description": "List directory contents as entries and an ASCII tree." },
+    { "name": "locate", "description": "Find files by name across all roots using a daily index." },
     { "name": "find_files", "description": "Find files by glob pattern, such as **/*.ts." },
     {
       "name": "stat",

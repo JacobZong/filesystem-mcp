@@ -10,6 +10,7 @@ import { EDIT } from './edit.ts';
 import { FIND_FILES } from './find-files.ts';
 import { LIST_ROOTS } from './list-roots.ts';
 import { LIST } from './list.ts';
+import { LOCATE } from './locate.ts';
 import { MOVE } from './move.ts';
 import { PATCH } from './patch.ts';
 import { READ_DOCUMENT } from './read-document.ts';
@@ -26,6 +27,7 @@ export const ALL_TOOLS = [
   DIFF,
   EDIT,
   LIST,
+  LOCATE,
   MOVE,
   PATCH,
   READ,

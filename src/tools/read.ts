@@ -29,6 +29,7 @@ import type { BatchResult } from './batch.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
+import { routeBinaryRead } from './read-route.ts';
 
 const rangeField = (description: string) =>
   z
@@ -329,8 +330,8 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   title: 'Read File',
   description:
     'Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. ' +
-    'Images and audio return as media; for other binary files use read_pdf_pages (PDF/DjVu), ' +
-    'read_document (e-books, Office, archives) or read_video_frames (video).',
+    'Images and audio return as media; PDF/DjVu, e-books, Office files, archives and videos are opened ' +
+    'automatically with read_pdf_pages, read_document or read_video_frames (call those directly for more pages, offsets or frames).',
   input: ReadFileInputSchema,
   readOnlyHint: true,
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
@@ -354,6 +355,10 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   },
   accessPaths: singleOrBatchAccessPaths,
   run: async (args, ctx) => {
+    // Fork: a single binary document (PDF/DjVu, e-book, Office, archive, video) goes to the
+    // matching document tool; its result shape differs from read's, hence the cast.
+    const routed = await routeBinaryRead(args, ctx);
+    if (routed) return routed as never;
     const items: BudgetItem[] =
       args.paths !== undefined
         ? await collectFileBudget(args.paths, READ_MANY_MAX_TOTAL_BYTES, getMaxTextFileSize(), ctx)

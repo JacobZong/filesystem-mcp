@@ -2,9 +2,9 @@
 # Not part of the upstream PR.
 name: NAS image
 
+# Manual only (2026-10-10): :nas is published by the gated nas-sync workflow
+# (tests + integration) on the default branch; a push to nas must not skip it.
 on:
-  push:
-    branches: [nas]
   workflow_dispatch:
 
 permissions:

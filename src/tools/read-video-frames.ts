@@ -8,6 +8,7 @@ import { ErrorCode, FsError } from '../core/errors.ts';
 import { runBinary } from '../core/exec.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { MIB } from '../core/util.ts';
+import type { ToolDef } from './define.ts';
 import { defineTool } from './define.ts';
 
 const MAX_FRAMES = 12;
@@ -62,10 +63,7 @@ function formatTime(seconds: number): string {
   return `${hh > 0 ? `${String(hh)}:` : ''}${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
 }
 
-export const READ_VIDEO_FRAMES = defineTool<
-  typeof ReadVideoFramesInputSchema,
-  ReadVideoFramesOutput
->({
+const readVideoFramesDef: ToolDef<typeof ReadVideoFramesInputSchema, ReadVideoFramesOutput> = {
   name: 'read_video_frames',
   title: 'Read Video Frames',
   description:
@@ -204,4 +202,12 @@ export const READ_VIDEO_FRAMES = defineTool<
       resources: images,
     };
   },
-});
+};
+
+export const READ_VIDEO_FRAMES = defineTool(readVideoFramesDef);
+/** The tool body, reused by `read` when it routes a binary file here. */
+export const runReadVideoFrames: ToolDef<
+  typeof ReadVideoFramesInputSchema,
+  ReadVideoFramesOutput
+>['run'] = readVideoFramesDef.run;
+export { ReadVideoFramesInputSchema };

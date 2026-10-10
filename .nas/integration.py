@@ -116,6 +116,14 @@ try:
     res, text, imgs = s.tool("read_video_frames", {"path": "/data/read/fixtures/sample.mp4", "frames": 2, "width": 320})
     check("read_video_frames returns 2 JPEG frames", not res.get("isError") and len(imgs) == 2, text.splitlines()[0][:100] if text else "")
 
+    res, text, _ = s.tool("read", {"path": "/data/read/fixtures/sample.epub"})
+    check("read routes EPUB to the converter", not res.get("isError") and "NAS integration chapter" in text
+          and "read_document" in text, text.splitlines()[0][:100] if text else "")
+
+    res, text, _ = s.tool("locate", {"query": "sample"})
+    check("locate finds the fixtures by name", not res.get("isError") and "sample.epub" in text and "sample.pdf" in text,
+          text.splitlines()[0][:100] if text else "")
+
     res, text, _ = s.tool("create", {"files": [{"path": "/data/read/fixtures/must-fail.txt", "content": "x"}]})
     check("write under /data/read is blocked", bool(res.get("isError")), "blocked" if res.get("isError") else "WRITE SUCCEEDED")
 
