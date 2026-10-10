@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 
+import { startIndexScheduler } from '../core/file-index.ts';
 import type { PathGuard } from '../core/path.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
 import { CREATE } from './create.ts';
@@ -77,4 +78,6 @@ export function registerTools(deps: ToolRegistrarDeps): void {
   for (const tool of registeredTools(deps.readOnly ?? false)) {
     tool.register(toolDeps);
   }
+  // Fork: load the saved filename index (or build it) and rebuild it nightly; starts once per process.
+  startIndexScheduler(() => deps.pathGuard.getAllowedDirectories());
 }

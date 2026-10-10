@@ -41,6 +41,10 @@ ENV FS_MOBI_PYTHON=/opt/mobi/bin/python
 # Create non-root user
 RUN adduser -D mcp
 
+# Fork: where locate saves its filename index (FS_INDEX_DIR). A named volume
+# mounted here inherits this ownership; the NAS runs the container as 1000:1000.
+RUN mkdir -p /index && chown 1000:1000 /index
+
 WORKDIR /app
 
 # Copy built artifacts and pre-compiled dependencies from builder

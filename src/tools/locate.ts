@@ -96,7 +96,7 @@ export const LOCATE = defineTool<typeof LocateInputSchema, LocateOutput>({
   name: 'locate',
   title: 'Locate Files',
   description:
-    'Find files by name across all roots in one call using a filename index (refreshed daily), like the Unix locate. ' +
+    'Find files by name across all roots in one call using a filename index (rebuilt nightly), like the Unix locate. ' +
     'Use it instead of find_files to look for a book or document by title; returns path, size, date and which tool reads it.',
   input: LocateInputSchema,
   readOnlyHint: true,
@@ -152,7 +152,7 @@ export const LOCATE = defineTool<typeof LocateInputSchema, LocateOutput>({
         ? new Date(status.builtAt).toISOString().slice(0, 16).replace('T', ' ')
         : '';
     const lines = [
-      `${String(hits.length)} match(es) for "${args.query}" in an index of ${String(status.files)} files (built ${built} UTC${status.building ? '; refresh running' : ''}${status.truncated ? '; index truncated' : ''}).`,
+      `${String(hits.length)} match(es) for "${args.query}" in an index of ${String(status.files)} files (built ${built} UTC${status.loadedFromDisk ? ', loaded from disk' : ''}${status.building ? '; refresh running' : ''}${status.truncated ? '; index truncated' : ''}).`,
       ...hits.map((h) => `${h.path}  |  ${formatSize(h.size)}  |  ${h.modified}  |  ${h.reader}`),
     ];
     if (hits.length === 0)
