@@ -1,0 +1,36 @@
+name: Maintenance task
+description: Plan repository upkeep, documentation, or internal improvements.
+labels: [maintenance]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, credentials, or sensitive filesystem contents. Sanitize paths and logs.
+        Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/j0hanz/filesystem-mcp/security/advisories), not in a public issue.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should this task accomplish, and why?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is included and excluded?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance checklist
+      description: List verifiable completion criteria as Markdown checkboxes.
+      placeholder: '- [ ] Observable outcome'
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: Related work
+      description: Optional. Link issues, dependencies, PRs, or existing planning documents.

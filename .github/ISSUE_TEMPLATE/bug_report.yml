@@ -1,0 +1,71 @@
+name: Bug report
+description: Report unexpected behavior in filesystem-mcp.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, credentials, or sensitive filesystem contents. Sanitize paths and logs.
+        Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/j0hanz/filesystem-mcp/security/advisories), not in a public issue.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong, and which tool or operation is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include a minimal request and safe sample data, if applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Describe both what you expected and what happened.
+    validations:
+      required: true
+  - type: input
+    id: server-version
+    attributes:
+      label: Server version
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: If using a packaged client or container, say so if unknown.
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client and version
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - stdio
+        - Streamable HTTP
+        - Both
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Optional. Remove secrets and sensitive paths or file contents before submitting.
