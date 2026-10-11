@@ -38,7 +38,7 @@ const OPTIONS_HELP: HelpRow[] = [
   },
   {
     flags: '--allow-sensitive',
-    desc: 'Allow access to sensitive system paths (env: FS_ALLOW_SENSITIVE)',
+    desc: 'Turn off the built-in secret-file denylist (.env, keys, credentials) (env: FS_ALLOW_SENSITIVE)',
   },
   {
     flags: '--root-boundary <path>',
@@ -48,15 +48,21 @@ const OPTIONS_HELP: HelpRow[] = [
     flags: '--max-file-size <bytes>',
     desc: 'Maximum file size for reads and for one create call, in bytes; the per-message wire limit is 3 × this + 1 MiB (env: FS_MAX_FILE_SIZE)',
   },
-  { flags: '--walk-cwd', desc: 'Walk up from CWD to find a project root; implies --allow-cwd' },
-  { flags: '--deny <pattern>', desc: 'Block paths matching this pattern; repeatable' },
+  {
+    flags: '--walk-cwd',
+    desc: 'Walk up from CWD to find a project root; implies --allow-cwd (env: FS_ALLOW_CWD_WALK)',
+  },
+  {
+    flags: '--deny <pattern>',
+    desc: 'Block paths matching this pattern; repeatable (env: FS_DENYLIST)',
+  },
   {
     flags: '--allow <pattern>',
     desc: 'Exempt a pattern from the built-in sensitive denylist; repeatable (env: FS_ALLOWLIST)',
   },
   {
     flags: '--allow-missing-roots',
-    desc: 'Start even if configured allowed directories do not exist',
+    desc: 'Start even if configured allowed directories do not exist (env: FS_ALLOW_MISSING_ROOTS)',
   },
 ];
 
@@ -74,7 +80,7 @@ const ENV_HELP: HelpRow[] = [
   },
   {
     flags: 'FS_ALLOW_SENSITIVE',
-    desc: 'Allow sensitive system paths ("true" or "1" enables this)',
+    desc: 'Turn off the built-in secret-file denylist ("true" or "1" enables this)',
   },
   { flags: 'FS_ROOT_BOUNDARY', desc: 'Path prefix all allowed roots must fall under' },
   {
@@ -136,7 +142,9 @@ const EXAMPLES_HELP = [
 ];
 
 export function printHelpAndExit(): never {
-  const COL = 27;
+  // Sized from the longest name so a long one (FS_ALLOW_UNRESTRICTED_HOSTS)
+  // never runs into its description.
+  const COL = Math.max(...[...OPTIONS_HELP, ...ENV_HELP].map(({ flags }) => flags.length)) + 2;
   // Pad first, colour after: `styleText` honours NO_COLOR, and padding the
   // plain text keeps the columns aligned whether or not colour is on.
   const row = (color: 'green' | 'cyan', name: string, desc: string): string =>
