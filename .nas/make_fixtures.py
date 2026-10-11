@@ -51,4 +51,9 @@ open(os.path.join(out, "sample.pdf"), "wb").write(pdf.encode("latin1"))
 subprocess.run(["docker", "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}", "--entrypoint", "ffmpeg",
                 "-v", f"{os.path.abspath(out)}:/out", image, "-loglevel", "error", "-y", "-f", "lavfi",
                 "-i", "testsrc=duration=3:size=320x240:rate=10", "-pix_fmt", "yuv420p", "/out/sample.mp4"], check=True)
+# Audio: 1 s tone as MP3 (write_binary round-trip and read-as-audio checks).
+subprocess.run(["docker", "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}", "--entrypoint", "ffmpeg",
+                "-v", f"{os.path.abspath(out)}:/out", image, "-loglevel", "error", "-y", "-f", "lavfi",
+                "-i", "sine=frequency=440:duration=1", "-codec:a", "libmp3lame", "-q:a", "6", "/out/sample.mp3"],
+               check=True)
 print("fixtures:", sorted(os.listdir(out)))

@@ -3449,7 +3449,15 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
   it('every tool publishes exactly its read-only or mutating annotations', async () => {
     const { tools } = await harness.client.listTools();
-    const mutating = new Set(['create', 'delete', 'edit', 'move', 'patch', 'replace_text']);
+    const mutating = new Set([
+      'create',
+      'delete',
+      'edit',
+      'move',
+      'patch',
+      'replace_text',
+      'write_binary',
+    ]);
     for (const tool of tools) {
       const readOnlyHint = !mutating.has(tool.name);
       assert.deepStrictEqual(
@@ -3478,14 +3486,16 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // (measured 19578 / 9964), then to 22100 / 12300 for `read_document` and
   // `read_video_frames` (measured 21650 / 12036), then to 23100 / 13300 for
   // `locate` and read's auto-routing note (measured 22608 / 12994).
+  // Raised 2026-10-11 to 24100 full (read-only unchanged) for `write_binary`
+  // (measured 23603 full; it is mutating, so the read-only list is unaffected).
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 23_100;
+    const BUDGET_CHARS = 24_100;
     const BUDGET_CHARS_READ_ONLY = 13_300;
 
     const full = await createTestClientPair([tmpDir]);
     try {
       const { tools } = await full.client.listTools();
-      assert.strictEqual(tools.length, 17, 'tool count changed; update the budget deliberately');
+      assert.strictEqual(tools.length, 18, 'tool count changed; update the budget deliberately');
       const size = JSON.stringify(tools).length;
       assert.ok(
         size <= BUDGET_CHARS,

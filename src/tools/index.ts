@@ -21,6 +21,7 @@ import { READ } from './read.ts';
 import { REPLACE_TEXT } from './replace-text.ts';
 import { SEARCH_TEXT } from './search-text.ts';
 import { STAT } from './stat.ts';
+import { WRITE_BINARY } from './write-binary.ts';
 
 export const ALL_TOOLS = [
   CREATE,
@@ -40,6 +41,7 @@ export const ALL_TOOLS = [
   SEARCH_TEXT,
   FIND_FILES,
   STAT,
+  WRITE_BINARY,
 ] as const;
 
 export const MUTATING_TOOL_NAMES = new Set(

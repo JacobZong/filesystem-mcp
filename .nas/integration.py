@@ -99,8 +99,8 @@ try:
     s.call("notifications/initialized", notify=True)
     check("initialize", "result" in init, init.get("result", {}).get("serverInfo", {}).get("version", ""))
     names = {t["name"] for t in s.call("tools/list").get("result", {}).get("tools", [])}
-    check("document tools are registered", {"read_document", "read_pdf_pages", "read_video_frames"} <= names,
-          ", ".join(sorted(names & {"read_document", "read_pdf_pages", "read_video_frames"})))
+    check("document tools are registered", {"read_document", "read_pdf_pages", "read_video_frames", "write_binary"} <= names,
+          ", ".join(sorted(names & {"read_document", "read_pdf_pages", "read_video_frames", "write_binary"})))
 
     for attempt in range(30):  # the converter may still be starting
         res, text, _ = s.tool("read_document", {"path": "/data/read/fixtures/sample.epub"})
@@ -129,6 +129,28 @@ try:
 
     res, text, _ = s.tool("create", {"files": [{"path": "/data/write/probe.txt", "content": "ok"}]})
     check("write under /data/write works", not res.get("isError"), text[:80])
+
+    # Fork: write_binary (binary upload for the learning audio) and read returning audio.
+    import hashlib
+    audio = open(os.path.join(fixtures, "sample.mp3"), "rb").read()
+    digest = hashlib.sha256(audio).hexdigest()
+    b64 = base64.b64encode(audio).decode()
+    res, text, _ = s.tool("write_binary", {"path": "/data/write/learning/sample.mp3", "data_base64": b64,
+                                           "sha256": digest})
+    landed = os.path.join(write_dir, "learning", "sample.mp3")
+    same = os.path.exists(landed) and open(landed, "rb").read() == audio
+    check("write_binary stores the exact MP3 bytes", not res.get("isError") and same and digest in text, text[:120])
+
+    res, text, _ = s.tool("write_binary", {"path": "/data/write/learning/sample.mp3", "data_base64": b64})
+    check("write_binary refuses an existing file without overwrite", bool(res.get("isError")), text[:80])
+
+    res, text, _ = s.tool("write_binary", {"path": "/data/read/fixtures/must-fail.mp3", "data_base64": b64})
+    check("write_binary under /data/read is blocked", bool(res.get("isError")), "blocked" if res.get("isError") else "WRITE SUCCEEDED")
+
+    res = s.call("tools/call", {"name": "read", "arguments": {"path": "/data/write/learning/sample.mp3"}}).get("result", {})
+    blocks = [b for b in res.get("content", []) if b.get("type") == "audio"]
+    check("read returns the MP3 as an audio block", len(blocks) == 1 and base64.b64decode(blocks[0].get("data", "")) == audio,
+          ", ".join(b.get("type", "") for b in res.get("content", [])))
 finally:
     for name in (f"{net}-fs", f"{net}-conv"):
         sh("docker", "rm", "-f", name, check=False)
