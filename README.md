@@ -19,9 +19,9 @@ Secret files stay hidden, and risky changes wait for your OK.
 
 [Model Context Protocol (MCP)](https://modelcontextprotocol.io) is how AI apps
 such as Claude, GitHub Copilot in VS Code, and Cursor connect to tools.
-**Filesystem MCP** is an MCP server: a small program that runs on your
-computer and gives the AI 13 tools for working with files. You choose the
-folders. Everything outside them is off limits.
+Filesystem MCP is an MCP server: a small program that runs on your computer
+and gives the AI 13 tools for working with files. You choose which folders it
+can use, and everything outside them is off limits.
 
 Once it is connected, you can ask things like:
 
@@ -33,24 +33,27 @@ Once it is connected, you can ask things like:
 
 ## Why Filesystem MCP?
 
-- **Safe by default.** Only the folders you allow. `.env` files, private keys,
-  and cloud credentials are blocked. You are asked before the AI deletes a
-  non-empty folder, opens a folder you did not allow, or writes over a file
-  with `create` or `move` (only `create` and copies can skip the question,
-  with `overwrite: true`). Edits made with `edit`, `patch`, and `replace_text`
-  apply without asking, but the AI can show you the diff first with `dryRun`.
-  Want zero risk? `--read-only` removes every tool that writes.
-- **Made for code.** Search inside files like `grep`, with a regex engine (RE2)
-  that cannot hang. `.gitignore`d files and folders like `node_modules` are
-  skipped by default. Edits are exact-match replacements that fail loudly
-  instead of guessing, and you can preview them as a diff first.
-- **Easy on the AI's context.** Read many files in one call, read only the
-  lines you need, and check a file's size and token estimate before reading
-  it.
-- **Works where you work.** Any MCP client, over stdio or HTTP. Install with
-  npx, Docker, or a one-click Claude Desktop extension. macOS, Linux, and
-  Windows.
-- **Private.** Runs on your machine. No telemetry, no network calls.
+- It is safe by default. The AI can use only the folders you allow, and
+  `.env` files, private keys, and cloud credentials are blocked. The server
+  asks you before the AI deletes a non-empty folder, opens a folder you did
+  not allow, or writes over a file with `create` or `move`. Only `create` and
+  copies can skip that question, by passing `overwrite: true`. Edits made with
+  `edit`, `patch`, and `replace_text` apply without asking, but the AI can
+  show you the diff first with `dryRun`. If the AI should never change
+  anything, `--read-only` removes every tool that writes.
+- Search and editing are made for code. The AI can search inside files like
+  `grep`, with a regex engine (RE2) that cannot hang, and by default the
+  server skips `.gitignore`d files and folders like `node_modules`. Edits are
+  exact-match replacements that fail loudly instead of guessing, and you can
+  preview them as a diff first.
+- It goes easy on the AI's context. The AI can read many files in one call or
+  only the lines it needs, and it can check a file's size and token estimate
+  before reading it.
+- It works with any MCP client, over stdio or HTTP, on macOS, Linux, and
+  Windows. You can install it with npx, Docker, or a one-click Claude Desktop
+  extension.
+- It is private: it runs on your machine, has no telemetry, and makes no
+  network calls.
 
 ### Compared with the reference server
 
@@ -75,7 +78,7 @@ checked against its README on 2026-10-11:
 ## Quick start
 
 > [!NOTE]
-> Requires **Node.js 24 or later**. Check with `node --version`.
+> You need Node.js 24 or later. Check with `node --version`.
 
 1. Add the server to your AI app. Pick yours below.
 2. Replace `/path/to/project` with the folder the AI may use. You can list
@@ -134,12 +137,12 @@ projects:
 <details>
 <summary><b>Claude Desktop</b></summary>
 
-**One click:** download
+For a one-click install, download
 [`filesystem-mcp.mcpb`](https://github.com/j0hanz/filesystem-mcp/releases/latest/download/filesystem-mcp.mcpb),
 open it with Claude Desktop, and pick the folders to allow. Claude Desktop's
 built-in Node.js runs it.
 
-**By hand:** add this to `claude_desktop_config.json`
+To set it up by hand, add this to `claude_desktop_config.json`
 (Settings → Developer → Edit Config):
 
 ```json
@@ -230,8 +233,8 @@ twice over: the `:ro` mount and the `--read-only` flag.
 ```
 
 Drop `:ro` and `--read-only` to let the AI make changes. VS Code and Visual
-Studio use `"servers"` instead of `"mcpServers"`. More in
-[Running in Docker](docs/configuration.md#running-in-docker).
+Studio use `"servers"` instead of `"mcpServers"`. See
+[Running in Docker](docs/configuration.md#running-in-docker) for more.
 
 </details>
 
@@ -293,44 +296,48 @@ cases:
 Flags go in `args` after the package name, for example
 `["-y", "@j0hanz/filesystem-mcp@latest", "--read-only", "/path/to/project"]`.
 
-**[Full configuration reference →](docs/configuration.md)** covers every flag
+The [full configuration reference](docs/configuration.md) covers every flag
 and environment variable, the complete secret-file list, limits, HTTP setup
 with API keys, Docker, and troubleshooting.
 
 ## Security
 
-| Protection         | How it works                                                                                                                                                                                                                                                                                                                                                    |
-| :----------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Folder sandbox     | Every path is resolved, including symlinks, and must stay inside an allowed folder.                                                                                                                                                                                                                                                                             |
-| Secret files       | `.env`, `*.pem`, `*.key`, SSH keys, `.npmrc`, cloud credentials and [more](docs/configuration.md#secret-files) are blocked and hidden from listings.                                                                                                                                                                                                            |
-| You stay in charge | Deleting a non-empty folder and access to a new folder need your confirmation. So does writing over a file with `create` or `move`; only `create` and copies skip the question, when the AI passes `overwrite: true`. In-place edits (`edit`, `patch`, `replace_text`) do not ask; `dryRun` previews them. A client that cannot ask gets a clear error instead. |
-| Off-limits folders | Your home folder itself, system folders, and `~/.ssh`, `~/.aws` and similar can never be added by the AI or the client.                                                                                                                                                                                                                                         |
-| Safe writes        | New content goes to a temporary file that is then renamed into place, so a crash never leaves a half-written file. File permissions are kept.                                                                                                                                                                                                                   |
-| No regex hangs     | RE2 runs in linear time, so no search pattern can freeze the server.                                                                                                                                                                                                                                                                                            |
-| HTTP               | Listens on localhost only by default. Any other address requires an API key.                                                                                                                                                                                                                                                                                    |
-| Container          | The Docker image runs as a non-root user.                                                                                                                                                                                                                                                                                                                       |
+| Protection         | How it works                                                                                                                                                                                                                                                                                                                                                               |
+| :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Folder sandbox     | The server resolves every path, including symlinks, and the resolved path must stay inside an allowed folder.                                                                                                                                                                                                                                                              |
+| Secret files       | `.env`, `*.pem`, `*.key`, SSH keys, `.npmrc`, cloud credentials, and [more](docs/configuration.md#secret-files) are blocked and hidden from listings.                                                                                                                                                                                                                      |
+| You stay in charge | The server asks you before the AI deletes a non-empty folder, gets access to a new folder, or writes over a file with `create` or `move`. Only `create` and copies skip that question, when the AI passes `overwrite: true`. In-place edits (`edit`, `patch`, `replace_text`) do not ask, but `dryRun` previews them. A client that cannot ask gets a clear error instead. |
+| Off-limits folders | Neither the AI nor the client can ever add your home folder itself, system folders, or `~/.ssh`, `~/.aws`, and similar folders.                                                                                                                                                                                                                                            |
+| Safe writes        | New content goes to a temporary file that is then renamed into place, so a crash never leaves a half-written file. Writes keep the file's permissions.                                                                                                                                                                                                                     |
+| No regex hangs     | RE2 runs in linear time, so no search pattern can freeze the server.                                                                                                                                                                                                                                                                                                       |
+| HTTP               | The server listens only on localhost by default. Any other address requires an API key.                                                                                                                                                                                                                                                                                    |
+| Container          | The Docker image runs as a non-root user.                                                                                                                                                                                                                                                                                                                                  |
 
-Found a vulnerability? Please report it privately. See [SECURITY.md](SECURITY.md).
+If you find a vulnerability, please report it privately.
+[SECURITY.md](SECURITY.md) explains how.
 
 ## For MCP client developers
 
-- **Resources.** `filesystem-mcp://file/{+path}` reads a file, and you can
-  subscribe to it for change notifications. Large tool results are cached at
-  `filesystem-mcp://result/{id}` for about 60 seconds. `internal://instructions`
-  holds the usage guide the server sends to the model.
-- **Prompt.** `get-help` returns that guide, optionally one section of it.
-- **Protocol.** Serves both 2025-era clients and the 2026-07-28 revision, over
-  stdio and Streamable HTTP. Confirmations use MCP elicitation. Workspace
-  roots are read (`roots/list`) only on 2025-era stdio connections whose
-  client declares the `roots` capability. Other clients get folders from the
-  server's configuration (arguments, `FS_ALLOWED_DIRS`, `--allow-cwd`) or, if
-  they support elicitation (2025-era HTTP clients do not), an approved access
-  request.
-- **Example apps.** [`examples/`](examples/) has two small, runnable clients:
-  [gatekeeper](examples/clients/gatekeeper/), a coding agent that shows the
-  server's dry-run diff and waits for your y/N before every change, and
-  [hooks](examples/clients/hooks/), which runs a task through a model whenever
-  the workspace changes.
+The `filesystem-mcp://file/{+path}` resource reads a file, and you can
+subscribe to it for change notifications. Large tool results are cached as
+resources at `filesystem-mcp://result/{id}` for about 60 seconds. The
+`internal://instructions` resource holds the usage guide the server sends to
+the model, and the `get-help` prompt returns that guide, optionally one
+section of it.
+
+The server supports both 2025-era clients and the 2026-07-28 revision, over
+stdio and Streamable HTTP, and asks for confirmations through MCP elicitation.
+It reads workspace roots (`roots/list`) only on 2025-era stdio connections
+whose client declares the `roots` capability. Other clients get their folders
+from the server's configuration (arguments, `FS_ALLOWED_DIRS`, `--allow-cwd`)
+or, if they support elicitation (2025-era HTTP clients do not), from an
+approved access request.
+
+[`examples/`](examples/) has two small, runnable clients:
+[gatekeeper](examples/clients/gatekeeper/), a coding agent that shows the
+server's dry-run diff and waits for your y/N before every change, and
+[hooks](examples/clients/hooks/), which runs a task through a model whenever
+the workspace changes.
 
 ## Privacy Policy
 
@@ -358,7 +365,7 @@ Bug reports, ideas, and pull requests are welcome. Start with
 [CONTRIBUTING.md](CONTRIBUTING.md): it covers setup, running the server from
 source, and the checks a pull request needs.
 
-If Filesystem MCP is useful to you, a ⭐ on GitHub helps other people find it.
+If Filesystem MCP is useful to you, a star on GitHub helps other people find it.
 
 [![Contributors](https://contrib.rocks/image?repo=j0hanz/filesystem-mcp)](https://github.com/j0hanz/filesystem-mcp/graphs/contributors)
 

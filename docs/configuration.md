@@ -1,8 +1,8 @@
 # Configuration reference
 
-Everything you can configure in filesystem-mcp, in one place. If you only want
-to get started, the [README quick start](../README.md#quick-start) is enough:
-pass the folder you want the AI to work in, and you are done.
+This page lists everything you can configure in filesystem-mcp. If you only
+want to get started, the [README quick start](../README.md#quick-start) is
+enough: pass the folder you want the AI to work in, and you are done.
 
 Run `filesystem-mcp --help` for the same list in your terminal, and
 `filesystem-mcp --print-config <folders...>` to see the exact settings the
@@ -22,7 +22,7 @@ server would start with (roots, tools, limits, deny rules) without starting it.
 ## Choosing folders
 
 The server only touches files inside its **allowed folders** (also called
-roots). A folder can become allowed in five ways. All of them add up.
+roots). A folder can become allowed in five ways, and they all add up.
 
 | Source                       | Example                                        | Notes                                                                                                                                                                                                                                                                                         |
 | :--------------------------- | :--------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -35,20 +35,21 @@ roots). A folder can become allowed in five ways. All of them add up.
 Call the `list_roots` tool (or ask the AI "which folders can you access?") to
 see the current list.
 
-**Tips**
+A folder argument that is exactly `${NAME}` is read from the environment
+variable `NAME`, and dropped if that variable is unset or empty. Plugin hosts
+use this to pass `${PWD}`.
 
-- A folder argument that is exactly `${NAME}` is read from the environment
-  variable `NAME`, and dropped if that variable is unset or empty. Plugin hosts
-  use this to pass `${PWD}`.
-- `--walk-cwd` looks for `.git`, `package.json`, or `pyproject.toml` and stops
-  at your home folder or at `--root-boundary`.
-- `--allow-cwd` is unreliable in desktop apps: Claude Desktop, for example,
-  does not start servers inside your project. Pass the folder instead.
-- `--root-boundary <path>` (or `FS_ROOT_BOUNDARY`) is a fence for every other
-  source: a folder outside it is skipped at startup with a warning, and
-  requests to add a folder outside it are refused.
-- Approved folders last until the server stops. Removing a folder from your
-  editor does not remove access in the running session.
+`--walk-cwd` looks for `.git`, `package.json`, or `pyproject.toml` and stops
+at your home folder or at `--root-boundary`. `--allow-cwd` is unreliable in
+desktop apps: Claude Desktop, for example, does not start servers inside your
+project, so pass the folder instead.
+
+`--root-boundary <path>` (or `FS_ROOT_BOUNDARY`) is a fence for every other
+source. The server skips a folder outside it at startup with a warning, and
+refuses requests to add a folder outside it.
+
+Approved folders last until the server stops. Removing a folder from your
+editor does not remove access in the running session.
 
 ## Folders that are never added automatically
 
@@ -68,8 +69,8 @@ given: you named them on purpose.
 
 ## Secret files
 
-These names are blocked by default inside every allowed folder, for reading,
-writing, searching, and listing:
+By default, the server blocks these names inside every allowed folder, for
+reading, writing, searching, and listing:
 
 | Kind                  | Patterns                                                                                                                                 |
 | :-------------------- | :--------------------------------------------------------------------------------------------------------------------------------------- |
@@ -92,9 +93,9 @@ Three switches change the list:
 `--allow` only lifts built-in patterns. It never lifts your own `--deny`
 rules, so `--deny` always wins.
 
-**Pattern syntax.** `*` matches within one folder name, `**` matches any
-number of folders, `?` matches one character, `[abc]` matches a set, and
-`{a,b}` matches alternatives. Hidden names match like any other name:
+In a pattern, `*` matches within one folder name, `**` matches any number of
+folders, `?` matches one character, `[abc]` matches a set, and `{a,b}`
+matches alternatives. Hidden names match like any other name:
 `secrets/**` blocks `secrets/.env`. A pattern without `/` matches a file name
 anywhere (`*.sqlite`); a pattern with `/` matches a path (`private/**`).
 
@@ -118,12 +119,12 @@ For the strongest setup in Docker, combine it with a read-only mount
 When a flag and its environment variable are both set, the flag wins, with two
 exceptions:
 
-- **Lists add up.** Folder arguments join `FS_ALLOWED_DIRS`, `--deny` joins
+- Lists add up. Folder arguments join `FS_ALLOWED_DIRS`, `--deny` joins
   `FS_DENYLIST`, and `--allow` joins `FS_ALLOWLIST`. So an `FS_ALLOWLIST`
   inherited from your shell still applies when you pass `--allow`.
-- **On/off flags only turn things on.** `--allow-sensitive`, `--walk-cwd`, and
-  `--allow-missing-roots` cannot switch off their environment variable.
-  Unset the variable instead.
+- On/off flags only turn things on. `--allow-sensitive`, `--walk-cwd`, and
+  `--allow-missing-roots` cannot switch off their environment variable, so
+  unset the variable instead.
 
 | Flag                      | Default     | What it does                                                                                                                     |
 | :------------------------ | :---------- | :------------------------------------------------------------------------------------------------------------------------------- |
@@ -150,7 +151,7 @@ exceptions:
 Boolean variables accept `true` or `1` to turn on, and `false`, `0`, or unset
 to turn off. Any other value logs a warning and counts as off.
 
-**Folders and access**
+These variables control folders and access:
 
 | Variable                 | What it does                                                              |
 | :----------------------- | :------------------------------------------------------------------------ |
@@ -162,7 +163,7 @@ to turn off. Any other value logs a warning and counts as off.
 | `FS_ALLOWLIST`           | Built-in patterns to unblock, comma-separated. Combined with `--allow`.   |
 | `FS_ALLOW_SENSITIVE`     | Same as `--allow-sensitive`.                                              |
 
-**Limits and logging**
+These variables control limits and logging:
 
 | Variable           | What it does                                                          |
 | :----------------- | :-------------------------------------------------------------------- |
@@ -171,7 +172,7 @@ to turn off. Any other value logs a warning and counts as off.
 | `FS_LOG_LEVEL`     | Same as `--log-level`. Logs go to stderr.                             |
 | `NO_COLOR`         | Any value turns off colored output.                                   |
 
-**HTTP only**
+These variables are for HTTP only:
 
 | Variable                      | What it does                                                                                                                                                                                                                                                                                                                                    |
 | :---------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -201,8 +202,8 @@ to turn off. Any other value logs a warning and counts as off.
 | `list`, `stat`, and search tools        | Time out after about 5 seconds; narrow the path or pattern |
 | Cached results and page cursors         | Expire after about 60 seconds                              |
 
-`read` handles text files and returns images and audio as media. Other binary
-files are refused, and so are UTF-16 text files.
+`read` handles text files and returns images and audio as media. It refuses
+other binary files and UTF-16 text files.
 
 ## Running over HTTP
 
@@ -226,7 +227,7 @@ Code:
 }
 ```
 
-**Safety rules the server enforces**
+The server enforces these safety rules:
 
 - It listens on `127.0.0.1` unless you set `--http-host`.
 - Listening on any other address requires an API key of at least 16
@@ -236,7 +237,7 @@ Code:
   `FS_ALLOWED_HOSTS`, the host names clients will use.
 - Browsers can only call it from `localhost` pages unless you set
   `FS_ALLOWED_ORIGINS`.
-- Requests are rate-limited per client IP (`FS_RATE_LIMIT_RPM`).
+- It rate-limits requests per client IP (`FS_RATE_LIMIT_RPM`).
 
 ```bash
 # Reachable from your network, with a key
@@ -245,15 +246,14 @@ FS_ALLOWED_HOSTS=myhost.local \
 filesystem-mcp --port 3000 --http-host 0.0.0.0 ~/code/app
 ```
 
-**Client versions.** Over HTTP, clients that speak the newest MCP revision
-(2026-07-28) get every feature. Older (2025-era) clients can use all tools,
-resources, and prompts, but not confirmations or file change notifications:
-an overwrite, a recursive delete, or a request for a new folder answers with
-an error that says so. Use stdio, or `overwrite: true` where a tool offers it,
-for those clients.
+Over HTTP, clients that speak the newest MCP revision (2026-07-28) get every
+feature. Older (2025-era) clients can use all tools, resources, and prompts,
+but not confirmations or file change notifications: an overwrite, a recursive
+delete, or a request for a new folder fails with an error that says so. For
+those clients, use stdio, or `overwrite: true` where a tool offers it.
 
-**Folders over HTTP.** No client's workspace folders are picked up over HTTP,
-whatever its version. Pass folders as arguments when you start the server.
+The server never picks up a client's workspace folders over HTTP, whatever
+the client's version, so pass folders as arguments when you start it.
 
 ## Running in Docker
 
@@ -307,8 +307,8 @@ docker run --rm -p 127.0.0.1:3000:3000 \
 
 **The AI says it cannot access my folder.** Ask it to call `list_roots`. If
 the folder is missing, add it to the server's arguments and restart the
-client. In clients without confirmations, a path outside the allowed folders
-is refused rather than asked about.
+client. In clients without confirmations, the server refuses a path outside
+the allowed folders instead of asking about it.
 
 **`Sensitive file blocked`.** The file matches the [secret-file list](#secret-files)
 or one of your `--deny` rules. Unblock just that built-in pattern with
@@ -323,9 +323,9 @@ show".** Your client does not support MCP confirmations (elicitation). The
 error says what to do instead, such as passing `overwrite: true`, deleting a
 folder's files one by one, or using a path that does not exist yet.
 
-**A search misses files.** Hidden files, `.gitignore`d files, and folders like
-`node_modules`, `dist`, and `.git` are skipped by default. Ask for
-`includeHidden` or `includeIgnored`.
+**A search misses files.** By default, searches skip hidden files,
+`.gitignore`d files, and folders like `node_modules`, `dist`, and `.git`. Ask
+for `includeHidden` or `includeIgnored`.
 
 **Windows paths in JSON.** Escape backslashes (`"C:\\Users\\me\\project"`)
 or use forward slashes (`"C:/Users/me/project"`).

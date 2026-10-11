@@ -20,7 +20,7 @@ A useful report includes:
 - what happened, and what you expected.
 
 You will get a reply as soon as possible. Once a fix is released, the advisory
-is published, crediting you unless you prefer otherwise.
+is published with credit to you, unless you prefer otherwise.
 
 ## Supported versions
 
