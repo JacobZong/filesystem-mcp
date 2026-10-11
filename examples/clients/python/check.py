@@ -98,6 +98,9 @@ write(f"{ws}/TODO.md", "old\n")
 code, _, err = run(ws, "--out", "TODO.md")  # closed stdin declines
 assert code == 1 and "declined" in err, err
 assert open(f"{ws}/TODO.md").read() == "old\n"
+code, _, err = run(ws, "--out", "TODO.md", stdin="2\n")  # skip: no error, but nothing written
+assert code == 1 and "kept the existing" in err and "wrote" not in err, err
+assert open(f"{ws}/TODO.md").read() == "old\n"
 code, _, err = run(ws, "--out", "TODO.md", stdin="1\n")
 assert code == 0 and "Overwrite it?" in err, err
 report = open(f"{ws}/TODO.md").read()

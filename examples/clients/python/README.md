@@ -43,9 +43,10 @@ python todo_report.py [dir] [--out FILE] [--url URL] [--legacy]
 Without `--out` the server is started with `--read-only`, so a report run
 cannot change anything. With `--out`, replacing an existing report is the
 server's question: it is asked on stderr and answered on stdin, and closed
-stdin declines. Over HTTP with `--legacy` the server cannot ask, so replacing
-a report fails with an error instead. `FS_MCP_BIN` points the script at a
-local `dist/index.js` instead of the npm package.
+stdin declines. Declining or choosing `skip` keeps the old file and exits 1.
+Over HTTP with `--legacy` the server cannot ask, so replacing a report fails
+with an error instead. `FS_MCP_BIN` points the script at a local
+`dist/index.js` instead of the npm package.
 
 ## How it works
 

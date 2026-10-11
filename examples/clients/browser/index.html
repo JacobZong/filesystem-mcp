@@ -429,7 +429,10 @@
       // create without overwrite: true, so replacing the file is the server's question to ask.
       async function save(path, content) {
         try {
-          await call('create', { files: [{ path, content }] });
+          const { skipped } = data(await call('create', { files: [{ path, content }] }));
+          // 'skip' is a normal result that lists the file in skipped. Nothing is
+          // reopened, so an open editor keeps its edits; Cancel shows the file on disk.
+          if (skipped?.length) return status(`not saved: kept the existing ${path}`);
           status(`saved ${path}`);
           view(path);
         } catch (error) {
@@ -441,7 +444,9 @@
       async function remove(path, folder) {
         if (!confirm(`Delete ${path}?`)) return;
         try {
-          await call('delete', { paths: [path], recursive: folder });
+          const { results } = data(await call('delete', { paths: [path], recursive: folder }));
+          // 'skip' is not an error either: deleted is false and the folder stays, so the page does too.
+          if (results?.[0]?.value?.deleted === false) return status(`not deleted: kept ${path}`);
           await open(folder ? path.slice(0, path.lastIndexOf(sep(path))) || sep(path) : cwd);
           status(`deleted ${path}`);
         } catch (error) {

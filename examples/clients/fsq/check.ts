@@ -66,6 +66,18 @@ assert.equal(r.code, 1);
 assert.match(r.out, /export const a/);
 r = await fsq([...at, 'read', 'oops']);
 assert.equal(r.code, 2);
+// Option errors too: one line and the usage, no stack trace.
+r = await fsq([...at, '--bogus', 'tools']);
+assert.equal(r.code, 2);
+assert.match(r.err, /^fsq: .*'--bogus'.*\nusage: /);
+assert.doesNotMatch(r.err, /^\s+at |node:internal/m);
+r = await fsq([...at, '--timeout']);
+assert.equal(r.code, 2);
+assert.match(r.err, /^fsq: .*--timeout/);
+assert.doesNotMatch(r.err, /^\s+at |node:internal/m);
+r = await fsq([...at, '--timeout', 'abc', 'tools']);
+assert.equal(r.code, 2);
+assert.match(r.err, /^fsq: --timeout must be a number/);
 
 // Overwrite confirmation: answered on stdin, declined when stdin is closed.
 const create = (content: string) => [

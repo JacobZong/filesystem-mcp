@@ -199,11 +199,14 @@ async def main() -> str | None:
             sys.stdout.write(report)
             return None
         result = await client.call_tool("create", {"files": [{"path": out, "content": report}]})
-        failures = (result.structured_content or {}).get(
-            "failures", []
-        )  # create uses structuredContent
+        data = result.structured_content or {}  # create uses structuredContent
+        failures = data.get("failures", [])
         if result.is_error or failures:
             return failures[0]["error"]["message"] if failures else text(result)
+        # Answering "skip" is a success with the path in skipped, yet nothing was
+        # written, so exit 1 as a decline does.
+        if data.get("skipped"):
+            return f"kept the existing {out}; nothing written"
         print(f"wrote {out}", file=sys.stderr)
         return None
 

@@ -376,7 +376,11 @@ Every form is an `elicitation/create` request in form mode, with a `message`
 and a `requestedSchema` that has exactly one property. Answer with
 `{ action: 'accept', content: { <property>: <value> } }`, or with
 `{ action: 'decline' }`. Declining fails that item with `CANCELLED`; for a
-grant, the path then fails with `ACCESS_DENIED`. A handler that understands
+grant, the path then fails with `ACCESS_DENIED`. Accepting with `skip` is not
+a failure, and nothing changes: `create` and `move` list the path under
+`skipped` instead of `files` or `moves`, and `delete` reports
+`deleted: false` with the text `SKIPPED`. A client that announces success
+should check for those. A handler that understands
 the three field shapes (boolean, enum, array of enum) handles every question
 without knowing which one it is:
 

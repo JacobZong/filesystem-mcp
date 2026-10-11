@@ -22,7 +22,7 @@ $ node fsq.ts create files='[{"path":"notes.md","content":"# Notes\n"}]'
   1) overwrite
   2) skip
 number: 2
-{"files":[],"failures":[{"path":"notes.md","error":{"code":"CANCELLED", ...}}]}
+{"files":[],"skipped":["notes.md"]}
 ```
 
 ## Run

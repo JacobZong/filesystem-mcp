@@ -110,8 +110,9 @@ async function catchUp(uri: string, follow: Follow, first = false): Promise<void
       if (initial) {
         const lines = text.slice(0, end).split('\n').slice(0, -1);
         const n = Number(values.lines);
-        const keep = (n > 0 ? lines.slice(-n) : []).join('\n');
-        from = end - keep.length - (keep ? 1 : 0);
+        const kept = n > 0 ? lines.slice(-n) : [];
+        // Counted per line with its newline, so an empty line still counts.
+        from = end - kept.reduce((size, line) => size + line.length + 1, 0);
       }
       if (end > from) print(follow, text.slice(from, end));
       follow.printed = text.slice(0, end); // never shorter: it ended at a newline

@@ -69,13 +69,17 @@ for (const era of [[], ['--legacy']]) {
   const dir = await mkdtemp(join(tmpdir(), 'tail-'));
   const log = join(dir, 'app.log');
   const other = join(dir, 'other.log');
+  const blank = join(dir, 'blank.log');
   await writeFile(log, Array.from({ length: 15 }, (_, i) => `log ${i + 1}\n`).join(''));
   await writeFile(other, 'first\n');
+  await writeFile(blank, '\n'); // one empty line, fewer than -n
 
-  const t = tail([log, other, '-n', '3', ...era]);
+  const t = tail([log, other, blank, '-n', '3', ...era]);
   // The last -n lines of each file, with tail's headers for several files.
-  await t.see('first\n');
+  // An empty line is a line too: it is printed under its header.
+  await t.see('blank.log <==\n\n');
   assert.match(t.out(), /^==> .*app\.log <==\nlog 13\nlog 14\nlog 15\n/);
+  assert.match(t.out(), /==> .*other\.log <==\nfirst\n/);
   assert.doesNotMatch(t.out(), /log 12/);
 
   await appendFile(log, 'new 1\n');

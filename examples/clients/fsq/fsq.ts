@@ -31,19 +31,32 @@ examples:
   node fsq.ts find_files pattern='**/*.ts' --all --json | jq -r '.results[].path'
   node fsq.ts edit path=a.js edits='[{"oldText":"var","newText":"let"}]' dryRun=true`;
 
-const { values, positionals } = parseArgs({
-  allowPositionals: true,
-  options: {
-    dir: { type: 'string', default: '.' },
-    url: { type: 'string' },
-    'read-only': { type: 'boolean', default: false },
-    legacy: { type: 'boolean', default: false },
-    json: { type: 'boolean', default: false },
-    all: { type: 'boolean', default: false },
-    timeout: { type: 'string', default: '60000' },
-    help: { type: 'boolean', short: 'h', default: false },
-  },
-});
+// An unknown option or a missing value is a usage error (exit 2), not a crash.
+const { values, positionals } = (() => {
+  try {
+    return parseArgs({
+      allowPositionals: true,
+      options: {
+        dir: { type: 'string', default: '.' },
+        url: { type: 'string' },
+        'read-only': { type: 'boolean', default: false },
+        legacy: { type: 'boolean', default: false },
+        json: { type: 'boolean', default: false },
+        all: { type: 'boolean', default: false },
+        timeout: { type: 'string', default: '60000' },
+        help: { type: 'boolean', short: 'h', default: false },
+      },
+    });
+  } catch (error) {
+    console.error(`fsq: ${(error as Error).message}\n${USAGE}`);
+    process.exit(2);
+  }
+})();
+const timeout = Number(values.timeout);
+if (!(timeout > 0)) {
+  console.error(`fsq: --timeout must be a number of milliseconds\n${USAGE}`);
+  process.exit(2);
+}
 const [command, ...rest] = positionals;
 if (!command || values.help) {
   console.error(USAGE);
@@ -162,7 +175,7 @@ async function call(name: string, args: Record<string, unknown>): Promise<CallTo
     { name, arguments: args },
     {
       signal: controller.signal,
-      timeout: Number(values.timeout),
+      timeout,
       resetTimeoutOnProgress: true, // a long search that keeps reporting is alive
       onprogress: progress, // also what asks the server to send progress at all
     },
