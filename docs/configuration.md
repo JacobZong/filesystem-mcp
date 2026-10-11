@@ -24,13 +24,13 @@ server would start with (roots, tools, limits, deny rules) without starting it.
 The server only touches files inside its **allowed folders** (also called
 roots). A folder can become allowed in five ways. All of them add up.
 
-| Source                       | Example                                        | Notes                                                                                                         |
-| :--------------------------- | :--------------------------------------------- | :------------------------------------------------------------------------------------------------------------ |
-| Folder arguments             | `filesystem-mcp ~/code/app ~/code/lib`         | Recommended. Each folder must exist, or the server exits with an error (see `--allow-missing-roots`).         |
-| `FS_ALLOWED_DIRS`            | `FS_ALLOWED_DIRS=/code/app:/code/lib`          | Separate folders with `:` on macOS and Linux, `;` on Windows. A missing folder logs a warning and is skipped. |
-| `--allow-cwd` / `--walk-cwd` | `filesystem-mcp --allow-cwd`                   | Adds the folder the server was started from. `--walk-cwd` first walks up to the project root.                 |
-| Your client's workspace      | VS Code with a folder open                     | Clients that share their workspace folders (MCP roots) add them automatically when they connect.              |
-| Approving a request          | The AI asks for `~/notes/todo.md`, you say yes | When the AI asks for a path outside the allowed folders, a client that supports confirmations asks you first. |
+| Source                       | Example                                        | Notes                                                                                                                                                                                                                                                                                         |
+| :--------------------------- | :--------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Folder arguments             | `filesystem-mcp ~/code/app ~/code/lib`         | Recommended. Each folder must exist, or the server exits with an error (see `--allow-missing-roots`).                                                                                                                                                                                         |
+| `FS_ALLOWED_DIRS`            | `FS_ALLOWED_DIRS=/code/app:/code/lib`          | Separate folders with `:` on macOS and Linux, `;` on Windows. A missing folder logs a warning and is skipped.                                                                                                                                                                                 |
+| `--allow-cwd` / `--walk-cwd` | `filesystem-mcp --allow-cwd`                   | Adds the folder the server was started from. `--walk-cwd` first walks up to the project root.                                                                                                                                                                                                 |
+| Your client's workspace      | VS Code with a folder open                     | Over stdio only, from apps that support MCP roots and connect with the older, pre-2026 protocol (VS Code does). Their open folders are added when they connect and when the list changes. Other apps, 2026-07-28 clients, and HTTP connections add nothing this way: pass the folder instead. |
+| Approving a request          | The AI asks for `~/notes/todo.md`, you say yes | When the AI asks for a path outside the allowed folders, a client that supports confirmations asks you first.                                                                                                                                                                                 |
 
 Call the `list_roots` tool (or ask the AI "which folders can you access?") to
 see the current list.
@@ -83,11 +83,11 @@ Matching ignores case, so `.ENV` is blocked too.
 
 Three switches change the list:
 
-| You want to…                     | Use                                                |
-| :------------------------------- | :------------------------------------------------- |
-| Block more paths                 | `--deny <pattern>` (repeatable) or `FS_DENYLIST`   |
-| Unblock one built-in pattern     | `--allow <pattern>` (repeatable) or `FS_ALLOWLIST` |
-| Turn off the whole built-in list | `--allow-sensitive` or `FS_ALLOW_SENSITIVE=true`   |
+| You want to…                     | Use                                                    |
+| :------------------------------- | :----------------------------------------------------- |
+| Block more paths                 | `--deny <pattern>` (repeatable) and/or `FS_DENYLIST`   |
+| Unblock one built-in pattern     | `--allow <pattern>` (repeatable) and/or `FS_ALLOWLIST` |
+| Turn off the whole built-in list | `--allow-sensitive` or `FS_ALLOW_SENSITIVE=true`       |
 
 `--allow` only lifts built-in patterns. It never lifts your own `--deny`
 rules, so `--deny` always wins.
@@ -115,7 +115,15 @@ For the strongest setup in Docker, combine it with a read-only mount
 
 ## Command-line flags
 
-Flags beat the matching environment variable when both are set.
+When a flag and its environment variable are both set, the flag wins, with two
+exceptions:
+
+- **Lists add up.** Folder arguments join `FS_ALLOWED_DIRS`, `--deny` joins
+  `FS_DENYLIST`, and `--allow` joins `FS_ALLOWLIST`. So an `FS_ALLOWLIST`
+  inherited from your shell still applies when you pass `--allow`.
+- **On/off flags only turn things on.** `--allow-sensitive`, `--walk-cwd`, and
+  `--allow-missing-roots` cannot switch off their environment variable.
+  Unset the variable instead.
 
 | Flag                      | Default     | What it does                                                                                                                     |
 | :------------------------ | :---------- | :------------------------------------------------------------------------------------------------------------------------------- |
@@ -150,8 +158,8 @@ to turn off. Any other value logs a warning and counts as off.
 | `FS_ALLOW_CWD_WALK`      | Same as `--walk-cwd`.                                                     |
 | `FS_ALLOW_MISSING_ROOTS` | Same as `--allow-missing-roots`.                                          |
 | `FS_ROOT_BOUNDARY`       | Same as `--root-boundary`.                                                |
-| `FS_DENYLIST`            | Extra blocked patterns, comma-separated. Same as `--deny`.                |
-| `FS_ALLOWLIST`           | Built-in patterns to unblock, comma-separated. Same as `--allow`.         |
+| `FS_DENYLIST`            | Extra blocked patterns, comma-separated. Combined with `--deny`.          |
+| `FS_ALLOWLIST`           | Built-in patterns to unblock, comma-separated. Combined with `--allow`.   |
 | `FS_ALLOW_SENSITIVE`     | Same as `--allow-sensitive`.                                              |
 
 **Limits and logging**
@@ -243,6 +251,9 @@ resources, and prompts, but not confirmations or file change notifications:
 an overwrite, a recursive delete, or a request for a new folder answers with
 an error that says so. Use stdio, or `overwrite: true` where a tool offers it,
 for those clients.
+
+**Folders over HTTP.** No client's workspace folders are picked up over HTTP,
+whatever its version. Pass folders as arguments when you start the server.
 
 ## Running in Docker
 

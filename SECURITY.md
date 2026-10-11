@@ -38,8 +38,10 @@ The server promises that, with its default settings:
   blocked with `--deny`;
 - `--read-only` leaves no tool that changes files;
 - deleting a non-empty folder or opening a new folder never happens without
-  the user's confirmation, and an existing file is only replaced after a
-  confirmation or an explicit `overwrite: true`;
+  the user's confirmation, and `create` and `move` only write over an
+  existing file after a confirmation (`create` and copies also accept an
+  explicit `overwrite: true`; in-place edits with `edit`, `patch`, and
+  `replace_text` do not ask, by design);
 - over HTTP, the API key, Host, and Origin checks cannot be bypassed;
 - no input can crash or hang the server.
 

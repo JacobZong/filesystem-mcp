@@ -161,7 +161,7 @@ export function printHelpAndExit(): never {
     section('Options:'),
     ...OPTIONS_HELP.map(({ flags, desc }) => row('green', flags, desc)),
     '',
-    `${section('Environment variables:')} ${dim('(flags take precedence when both are set)')}`,
+    `${section('Environment variables:')} ${dim('(flags win when both are set; --deny/--allow add to FS_DENYLIST/FS_ALLOWLIST)')}`,
     ...ENV_HELP.map(({ flags, desc }) => row('cyan', flags, desc)),
     '',
     section('Examples:'),

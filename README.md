@@ -35,9 +35,11 @@ Once it is connected, you can ask things like:
 
 - **Safe by default.** Only the folders you allow. `.env` files, private keys,
   and cloud credentials are blocked. You are asked before the AI deletes a
-  non-empty folder or opens a folder you did not allow, and before it replaces
-  an existing file (unless it explicitly asks to overwrite). Want zero risk?
-  `--read-only` removes every tool that writes.
+  non-empty folder, opens a folder you did not allow, or writes over a file
+  with `create` or `move` (only `create` and copies can skip the question,
+  with `overwrite: true`). Edits made with `edit`, `patch`, and `replace_text`
+  apply without asking, but the AI can show you the diff first with `dryRun`.
+  Want zero risk? `--read-only` removes every tool that writes.
 - **Made for code.** Search inside files like `grep`, with a regex engine (RE2)
   that cannot hang. `.gitignore`d files and folders like `node_modules` are
   skipped by default. Edits are exact-match replacements that fail loudly
@@ -56,19 +58,19 @@ How this server differs from the official
 [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem),
 checked against its README on 2026-10-11:
 
-| Capability                | Filesystem MCP                                      | Reference server                        |
-| :------------------------ | :-------------------------------------------------- | :-------------------------------------- |
-| Search inside files       | `search_text`: literal text or RE2 regex            | None; `search_files` matches names only |
-| Secret files              | `.env`, keys, and credentials blocked by default    | Not blocked                             |
-| Overwriting a file        | Asks you first (or the AI passes `overwrite: true`) | `write_file` overwrites without asking  |
-| Delete files              | `delete`; asks before deleting a non-empty folder   | None                                    |
-| `.gitignore`              | Respected by listing and search tools               | Not supported                           |
-| Read-only mode            | `--read-only` removes every tool that writes        | Docker `ro` mounts only                 |
-| Apply a unified diff      | `patch`                                             | None                                    |
-| Compare two files         | `diff`                                              | None                                    |
-| Replace across many files | `replace_text` over a folder or glob                | None                                    |
-| Watch files               | Subscribe to a file and get change notifications    | None                                    |
-| Transport                 | stdio, or Streamable HTTP with `--port`             | stdio                                   |
+| Capability                | Filesystem MCP                                     | Reference server                        |
+| :------------------------ | :------------------------------------------------- | :-------------------------------------- |
+| Search inside files       | `search_text`: literal text or RE2 regex           | None; `search_files` matches names only |
+| Secret files              | `.env`, keys, and credentials blocked by default   | Not blocked                             |
+| Overwriting a file        | `create` asks you first (unless `overwrite: true`) | `write_file` overwrites without asking  |
+| Delete files              | `delete`; asks before deleting a non-empty folder  | None                                    |
+| `.gitignore`              | Respected by listing and search tools              | Not supported                           |
+| Read-only mode            | `--read-only` removes every tool that writes       | Docker `ro` mounts only                 |
+| Apply a unified diff      | `patch`                                            | None                                    |
+| Compare two files         | `diff`                                             | None                                    |
+| Replace across many files | `replace_text` over a folder or glob               | None                                    |
+| Watch files               | Subscribe to a file and get change notifications   | None                                    |
+| Transport                 | stdio, or Streamable HTTP with `--port`            | stdio                                   |
 
 ## Quick start
 
@@ -81,9 +83,9 @@ checked against its README on 2026-10-11:
 3. Restart the app and ask: _"Which folders can you access?"_
 
 > [!TIP]
-> VS Code shares the folders you have open with the server, so the one-click
-> VS Code install works without a path. In other apps, put the folder in
-> `args`. If the AI says it has no folders, that is the fix.
+> VS Code currently shares the folders you have open with the server, so the
+> one-click VS Code install works without a path. In other apps, or over HTTP,
+> put the folder in `args`. If the AI says it has no folders, that is the fix.
 
 <details>
 <summary><b>VS Code</b></summary>
@@ -297,16 +299,16 @@ with API keys, Docker, and troubleshooting.
 
 ## Security
 
-| Protection         | How it works                                                                                                                                                                                          |
-| :----------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Folder sandbox     | Every path is resolved, including symlinks, and must stay inside an allowed folder.                                                                                                                   |
-| Secret files       | `.env`, `*.pem`, `*.key`, SSH keys, `.npmrc`, cloud credentials and [more](docs/configuration.md#secret-files) are blocked and hidden from listings.                                                  |
-| You stay in charge | Deleting a non-empty folder and access to a new folder need your confirmation. So does replacing a file, unless the AI passes `overwrite: true`. A client that cannot ask gets a clear error instead. |
-| Off-limits folders | Your home folder itself, system folders, and `~/.ssh`, `~/.aws` and similar can never be added by the AI or the client.                                                                               |
-| Safe writes        | New content goes to a temporary file that is then renamed into place, so a crash never leaves a half-written file. File permissions are kept.                                                         |
-| No regex hangs     | RE2 runs in linear time, so no search pattern can freeze the server.                                                                                                                                  |
-| HTTP               | Listens on localhost only by default. Any other address requires an API key.                                                                                                                          |
-| Container          | The Docker image runs as a non-root user.                                                                                                                                                             |
+| Protection         | How it works                                                                                                                                                                                                                                                                                                                                                    |
+| :----------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Folder sandbox     | Every path is resolved, including symlinks, and must stay inside an allowed folder.                                                                                                                                                                                                                                                                             |
+| Secret files       | `.env`, `*.pem`, `*.key`, SSH keys, `.npmrc`, cloud credentials and [more](docs/configuration.md#secret-files) are blocked and hidden from listings.                                                                                                                                                                                                            |
+| You stay in charge | Deleting a non-empty folder and access to a new folder need your confirmation. So does writing over a file with `create` or `move`; only `create` and copies skip the question, when the AI passes `overwrite: true`. In-place edits (`edit`, `patch`, `replace_text`) do not ask; `dryRun` previews them. A client that cannot ask gets a clear error instead. |
+| Off-limits folders | Your home folder itself, system folders, and `~/.ssh`, `~/.aws` and similar can never be added by the AI or the client.                                                                                                                                                                                                                                         |
+| Safe writes        | New content goes to a temporary file that is then renamed into place, so a crash never leaves a half-written file. File permissions are kept.                                                                                                                                                                                                                   |
+| No regex hangs     | RE2 runs in linear time, so no search pattern can freeze the server.                                                                                                                                                                                                                                                                                            |
+| HTTP               | Listens on localhost only by default. Any other address requires an API key.                                                                                                                                                                                                                                                                                    |
+| Container          | The Docker image runs as a non-root user.                                                                                                                                                                                                                                                                                                                       |
 
 Found a vulnerability? Please report it privately. See [SECURITY.md](SECURITY.md).
 
@@ -318,7 +320,12 @@ Found a vulnerability? Please report it privately. See [SECURITY.md](SECURITY.md
   holds the usage guide the server sends to the model.
 - **Prompt.** `get-help` returns that guide, optionally one section of it.
 - **Protocol.** Serves both 2025-era clients and the 2026-07-28 revision, over
-  stdio and Streamable HTTP. Confirmations use MCP elicitation.
+  stdio and Streamable HTTP. Confirmations use MCP elicitation. Workspace
+  roots are read (`roots/list`) only on 2025-era stdio connections whose
+  client declares the `roots` capability. Other clients get folders from the
+  server's configuration (arguments, `FS_ALLOWED_DIRS`, `--allow-cwd`) or, if
+  they support elicitation (2025-era HTTP clients do not), an approved access
+  request.
 - **Example apps.** [`examples/`](examples/) has two small, runnable clients:
   [gatekeeper](examples/clients/gatekeeper/), a coding agent that shows the
   server's dry-run diff and waits for your y/N before every change, and
