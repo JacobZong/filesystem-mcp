@@ -29,21 +29,21 @@ gaps ([`next-example-app.spec-hunt.md`](next-example-app.spec-hunt.md)).
 
 ### The app to imitate
 
-- [`exampels/clients/gatekeeper/agent.ts`](../../../exampels/clients/gatekeeper/agent.ts) — 264 lines. Reuse verbatim (copy, do not import — each app is self-contained): `PROVIDERS`/`parseArgs` block (lines 19–49), `rl`/`ask()` (53–73), transport + `Client` construction (75–92), `client.onclose` (94–102), the `elicitation/create` handler (106–127), `toText` (129–134), `gate()` (139–160), `runTool()` (162–176), `chat()` (178–197), and the OpenAI tool mapping + `internal://instructions` read (200–214). Drop the `> ` REPL loop (232–250) and the `task` positional's optional-ness.
-- [`exampels/clients/gatekeeper/check.ts`](../../../exampels/clients/gatekeeper/check.ts) — the harness to imitate: `runAgent()` spins a stub Chat Completions server on `127.0.0.1`, spawns the app with `LLM_BASE_URL`/`LLM_MODEL=stub`/`FS_MCP_BIN`, records every request body. The SIGINT scenario (lines 190–214) uses a `--import` preload that calls `process.emit('SIGINT')` — the only portable way to deliver SIGINT to a child on Windows.
-- [`exampels/clients/gatekeeper/package.json`](../../../exampels/clients/gatekeeper/package.json):
+- [`exampels/clients/gatekeeper/agent.ts`](../../../examples/clients/gatekeeper/agent.ts) — 264 lines. Reuse verbatim (copy, do not import — each app is self-contained): `PROVIDERS`/`parseArgs` block (lines 19–49), `rl`/`ask()` (53–73), transport + `Client` construction (75–92), `client.onclose` (94–102), the `elicitation/create` handler (106–127), `toText` (129–134), `gate()` (139–160), `runTool()` (162–176), `chat()` (178–197), and the OpenAI tool mapping + `internal://instructions` read (200–214). Drop the `> ` REPL loop (232–250) and the `task` positional's optional-ness.
+- [`exampels/clients/gatekeeper/check.ts`](../../../examples/clients/gatekeeper/check.ts) — the harness to imitate: `runAgent()` spins a stub Chat Completions server on `127.0.0.1`, spawns the app with `LLM_BASE_URL`/`LLM_MODEL=stub`/`FS_MCP_BIN`, records every request body. The SIGINT scenario (lines 190–214) uses a `--import` preload that calls `process.emit('SIGINT')` — the only portable way to deliver SIGINT to a child on Windows.
+- [`exampels/clients/gatekeeper/package.json`](../../../examples/clients/gatekeeper/package.json):
   ```json
   { "name": "gatekeeper", "version": "1.0.0", "private": true, "type": "module",
     "engines": { "node": ">=24" },
     "scripts": { "start": "node agent.ts", "test": "node check.ts" },
     "dependencies": { "@modelcontextprotocol/client": "2.2.0" } }
   ```
-- [`exampels/README.md:16-18`](../../../exampels/README.md#L16-L18) — the table, one row:
+- [`exampels/README.md:16-18`](../../../examples/README.md#L16-L18) — the table, one row:
   ```markdown
   | App                               | What it does                                          | Run                                |
   | [gatekeeper](clients/gatekeeper/) | Coding agent with a y/N/why gate on every file change | `node agent.ts <dir> --model <id>` |
   ```
-- [`exampels/AGENTS.md`](../../../exampels/AGENTS.md) — rules: one folder per app, `node <file>.ts` on Node 24, erasable TS only (`import type`, no `enum`), pin client to `2.2.0`, `npx -y @j0hanz/filesystem-mcp <dir>` or `node $FS_MCP_BIN <dir>`, ≤250 lines / ≤2 runtime deps, one keyless check script never named `*.test.ts`, model via `fetch`, add to the table.
+- [`exampels/AGENTS.md`](../../../examples/AGENTS.md) — rules: one folder per app, `node <file>.ts` on Node 24, erasable TS only (`import type`, no `enum`), pin client to `2.2.0`, `npx -y @j0hanz/filesystem-mcp <dir>` or `node $FS_MCP_BIN <dir>`, ≤250 lines / ≤2 runtime deps, one keyless check script never named `*.test.ts`, model via `fetch`, add to the table.
 
 ### Server facts the app relies on (verified by a probe against `dist/` on 2026-09-30)
 
@@ -90,13 +90,13 @@ Run from the repository root unless a `cd` is shown.
 - `exampels/clients/hooks/hooks.ts` (new)
 - `exampels/clients/hooks/check.ts` (new)
 - `exampels/clients/hooks/README.md` (new)
-- [`exampels/README.md`](../../../exampels/README.md) — one table row
+- [`exampels/README.md`](../../../examples/README.md) — one table row
 - `docs/plan/2026-09-30-next-example-app/next-example-app.run.md` (run log, written by run-plan)
 
 **Files out of scope** — leave alone even though they look related:
 
-- [`exampels/clients/gatekeeper/**`](../../../exampels/clients/gatekeeper/) — each app is self-contained; sharing code would couple the two starting points.
-- [`exampels/AGENTS.md`](../../../exampels/AGENTS.md) — rules, not an app.
+- [`exampels/clients/gatekeeper/**`](../../../examples/clients/gatekeeper/) — each app is self-contained; sharing code would couple the two starting points.
+- [`exampels/AGENTS.md`](../../../examples/AGENTS.md) — rules, not an app.
 - Anything under [`src/`](../../../src/) or [`__tests__/`](../../../__tests__/) — the server is the fixed dependency here; a server change to make the client easier is a different effort.
 - [`package.json`](../../../package.json), [`server.json`](../../../server.json), [`mcpb/manifest.json`](../../../mcpb/manifest.json) — versions are bumped by the Release workflow only.
 - [`README.md`](../../../README.md) (root) — it does not list example apps.
@@ -111,7 +111,7 @@ Create `exampels/clients/hooks/package.json`, copying gatekeeper's shape with `n
 
 ### 2. Write the check first (`check.ts`)
 
-Create `exampels/clients/hooks/check.ts`, starting from gatekeeper's [`check.ts`](../../../exampels/clients/gatekeeper/check.ts) and changing the harness:
+Create `exampels/clients/hooks/check.ts`, starting from gatekeeper's [`check.ts`](../../../examples/clients/gatekeeper/check.ts) and changing the harness:
 
 - `runHooks(opts)` spawns `node [--import <preload>] hooks.ts <dir> "keep it tidy" [--yes]` with env `LLM_BASE_URL`, `LLM_MODEL=stub`, `FS_MCP_BIN`, `HOOKS_QUIET_MS=200`, stdio `['pipe','pipe','pipe']`. It resolves a handle `{ child, requests, stdout(), stderr(), ready: Promise<void>, done: Promise<number|null> }` where `ready` resolves when stdout contains `watching ` (the R3 line) and `done` on `close`. A 60 s kill timer guards every run.
 - The stub model: like gatekeeper's, but a script entry may also be `{ status: 500 }` to answer one request with HTTP 500 and body `boom` (R14).
@@ -270,9 +270,9 @@ Iterate until the check is green. If the file lands over 250 lines, trim comment
 
 ### 4. Document
 
-Create `exampels/clients/hooks/README.md` with the same sections as gatekeeper's [`README.md`](../../../exampels/clients/gatekeeper/README.md): title + one-paragraph pitch, an abridged session (a save → `watching`, the change list, a tool call, a dry-run diff, `apply? [y/N/why]`), **Run** (`npm install`, `node hooks.ts <dir> "<task>" --provider <name> --model <id> [--yes]`, what `--yes` does and does not cover), the provider table and the env table copied from gatekeeper (no `HOOKS_QUIET_MS` row), **How it works** mapping to the client API — `StdioClientTransport`, `listTools`, `client.listen({ resourceSubscriptions: [rootUri] })`, `notifications/resources/updated` naming only the directory, `find_files` + `stat paths[]` as the diff, the gate on `destructiveHint`/`dryRun`, `elicitation/create`, `internal://instructions`, stateless turns — plus a **Limits** paragraph (one root, ≤10 000 files, changes inside ignored dirs are invisible, a file the model and you both change in the same turn is attributed to the model), and **Check** (`npm test`, build the server first).
+Create `exampels/clients/hooks/README.md` with the same sections as gatekeeper's [`README.md`](../../../examples/clients/gatekeeper/README.md): title + one-paragraph pitch, an abridged session (a save → `watching`, the change list, a tool call, a dry-run diff, `apply? [y/N/why]`), **Run** (`npm install`, `node hooks.ts <dir> "<task>" --provider <name> --model <id> [--yes]`, what `--yes` does and does not cover), the provider table and the env table copied from gatekeeper (no `HOOKS_QUIET_MS` row), **How it works** mapping to the client API — `StdioClientTransport`, `listTools`, `client.listen({ resourceSubscriptions: [rootUri] })`, `notifications/resources/updated` naming only the directory, `find_files` + `stat paths[]` as the diff, the gate on `destructiveHint`/`dryRun`, `elicitation/create`, `internal://instructions`, stateless turns — plus a **Limits** paragraph (one root, ≤10 000 files, changes inside ignored dirs are invisible, a file the model and you both change in the same turn is attributed to the model), and **Check** (`npm test`, build the server first).
 
-Add the row to [`exampels/README.md`](../../../exampels/README.md) after gatekeeper's:
+Add the row to [`exampels/README.md`](../../../examples/README.md) after gatekeeper's:
 
 ```markdown
 | [hooks](clients/hooks/) | Runs a standing task through the model whenever the workspace changes | `node hooks.ts <dir> "<task>" --model <id>` |

@@ -77,7 +77,10 @@ describe('Security (P0)', () => {
 
       await assert.rejects(
         guard.validateExistingPath(envPath),
-        fsErrorMatcher(ErrorCode.ACCESS_DENIED, /--allow-sensitive[\s\S]*FS_ALLOW_SENSITIVE=1/),
+        fsErrorMatcher(
+          ErrorCode.ACCESS_DENIED,
+          /--allow <pattern>[\s\S]*FS_ALLOWLIST[\s\S]*--allow-sensitive[\s\S]*FS_ALLOW_SENSITIVE=1/,
+        ),
         'Should reject access to .env',
       );
     });

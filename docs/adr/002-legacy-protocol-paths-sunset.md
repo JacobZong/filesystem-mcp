@@ -70,11 +70,19 @@ project.
   `src/resources.ts` (the subscribe/unsubscribe handlers and their registry),
   and roughly 4 lines from `src/tools/define.ts` (the fallback expression and
   its disable comment).
-- README's sentence about legacy roots seeding
-  ([`README.md:319`](../../README.md#L319)) and the `legacy_roots` line in
-  [`src/instructions.ts:67`](../../src/instructions.ts#L67) go with the
-  removal — both describe a flow the removal deletes and become stale the
-  moment it lands.
+- The text that describes legacy roots seeding goes with the removal, since
+  it describes a flow the removal deletes and becomes stale the moment it
+  lands:
+  - [`docs/configuration.md`](../configuration.md#choosing-folders): the
+    workspace row in Choosing folders (and the "five ways" count above it),
+    the tip that removing a folder from your editor does not remove access,
+    the "client's workspace folders" mention under Folders that are never
+    added automatically, and the Folders over HTTP paragraph;
+  - the README: the VS Code tip in the
+    [quick start](../../README.md#quick-start) and the protocol note under
+    "For MCP client developers";
+  - the `legacy_roots` line in
+    [`src/instructions.ts:67`](../../src/instructions.ts#L67).
 - A client that still opens with `initialize` after removal gets the SDK's
   own unsupported-protocol-version error; this server adds no further
   compatibility shim for that case.

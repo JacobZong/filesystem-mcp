@@ -1,109 +1,99 @@
-# Filesystem MCP Server
+<div align="center">
 
-[![License](https://img.shields.io/github/license/j0hanz/filesystem-mcp?style=for-the-badge)](https://github.com/j0hanz/filesystem-mcp/blob/main/LICENSE) [![npm version](https://img.shields.io/npm/v/%40j0hanz%2Ffilesystem-mcp?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/@j0hanz/filesystem-mcp) [![Build](https://img.shields.io/github/actions/workflow/status/j0hanz/filesystem-mcp/release.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=build)](https://github.com/j0hanz/filesystem-mcp/actions) [![GitHub stars](https://img.shields.io/github/stars/j0hanz/filesystem-mcp?style=for-the-badge&logo=github)](https://github.com/j0hanz/filesystem-mcp/stargazers)
+<img src="assets/logo.png" alt="Filesystem MCP logo" width="96" height="96">
 
-[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=filesystem&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Ffilesystem-mcp%40latest%22%5D%7D) [![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=filesystem&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Ffilesystem-mcp%40latest%22%5D%7D&quality=insiders) [![Install in Visual Studio](https://img.shields.io/badge/Visual_Studio-Install-C16FDE?logo=visualstudio&logoColor=white)](https://vs-open.link/mcp-install?%7B%22filesystem-mcp%22%3A%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Ffilesystem-mcp%40latest%22%5D%7D%7D) [![Install in Cursor](https://img.shields.io/badge/Cursor-Install-000000?style=flat-square&logo=cursor&logoColor=white)](cursor://anysphere.cursor-deeplink/mcp/install?name=filesystem&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBqMGhhbnovZmlsZXN5c3RlbS1tY3BAbGF0ZXN0Il19)
+# Filesystem MCP
 
-## Overview
+**Let your AI assistant work with your files, safely.**
 
-Filesystem-MCP is a [Model Context Protocol](https://modelcontextprotocol.io) server that lets AI assistants read and write files within explicitly allowed directories. Sensitive file patterns (`.env`, `*.pem`, `*id_rsa*`) are blocked by default. It exposes filesystem tools, resources, and prompts over stdio or Streamable HTTP transport.
+Read, search, edit, and patch files in the folders you choose.<br>
+Secret files stay hidden, and risky changes wait for your OK.
 
-| Aspect       | Details                                        |
-| :----------- | :--------------------------------------------- |
-| **Status**   | Active (see npm badge for the current version) |
-| **Language** | TypeScript (strict)                            |
-| **Runtime**  | Node.js >= 24                                  |
-| **Package**  | npm                                            |
-| **License**  | MIT                                            |
+[![npm version](https://img.shields.io/npm/v/%40j0hanz%2Ffilesystem-mcp?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@j0hanz/filesystem-mcp) [![CI](https://img.shields.io/github/actions/workflow/status/j0hanz/filesystem-mcp/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/j0hanz/filesystem-mcp/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/github/license/j0hanz/filesystem-mcp?style=flat-square)](LICENSE) [![GitHub stars](https://img.shields.io/github/stars/j0hanz/filesystem-mcp?style=flat-square&logo=github)](https://github.com/j0hanz/filesystem-mcp/stargazers)
 
-## Features
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=filesystem&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Ffilesystem-mcp%40latest%22%5D%7D) [![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=filesystem&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Ffilesystem-mcp%40latest%22%5D%7D&quality=insiders) [![Install in Visual Studio](https://img.shields.io/badge/Visual_Studio-Install-C16FDE?style=flat-square&logo=visualstudio&logoColor=white)](https://vs-open.link/mcp-install?%7B%22filesystem-mcp%22%3A%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40j0hanz%2Ffilesystem-mcp%40latest%22%5D%7D%7D) [![Install in Cursor](https://img.shields.io/badge/Cursor-Install-000000?style=flat-square&logo=cursor&logoColor=white)](https://cursor.com/en/install-mcp?name=filesystem&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBqMGhhbnovZmlsZXN5c3RlbS1tY3BAbGF0ZXN0Il19) [![Install in Claude Desktop](https://img.shields.io/badge/Claude_Desktop-Install-D97757?style=flat-square&logo=claude&logoColor=white)](https://github.com/j0hanz/filesystem-mcp/releases/latest/download/filesystem-mcp.mcpb)
 
-| Feature                | Description                                                                                                |
-| :--------------------- | :--------------------------------------------------------------------------------------------------------- |
-| **Path guarding**      | Every path is validated against allowed roots; `.env`, `*.pem`, `*id_rsa*` and similar patterns are denied |
-| **Filesystem tools**   | Navigate, inspect, read, and write across all major file operations                                        |
-| **Batch operations**   | Most tools accept `path`, `paths[]`, or `files[]` for parallel execution                                   |
-| **Dual transport**     | stdio by default; `--port` enables Streamable HTTP for both 2025-era and 2026-07-28 clients                |
-| **File subscriptions** | Resource subscriptions push change notifications when watched files update                                 |
-| **Regex safety**       | RE2 in all search tools: linear-time matching, so no pattern can ReDoS the server                          |
+</div>
 
-## Compared with the reference server
+## What is this?
 
-How this server differs from [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem), checked against its README and source on 2026-09-24:
+[Model Context Protocol (MCP)](https://modelcontextprotocol.io) is how AI apps
+such as Claude, GitHub Copilot in VS Code, and Cursor connect to tools.
+Filesystem MCP is an MCP server: a small program that runs on your computer
+and gives the AI 13 tools for working with files. You choose which folders it
+can use, and everything outside them is off limits.
 
-| Capability                | filesystem-mcp                                   | Reference server                        |
-| :------------------------ | :----------------------------------------------- | :-------------------------------------- |
-| Search inside files       | `search_text`: RE2 regex or literal, linear time | None; `search_files` matches names only |
-| Secret files              | `.env`, `*.pem`, `*id_rsa*` denied by default    | Not blocked                             |
-| Read-only mode            | `--read-only` removes every mutating tool        | Docker `ro` mounts only                 |
-| Apply a unified diff      | `patch`                                          | None                                    |
-| Compare two files         | `diff`                                           | None                                    |
-| Replace across many files | `replace_text` over a glob                       | None                                    |
-| Watch files               | Resource subscriptions push change notifications | No resources                            |
-| Transport                 | stdio, or Streamable HTTP with `--port`          | stdio                                   |
+Once it is connected, you can ask things like:
 
-## Built with
+- _"Find every TODO in this repo and group them by file."_
+- _"Rename `getUser` to `fetchUser` in all `.ts` files. Show me the diff first."_
+- _"What changed between `config.dev.json` and `config.prod.json`?"_
+- _"Read the last 50 lines of `server.log` and explain the error."_
+- _"Move the old screenshots into `archive/2025/`."_
 
-[![Node.js](https://img.shields.io/badge/node-%3E%3D24-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org) [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org) [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com)
+## Why Filesystem MCP?
 
-| Layer     | Technology                                                             |
-| :-------- | :--------------------------------------------------------------------- |
-| Protocol  | MCP SDK v2 (`@modelcontextprotocol/server`)                            |
-| Runtime   | Node.js >= 24 · TypeScript 6 · ESM                                     |
-| Transport | stdio (default) · Streamable HTTP (`--port`)                           |
-| Regex     | RE2 (`re2-wasm`) — linear time, no lookahead/lookbehind/backreferences |
-| Container | Docker alpine · multi-stage build · non-root user                      |
+- It is safe by default. The AI can use only the folders you allow, and
+  `.env` files, private keys, and cloud credentials are blocked. The server
+  asks you before the AI deletes a non-empty folder, opens a folder you did
+  not allow, or writes over a file with `create` or `move`. Only `create` and
+  copies can skip that question, by passing `overwrite: true`. Edits made with
+  `edit`, `patch`, and `replace_text` apply without asking, but the AI can
+  show you the diff first with `dryRun`. If the AI should never change
+  anything, `--read-only` removes every tool that writes.
+- Search and editing are made for code. The AI can search inside files like
+  `grep`, with a regex engine (RE2) that cannot hang, and by default the
+  server skips `.gitignore`d files and folders like `node_modules`. Edits are
+  exact-match replacements that fail loudly instead of guessing, and you can
+  preview them as a diff first.
+- It goes easy on the AI's context. The AI can read many files in one call or
+  only the lines it needs, and it can check a file's size and token estimate
+  before reading it.
+- It works with any MCP client, over stdio or HTTP, on macOS, Linux, and
+  Windows. You can install it with npx, Docker, or a one-click Claude Desktop
+  extension.
+- It is private: it runs on your machine, has no telemetry, and makes no
+  network calls.
 
-## Table of Contents
+### Compared with the reference server
 
-- [Quick start](#quick-start)
-- [Usage](#usage)
-- [Project structure](#project-structure)
-- [Configuration](#configuration)
-- [Scripts](#scripts)
-- [Security](#security)
-- [Contributing](#contributing)
-- [Privacy Policy](#privacy-policy)
-- [License](#license)
+How this server differs from the official
+[`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem),
+checked against its README on 2026-10-11:
+
+| Capability                | Filesystem MCP                                     | Reference server                        |
+| :------------------------ | :------------------------------------------------- | :-------------------------------------- |
+| Search inside files       | `search_text`: literal text or RE2 regex           | None; `search_files` matches names only |
+| Secret files              | `.env`, keys, and credentials blocked by default   | Not blocked                             |
+| Overwriting a file        | `create` asks you first (unless `overwrite: true`) | `write_file` overwrites without asking  |
+| Delete files              | `delete`; asks before deleting a non-empty folder  | None                                    |
+| `.gitignore`              | Respected by listing and search tools              | Not supported                           |
+| Read-only mode            | `--read-only` removes every tool that writes       | Docker `ro` mounts only                 |
+| Apply a unified diff      | `patch`                                            | None                                    |
+| Compare two files         | `diff`                                             | None                                    |
+| Replace across many files | `replace_text` over a folder or glob               | None                                    |
+| Watch files               | Subscribe to a file and get change notifications   | None                                    |
+| Transport                 | stdio, or Streamable HTTP with `--port`            | stdio                                   |
 
 ## Quick start
 
 > [!NOTE]
-> Requires Node.js ≥ 24.
+> You need Node.js 24 or later. Check with `node --version`.
 
-### Prerequisites
+1. Add the server to your AI app. Pick yours below.
+2. Replace `/path/to/project` with the folder the AI may use. You can list
+   several folders.
+3. Restart the app and ask: _"Which folders can you access?"_
 
-| Requirement | Version / Notes              |
-| :---------- | :--------------------------- |
-| Node.js     | ≥ 24                         |
-| npm         | Bundled with Node.js         |
-| Docker      | Optional — for container use |
+> [!TIP]
+> VS Code currently shares the folders you have open with the server, so the
+> one-click VS Code install works without a path. In other apps, or over HTTP,
+> put the folder in `args`. If the AI says it has no folders, that is the fix.
 
-### Install via npx
+<details>
+<summary><b>VS Code</b></summary>
 
-```bash
-npx -y @j0hanz/filesystem-mcp /path/to/allowed/dir
-```
-
-Or install globally:
-
-```bash
-npm install -g @j0hanz/filesystem-mcp
-filesystem-mcp /path/to/allowed/dir
-```
-
-### Install via Docker
-
-```bash
-docker run -i --rm \
-  -v /path/to/project:/workspace:ro \
-  ghcr.io/j0hanz/filesystem-mcp:latest \
-  --read-only /workspace
-```
-
-### Configure in VS Code
-
-Add to `.vscode/mcp.json`:
+Click **Install in VS Code** above, or add this to `.vscode/mcp.json`:
 
 ```json
 {
@@ -116,95 +106,111 @@ Add to `.vscode/mcp.json`:
 }
 ```
 
-Or install via CLI:
+Or from a terminal:
 
 ```sh
 code --add-mcp '{"name":"filesystem","command":"npx","args":["-y","@j0hanz/filesystem-mcp@latest","/path/to/project"]}'
 ```
 
-### Configure in Visual Studio
+</details>
 
-Add to `.vs\mcp.json` in your solution directory, or `%USERPROFILE%\.mcp.json` for a global configuration:
+<details>
+<summary><b>Cursor</b></summary>
+
+Click **Install in Cursor** above, then add your folder to `args`. Or add this
+to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` for all
+projects:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/filesystem-mcp@latest", "/path/to/project"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Claude Desktop</b></summary>
+
+For a one-click install, download
+[`filesystem-mcp.mcpb`](https://github.com/j0hanz/filesystem-mcp/releases/latest/download/filesystem-mcp.mcpb),
+open it with Claude Desktop, and pick the folders to allow. Claude Desktop's
+built-in Node.js runs it.
+
+To set it up by hand, add this to `claude_desktop_config.json`
+(Settings → Developer → Edit Config):
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@j0hanz/filesystem-mcp@latest", "/path/to/project"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Claude Code</b></summary>
+
+```sh
+claude mcp add filesystem -- npx -y @j0hanz/filesystem-mcp@latest /path/to/project
+```
+
+Or install the plugin, which points the server at your current project:
+
+```text
+/plugin marketplace add j0hanz/j0hanz-marketplace
+/plugin install filesystem-mcp@j0hanz-marketplace
+```
+
+</details>
+
+<details>
+<summary><b>Visual Studio</b></summary>
+
+Add this to `.vs\mcp.json` in your solution folder, or `%USERPROFILE%\.mcp.json`
+for all solutions:
 
 ```json
 {
   "servers": {
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@j0hanz/filesystem-mcp@latest", "/path/to/project"]
+      "args": ["-y", "@j0hanz/filesystem-mcp@latest", "C:/path/to/project"]
     }
   }
 }
 ```
 
-### Configure in Claude Desktop
+</details>
 
-One click: download [`filesystem-mcp.mcpb`](https://github.com/j0hanz/filesystem-mcp/releases/latest/download/filesystem-mcp.mcpb), open it with Claude Desktop, and pick the directories to allow. Claude Desktop's built-in Node.js runs it.
+<details>
+<summary><b>GitHub Copilot CLI and Antigravity CLI (plugin)</b></summary>
 
-Or configure it by hand. Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@j0hanz/filesystem-mcp@latest", "/path/to/project"]
-    }
-  }
-}
-```
-
-### Install in Cursor
-
-Add to `.cursor/mcp.json` in your project root (project-scoped), or `~/.cursor/mcp.json` for a global configuration:
-
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@j0hanz/filesystem-mcp@latest", "/path/to/project"]
-    }
-  }
-}
-```
-
-### Install as a plugin
-
-The [filesystem-mcp plugin](https://github.com/j0hanz/j0hanz-marketplace/tree/main/plugins/filesystem-mcp) wires the server up with project-scoped defaults:
+The [filesystem-mcp plugin](https://github.com/j0hanz/j0hanz-marketplace/tree/main/plugins/filesystem-mcp)
+sets the server up for your current project:
 
 | Client          | Install                                                                                                                         |
 | :-------------- | :------------------------------------------------------------------------------------------------------------------------------ |
-| Claude Code     | `/plugin marketplace add j0hanz/j0hanz-marketplace`, then `/plugin install filesystem-mcp@j0hanz-marketplace`                   |
 | Copilot CLI     | `copilot plugin marketplace add j0hanz/j0hanz-marketplace`, then `copilot plugin install filesystem-mcp@j0hanz-marketplace`     |
 | Antigravity CLI | `git clone https://github.com/j0hanz/j0hanz-marketplace`, then `agy plugin install ./j0hanz-marketplace/plugins/filesystem-mcp` |
 
-The plugin README covers the defaults and how each client picks the project directory.
+</details>
 
-### Docker configuration
+<details>
+<summary><b>Docker</b></summary>
 
-VS Code (`.vscode/mcp.json`) and Visual Studio (`.vs\mcp.json`):
-
-```json
-{
-  "servers": {
-    "filesystem": {
-      "command": "docker",
-      "args": [
-        "run",
-        "-i",
-        "--rm",
-        "-v",
-        "/path/to/project:/workspace",
-        "ghcr.io/j0hanz/filesystem-mcp:latest",
-        "/workspace"
-      ]
-    }
-  }
-}
-```
-
-Claude Desktop (`claude_desktop_config.json`) and Cursor (`mcp.json`):
+The container can only see the folders you mount. This setup is read-only
+twice over: the `:ro` mount and the `--read-only` flag.
 
 ```json
 {
@@ -216,8 +222,9 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`mcp.json`):
         "-i",
         "--rm",
         "-v",
-        "/path/to/project:/workspace",
+        "/path/to/project:/workspace:ro",
         "ghcr.io/j0hanz/filesystem-mcp:latest",
+        "--read-only",
         "/workspace"
       ]
     }
@@ -225,291 +232,143 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`mcp.json`):
 }
 ```
 
-> [!NOTE]
-> For least privilege, use both controls: `:ro` makes the container mount
-> read-only at the operating-system boundary, while the server's `--read-only`
-> flag removes mutating tools (`create`, `edit`, `move`, `delete`, `patch`,
-> `replace_text`) from `tools/list`.
+Drop `:ro` and `--read-only` to let the AI make changes. VS Code and Visual
+Studio use `"servers"` instead of `"mcpServers"`. See
+[Running in Docker](docs/configuration.md#running-in-docker) for more.
 
-## Usage
+</details>
 
-### Tools
+<details>
+<summary><b>Other MCP clients</b></summary>
 
-All tools are scoped to the configured roots. Call `list_roots` first to discover what is allowed.
+Windsurf, Cline, and most other clients use the same `mcpServers` JSON as
+Claude Desktop above. In any client, the server is:
 
-#### Navigate
+- **command:** `npx`
+- **args:** `-y`, `@j0hanz/filesystem-mcp@latest`, then one or more folders
 
-| Tool         | Description                                                                            |
-| :----------- | :------------------------------------------------------------------------------------- |
-| `list_roots` | List allowed workspace roots. Call this first — all other tools scope to these.        |
-| `list`       | List directory contents. Returns entries (dirs-first, alphabetical) and an ASCII tree. |
-| `find_files` | Find files by glob pattern (e.g. `**/*.ts`). Returns matching files with metadata.     |
+You can also install it globally and run `filesystem-mcp /path/to/project`:
 
-#### Inspect
-
-| Tool          | Description                                                                               |
-| :------------ | :---------------------------------------------------------------------------------------- |
-| `stat`        | Get file/directory metadata: size, modified time, permissions, MIME type, token estimate. |
-| `search_text` | Search file contents for text (grep-like). Returns matching lines with context.           |
-| `diff`        | Compare two files and return a unified diff with added/removed line counts.               |
-
-#### Read
-
-| Tool   | Description                                                                          |
-| :----- | :----------------------------------------------------------------------------------- |
-| `read` | Read a text file. Supports head/tail and line ranges. Accepts `paths[]` for batches. |
-
-#### Write
-
-| Tool           | Description                                                                                                                                                                                                          |
-| :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `create`       | Create one or more files, creating parent directories as needed. An existing file prompts the user to confirm the overwrite; `overwrite: true` on an entry skips the prompt, `append: true` adds to the end instead. |
-| `edit`         | Apply sequential literal string replacements to one or more files (up to 5 files per call, 100 edits per file).                                                                                                      |
-| `move`         | Move, rename, or copy (`copy: true`) one or more files/directories to explicit destinations.                                                                                                                         |
-| `delete`       | Permanently delete one or more files or directories. This action is irreversible.                                                                                                                                    |
-| `replace_text` | Bulk search-and-replace across files matching a glob pattern.                                                                                                                                                        |
-| `patch`        | Apply a single-file unified diff and write the result.                                                                                                                                                               |
-
-### Resources
-
-| URI                             | Description                                                                           |
-| :------------------------------ | :------------------------------------------------------------------------------------ |
-| `internal://instructions`       | Server navigation guide — tools overview, constraints, and error recovery.            |
-| `filesystem-mcp://file/{+path}` | Read a workspace file. Subscribe to receive push notifications on change.             |
-| `filesystem-mcp://result/{id}`  | Ephemeral cached tool output. Expires after ~60 seconds, eviction, or server restart. |
-
-### Prompts
-
-| Prompt     | Description                                                           |
-| :--------- | :-------------------------------------------------------------------- |
-| `get-help` | Return usage instructions, optionally filtered to a specific section. |
-
-## Project structure
-
-```text
-filesystem-mcp/
-├── __tests__/          Test suites (node --test) and shared helpers
-├── docs/adr/           Architecture decision records
-├── mcpb/manifest.json  Claude Desktop extension manifest
-├── scripts/            Release-path scripts (MCPB pack, Smithery publish)
-├── src/
-│   ├── core/           Path guarding, filesystem facade, search, stores, watchers
-│   ├── tools/          One file per tool, plus define.ts (registration) and batch.ts
-│   ├── transport/      stdio.ts, http.ts, http-policy.ts (auth, Origin, rate limit), shared.ts
-│   ├── cli.ts          Argument parsing and --print-config
-│   ├── cli-help.ts     --help / --version text
-│   ├── index.ts        Process entrypoint, shutdown, transport selection
-│   ├── instructions.ts Server instructions sent to every client
-│   ├── prompts.ts      Prompt definitions and registration
-│   ├── resources.ts    Resource definitions, subscriptions, completion
-│   ├── server.ts       Server factory and registrar composition
-│   └── transport.ts    Facade re-exporting startServer / startHttpServer
-└── Dockerfile          Multi-stage alpine build, non-root user
+```sh
+npm install -g @j0hanz/filesystem-mcp
 ```
 
-Runtime composition flows from `src/index.ts` to `src/transport/` (stdio or HTTP), then to
-`src/server.ts`, the registrars, and finally `src/core/`. Each registrar owns
-the narrow dependency contract it consumes.
+</details>
 
-Tools use Zod for runtime input validation and named TypeScript types for results;
-output schemas are neither validated nor published. `defineTool` derives wire
-annotations from each tool's required `readOnlyHint`. Every server supplies a
-result store, while file-resource links point directly to guarded reads from disk.
+## Tools
 
-| Path                  | Purpose                                                                         |
-| :-------------------- | :------------------------------------------------------------------------------ |
-| `src/core/path.ts`    | `PathGuard` — validates every path against allowed roots                        |
-| `src/core/fs.ts`      | `GuardedFileSystem` — guarded filesystem facade                                 |
-| `src/tools/define.ts` | Tool registration and execution framework                                       |
-| `src/tools/batch.ts`  | Batch helpers (runOverPaths, summarize, isTotalFailure)                         |
-| `src/server.ts`       | Builds shared dependencies and invokes the three registrars                     |
-| `src/transport/`      | stdio (`stdio.ts`), Streamable HTTP (`http.ts`), HTTP policy (`http-policy.ts`) |
+| Tool             | What it does                                                                                                  |
+| :--------------- | :------------------------------------------------------------------------------------------------------------ |
+| `list_roots`     | Shows the folders the server may use.                                                                         |
+| `list`           | Lists a folder as a tree, like `ls` or `tree`.                                                                |
+| `find_files`     | Finds files by name or glob, such as `**/*.test.ts`.                                                          |
+| `search_text`    | Searches inside files for text or a regex, like `grep`, with optional context lines.                          |
+| `stat`           | Gets size, dates, type, permissions, and a token estimate without reading the file.                           |
+| `read`           | Reads one or many text files, whole or by line range, head, or tail. Images and audio come back as media.     |
+| `diff`           | Compares two files and returns a unified diff.                                                                |
+| `create` ✎       | Writes new files, or appends to them. Asks before replacing an existing file, unless `overwrite: true`.       |
+| `edit` ✎         | Replaces exact text in files. All edits to a file apply, or none do. `dryRun` shows the diff first.           |
+| `patch` ✎        | Applies a unified diff to a file. All hunks apply, or none do.                                                |
+| `replace_text` ✎ | Finds and replaces text or a regex across many files. `dryRun` shows what would change.                       |
+| `move` ✎         | Moves, renames, or copies files and folders. Asks before overwriting, unless a copy passes `overwrite: true`. |
+| `delete` ✎       | Deletes files and folders. Asks before deleting a non-empty folder.                                           |
+
+✎ changes files. `--read-only` removes these tools.
+
+Search and listing tools skip hidden files, `.gitignore`d files, and folders
+like `node_modules`, `dist`, and `.git` unless the AI asks for them.
 
 ## Configuration
 
-The server starts with allowed directories from explicit startup configuration:
+Most people only need the folder argument. These options cover the common
+cases:
 
-1. **Positional directories** passed to `filesystem-mcp`.
-2. **Environment variable** `FS_ALLOWED_DIRS` (separated by `:` on POSIX or `;` on Windows).
-3. **Current working directory** when `--allow-cwd` is enabled.
+| Option                | What it does                                                                 |
+| :-------------------- | :--------------------------------------------------------------------------- |
+| `--read-only`         | Removes every tool that changes files.                                       |
+| `--deny '<pattern>'`  | Blocks more files, for example `--deny 'private/**'` or `--deny '*.sqlite'`. |
+| `--allow '<pattern>'` | Unblocks one built-in secret pattern, for example `--allow '.env.example'`.  |
+| `--allow-cwd`         | Also allows the folder the server was started from.                          |
+| `--max-file-size <n>` | Largest file `read` will load, in bytes. Default 10 MiB.                     |
+| `--port <n>`          | Serves over HTTP at `http://127.0.0.1:<n>/mcp` instead of stdio.             |
+| `--print-config`      | Prints the settings the server would use, then exits.                        |
 
-When `--root-boundary` / `FS_ROOT_BOUNDARY` is set, a configured root that
-does not fall under it is skipped at startup with a warning; only roots under
-the boundary (and later grants under it) are allowed.
+Flags go in `args` after the package name, for example
+`["-y", "@j0hanz/filesystem-mcp@latest", "--read-only", "/path/to/project"]`.
 
-Legacy MCP connections may additionally seed roots through the deprecated
-`roots/list` flow. Modern 2026-07-28 connections do not automatically send
-workspace roots. They can add access after startup by calling a tool with a
-concrete path and approving the elicitation-backed grant. `list_roots` reports
-the roots already configured or accepted; it cannot discover an unknown
-workspace by itself.
-
-Over HTTP, 2025-era clients are served statelessly: tools, resources and
-prompts work. Confirmations (recursive delete, overwrite, access grants) need a
-2026-07-28 client or stdio and answer with a tool error saying so; file
-subscriptions are not advertised on that leg, and a `resources/subscribe` sent
-anyway is refused with method-not-found.
-
-### Recommended global recipes
-
-#### VS Code / Cursor / Claude Code (primary recipe)
-
-Configure the project directory explicitly:
-
-Add to your global or project-scoped configuration:
-
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@j0hanz/filesystem-mcp@latest", "/path/to/project"]
-    }
-  }
-}
-```
-
-#### Claude Desktop (fallback recipe via environment variable)
-
-Claude Desktop and similar clients don't support the MCP Roots protocol. Use the `FS_ALLOWED_DIRS` environment variable to configure allowed folders.
-
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@j0hanz/filesystem-mcp@latest"],
-      "env": {
-        "FS_ALLOWED_DIRS": "/path/to/project1:/path/to/project2"
-      }
-    }
-  }
-}
-```
-
-_(On Windows, separate directories with a semicolon `;` instead of a colon `:`)._
-
-### Advanced / per-project positional arguments
-
-You can also restrict access to specific directories by passing positional arguments directly:
-
-```bash
-# Start with explicit positional paths
-filesystem-mcp /path/to/project1 /path/to/project2
-```
-
----
-
-### Configuration reference
-
-#### CLI flags
-
-| Flag                      | Default | Purpose                                                                                                                                                                   |
-| :------------------------ | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `[dirs...]`               | —       | One or more allowed root directories (positional). A whole argument `${NAME}` is read from the environment and dropped when unset                                         |
-| `--allow-cwd`             | `false` | Also allow the current working directory as a root                                                                                                                        |
-| `--walk-cwd`              | `false` | Walk up from CWD to find a project root; implies `--allow-cwd`                                                                                                            |
-| `--allow-missing-roots`   | `false` | Start even if configured allowed directories do not exist                                                                                                                 |
-| `--port <n>`              | —       | Enable Streamable HTTP transport on the given port (env: `FS_PORT`)                                                                                                       |
-| `--http-host <host>`      | —       | HTTP server bind address (env: `FS_HTTP_HOST`)                                                                                                                            |
-| `--api-key <key>`         | —       | Require this API key on HTTP requests (env: `FS_API_KEY`)                                                                                                                 |
-| `--read-only`             | `false` | Disable write tools: `create`, `edit`, `delete`, `move`, `patch`, `replace_text`                                                                                          |
-| `--deny <pattern>`        | —       | Block paths matching this pattern; repeatable                                                                                                                             |
-| `--allow <pattern>`       | —       | Exempt a pattern from the built-in sensitive denylist; repeatable (env: `FS_ALLOWLIST`). Does not lift `--deny`/`FS_DENYLIST` entries                                     |
-| `--allow-sensitive`       | `false` | Allow access to sensitive system paths (env: `FS_ALLOW_SENSITIVE`)                                                                                                        |
-| `--root-boundary <path>`  | —       | Require all allowed roots to fall under this path (env: `FS_ROOT_BOUNDARY`)                                                                                               |
-| `--max-file-size <bytes>` | —       | Maximum file size for reads and the combined content of one create call, in bytes (env: `FS_MAX_FILE_SIZE`). Each transport accepts one message of up to 3 × this + 1 MiB |
-| `--log-level <level>`     | `info`  | RFC 5424 log level, `debug` through `emergency` (env: `FS_LOG_LEVEL`)                                                                                                     |
-| `--print-config`          | `false` | Print the active configuration as JSON (roots, tools, limits, policy, supported protocol revisions, SDK pins) and exit                                                    |
-
-`--deny` and `--allow` patterns support `*` (any run within a segment),
-`**` (any run of segments), `?`, `[...]` classes, and `{a,b}` alternation.
-Dot-leading (hidden) names match like any other — `secrets/**` denies
-`secrets/.env`, `*id_rsa*` denies `.id_rsa`.
-
-#### Environment variables
-
-All boolean variables accept `true` or `1` to enable and `false`, `0`, or
-unset to disable; any other value logs a warning and reads as disabled.
-Flags take precedence when both are set.
-
-| Variable                      | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| :---------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FS_ALLOWED_DIRS`             | Colon-separated (POSIX) or semicolon-separated (Windows) list of directories to allow.                                                                                                                                                                                                                                                                                                                                                                           |
-| `FS_ROOT_BOUNDARY`            | Path prefix all allowed roots must fall under (mirrors `--root-boundary`).                                                                                                                                                                                                                                                                                                                                                                                       |
-| `FS_ALLOW_CWD_WALK`           | Walk up from CWD to find a project root (mirrors `--walk-cwd`).                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `FS_ALLOW_MISSING_ROOTS`      | Start even if configured directories do not exist (mirrors `--allow-missing-roots`).                                                                                                                                                                                                                                                                                                                                                                             |
-| `FS_ALLOW_SENSITIVE`          | Allow access to sensitive system paths (mirrors `--allow-sensitive`).                                                                                                                                                                                                                                                                                                                                                                                            |
-| `FS_DENYLIST`                 | Comma-separated list of paths or patterns to block (mirrors `--deny`).                                                                                                                                                                                                                                                                                                                                                                                           |
-| `FS_ALLOWLIST`                | Comma-separated patterns exempted from the built-in sensitive denylist (mirrors `--allow`). Never lifts `FS_DENYLIST`/`--deny` entries.                                                                                                                                                                                                                                                                                                                          |
-| `FS_MAX_FILE_SIZE`            | Maximum file size for reads and for one create call's combined content, in bytes (mirrors `--max-file-size`). Also sizes the per-message wire limit: 3 × this + 1 MiB.                                                                                                                                                                                                                                                                                           |
-| `FS_LOG_LEVEL`                | RFC 5424 log level: `debug`, `info`, `notice`, `warn`/`warning`, `error`, `critical`, `alert`, or `emergency` (mirrors `--log-level`).                                                                                                                                                                                                                                                                                                                           |
-| `FS_PORT`                     | Start the Streamable HTTP transport on this port; unset = stdio (mirrors `--port`).                                                                                                                                                                                                                                                                                                                                                                              |
-| `FS_HTTP_HOST`                | HTTP server bind address (mirrors `--http-host`).                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `FS_API_KEY`                  | API key required on HTTP requests (mirrors `--api-key`).                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `FS_TRUST_PROXY`              | Express `trust proxy` setting: hop count or expression. Unset = do not trust `X-Forwarded-*`.                                                                                                                                                                                                                                                                                                                                                                    |
-| `FS_ALLOWED_HOSTS`            | Comma-separated Host header values to accept (HTTP transport).                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `FS_ALLOWED_ORIGINS`          | Comma-separated origin hostnames allowed to call `/mcp` from a browser. Replaces the localhost default, so also list `localhost`, `127.0.0.1` or `[::1]` if local browser clients still need access. For browser-extension clients, list the extension ID (the hostname of a `chrome-extension://` origin) or a lowercase `<scheme>://*` entry such as `moz-extension://*` to admit every extension of that scheme; `http://*` and `https://*` are not honoured. |
-| `FS_ALLOW_UNRESTRICTED_HOSTS` | Bind a wildcard host with no Host validation (accepts the risk).                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `FS_PUBLIC_URL`               | Resource identifier URL for RFC 9728 discovery.                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `FS_RATE_LIMIT_RPM`           | Per-client-IP requests/minute (default 120 with API-key authentication, 6,000 for keyless loopback; range 1–100000).                                                                                                                                                                                                                                                                                                                                             |
-| `FS_MAX_WATCHERS`             | Max concurrent file watchers (default 256, 1–4096).                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `NO_COLOR`                    | Any value disables ANSI color output.                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `FS_REQUEST_STATE_KEY`        | HMAC key sealing `input_required` requestState across retry rounds. Optional (random per boot if unset); set it, at >=32 bytes UTF-8, to keep in-flight rounds alive across a restart.                                                                                                                                                                                                                                                                           |
-
-### Examples
-
-```bash
-# Allow current working directory
-filesystem-mcp --allow-cwd
-
-# HTTP transport on port 3000
-filesystem-mcp --port 3000
-```
-
-## Scripts
-
-| Mode             | Command                | Description                                          |
-| :--------------- | :--------------------- | :--------------------------------------------------- |
-| Full check       | `npm run check`        | Run build, type check, lint, format, knip, and tests |
-| Auto-fix + check | `npm run fix`          | Auto-fix formatting/linting and run the full check   |
-| Static only      | `npm run check:static` | Run static analysis without tests                    |
-| Tests only       | `npm test`             | Run tests; accepts native `node --test` options      |
+The [full configuration reference](docs/configuration.md) covers every flag
+and environment variable, the complete secret-file list, limits, HTTP setup
+with API keys, Docker, and troubleshooting.
 
 ## Security
 
-> [!IMPORTANT]
-> Report vulnerabilities privately via [GitHub Security Advisories](https://github.com/j0hanz/filesystem-mcp/security/advisories). Do not open public issues for security reports.
+| Protection         | How it works                                                                                                                                                                                                                                                                                                                                                               |
+| :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Folder sandbox     | The server resolves every path, including symlinks, and the resolved path must stay inside an allowed folder.                                                                                                                                                                                                                                                              |
+| Secret files       | `.env`, `*.pem`, `*.key`, SSH keys, `.npmrc`, cloud credentials, and [more](docs/configuration.md#secret-files) are blocked and hidden from listings.                                                                                                                                                                                                                      |
+| You stay in charge | The server asks you before the AI deletes a non-empty folder, gets access to a new folder, or writes over a file with `create` or `move`. Only `create` and copies skip that question, when the AI passes `overwrite: true`. In-place edits (`edit`, `patch`, `replace_text`) do not ask, but `dryRun` previews them. A client that cannot ask gets a clear error instead. |
+| Off-limits folders | Neither the AI nor the client can ever add your home folder itself, system folders, or `~/.ssh`, `~/.aws`, and similar folders.                                                                                                                                                                                                                                            |
+| Safe writes        | New content goes to a temporary file that is then renamed into place, so a crash never leaves a half-written file. Writes keep the file's permissions.                                                                                                                                                                                                                     |
+| No regex hangs     | RE2 runs in linear time, so no search pattern can freeze the server.                                                                                                                                                                                                                                                                                                       |
+| HTTP               | The server listens only on localhost by default. Any other address requires an API key.                                                                                                                                                                                                                                                                                    |
+| Container          | The Docker image runs as a non-root user.                                                                                                                                                                                                                                                                                                                                  |
 
-| Topic           | Detail                                                                          |
-| :-------------- | :------------------------------------------------------------------------------ |
-| Path traversal  | Every path is resolved and validated against allowed roots before any operation |
-| Sensitive files | `.env`, `*.pem`, `*id_rsa*`, and similar patterns are denied by default         |
-| Regex safety    | RE2 cannot backtrack, so a hostile pattern cannot hang the server (ReDoS)       |
-| Container       | Runs as non-root `mcp` user; bind mounts control what is exposed                |
+If you find a vulnerability, please report it privately.
+[SECURITY.md](SECURITY.md) explains how.
 
-## Contributing
+## For MCP client developers
 
-1. Fork the repository.
-2. Create a feature branch: `git checkout -b feat/your-feature`.
-3. Commit your changes with a clear message.
-4. Run `npm run check` to confirm tests, types, lint, formatting, and knip all pass.
-5. Open a pull request.
+The `filesystem-mcp://file/{+path}` resource reads a file, and you can
+subscribe to it for change notifications. Large tool results are cached as
+resources at `filesystem-mcp://result/{id}` for about 60 seconds. The
+`internal://instructions` resource holds the usage guide the server sends to
+the model, and the `get-help` prompt returns that guide, optionally one
+section of it.
 
-[![Contributors](https://contrib.rocks/image?repo=j0hanz/filesystem-mcp)](https://github.com/j0hanz/filesystem-mcp/graphs/contributors)
+The server supports both 2025-era clients and the 2026-07-28 revision, over
+stdio and Streamable HTTP, and asks for confirmations through MCP elicitation.
+It reads workspace roots (`roots/list`) only on 2025-era stdio connections
+whose client declares the `roots` capability. Other clients get their folders
+from the server's configuration (arguments, `FS_ALLOWED_DIRS`, `--allow-cwd`)
+or, if they support elicitation (2025-era HTTP clients do not), from an
+approved access request.
+
+[`examples/`](examples/) has two small, runnable clients:
+[gatekeeper](examples/clients/gatekeeper/), a coding agent that shows the
+server's dry-run diff and waits for your y/N before every change, and
+[hooks](examples/clients/hooks/), which runs a task through a model whenever
+the workspace changes.
 
 ## Privacy Policy
 
-filesystem-mcp runs entirely on your machine. This policy covers the npm package, the Docker image, and the `.mcpb` desktop extension.
+Filesystem MCP runs entirely on your machine. This policy covers the npm
+package, the Docker image, and the `.mcpb` desktop extension.
 
-- **Data collection:** none. The server has no telemetry, analytics, or crash reporting, and makes no outbound network requests.
-- **Use and storage:** files are read and written only inside the directories you allow, and only when your MCP client calls a tool. Tool results go to that client and nowhere else. Short-lived result caches live in memory and disappear when the server exits.
-- **Third-party sharing:** none by this server. Your MCP client may send tool results to its model provider under that client's own privacy policy.
-- **Retention:** nothing is kept after the process exits. Diagnostic logs go to stderr on your machine; your MCP client may save them in its own log files.
-- **Contact:** open an issue at <https://github.com/j0hanz/filesystem-mcp/issues>, or report security problems privately through [GitHub Security Advisories](https://github.com/j0hanz/filesystem-mcp/security/advisories).
+- **Data collection:** none. The server has no telemetry, analytics, or crash
+  reporting, and makes no outbound network requests.
+- **Use and storage:** files are read and written only inside the folders you
+  allow, and only when your MCP client calls a tool. Tool results go to that
+  client and nowhere else. Short-lived result caches live in memory and
+  disappear when the server exits.
+- **Third-party sharing:** none by this server. Your MCP client may send tool
+  results to its model provider under that client's own privacy policy.
+- **Retention:** nothing is kept after the process exits. Diagnostic logs go to
+  stderr on your machine; your MCP client may save them in its own log files.
+- **Contact:** open an issue at
+  <https://github.com/j0hanz/filesystem-mcp/issues>, or report security
+  problems privately through
+  [GitHub Security Advisories](https://github.com/j0hanz/filesystem-mcp/security/advisories).
+
+## Contributing
+
+Bug reports, ideas, and pull requests are welcome. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md): it covers setup, running the server from
+source, and the checks a pull request needs.
+
+If Filesystem MCP is useful to you, a star on GitHub helps other people find it.
+
+[![Contributors](https://contrib.rocks/image?repo=j0hanz/filesystem-mcp)](https://github.com/j0hanz/filesystem-mcp/graphs/contributors)
 
 ## License
 
-Released under the MIT License. See [LICENSE](LICENSE) for details.
+[MIT](LICENSE)

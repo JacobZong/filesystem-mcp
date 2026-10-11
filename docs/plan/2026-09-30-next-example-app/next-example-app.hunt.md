@@ -1,7 +1,7 @@
 # Bug hunt: hooks — 2026-10-02
 
-Scope from the brief: [`hooks.ts`](../../../exampels/clients/hooks/hooks.ts)
-(347 lines) and [`check.ts`](../../../exampels/clients/hooks/check.ts)
+Scope from the brief: [`hooks.ts`](../../../examples/clients/hooks/hooks.ts)
+(347 lines) and [`check.ts`](../../../examples/clients/hooks/check.ts)
 (381 lines), both read in full; no exported symbols, so no blast radius.
 `exampels/README.md` is prose and was not audited. Four candidates went to
 blind refuters; all four came back `confirmed`.
@@ -14,7 +14,7 @@ files were deleted.
 
 ### 1. Major — partial `find_files` becomes a complete snapshot; unreached files are reported "deleted"
 
-- **Where**: [`hooks.ts:205-207`](../../../exampels/clients/hooks/hooks.ts#L205-L207) `snapshot()`, the filter `!l.startsWith('//')`.
+- **Where**: [`hooks.ts:205-207`](../../../examples/clients/hooks/hooks.ts#L205-L207) `snapshot()`, the filter `!l.startsWith('//')`.
 - **Trigger**: the server's scan stops early on the 5 s timeout ([`util.ts:143`](../../../src/core/util.ts#L143)) or at `maxResults`; it returns the files found so far plus a `// scan stopped early: …` trailer ([`fmt.ts:143-146`](../../../src/core/fmt.ts#L143-L146)) with `isError` unset. A 10 000-file tree on a cold network drive is enough.
 - **Impact**: `diff()` lists every unreached file as `deleted`; the turn's first message tells the model so; a standing task like "keep the index in sync" removes real entries. The next complete snapshot reports the same files as `created` — a second spurious turn.
 - **Ruled out**: refuter grep of the app for `stopped early|truncated|partial` → no match; `nextCursor` never followed. The one line that could have caught it is the one that discards it: `.filter((l) => l && !l.startsWith('//') && !l.startsWith('No files matching'));`
@@ -22,15 +22,15 @@ files were deleted.
 
 ### 2. Minor — a quiet timer that fires during a long post-turn snapshot is dropped
 
-- **Where**: [`hooks.ts:277-278`](../../../exampels/clients/hooks/hooks.ts#L277-L278) `onQuiet()`: `if (running || closing) return;`
-- **Trigger**: `running` stays true through `const after = await snapshot();` ([`:287`](../../../exampels/clients/hooks/hooks.ts#L287)). When a snapshot takes longer than `QUIET_MS` (the spec allows 2 s for 1 000 files), the timer fires inside it and nothing re-arms. An external write that landed after `stat` read that file's mtime is in neither `after` nor a pending timer.
+- **Where**: [`hooks.ts:277-278`](../../../examples/clients/hooks/hooks.ts#L277-L278) `onQuiet()`: `if (running || closing) return;`
+- **Trigger**: `running` stays true through `const after = await snapshot();` ([`:287`](../../../examples/clients/hooks/hooks.ts#L287)). When a snapshot takes longer than `QUIET_MS` (the spec allows 2 s for 1 000 files), the timer fires inside it and nothing re-arms. An external write that landed after `stat` read that file's mtime is in neither `after` nor a pending timer.
 - **Impact**: one change is missed until some later unrelated change fires a new notification.
-- **Ruled out**: refuter: "`finally { running = false; }` at line 295 does not re-arm the timer or re-check for pending changes"; `schedule()` is called only from the notification handler ([`:321`](../../../exampels/clients/hooks/hooks.ts#L321)).
+- **Ruled out**: refuter: "`finally { running = false; }` at line 295 does not re-arm the timer or re-check for pending changes"; `schedule()` is called only from the notification handler ([`:321`](../../../examples/clients/hooks/hooks.ts#L321)).
 - **Fix**: replace the early return with `pending = true`; after the `while` loop (and in `finally`), if `pending`, clear it and call `schedule()` so the next quiet period re-snapshots.
 
 ### 3. Minor — a file the model renames comes back as an external "created" change (echo turn)
 
-- **Where**: [`hooks.ts:231-235`](../../../exampels/clients/hooks/hooks.ts#L231-L235) `isOwn()`.
+- **Where**: [`hooks.ts:231-235`](../../../examples/clients/hooks/hooks.ts#L231-L235) `isOwn()`.
 - **Trigger**: the server's `move` is a plain `fsOps.rename` ([`move.ts:486`](../../../src/tools/move.ts#L486)), which preserves mtime. After `move a.txt → b.txt`, the post-turn diff yields `deleted: a.txt` (own, via `ownDeletes`) and `created: b.txt` whose `modified` is the original write time — outside every `[started - 100, Date.now() + 100]` window.
 - **Impact**: one extra turn per rename, with `created: b.txt` as its reason; the model re-runs the standing task on its own output. Bounded — the following snapshot is clean.
 - **Ruled out**: refuter: `return ownWindows.some(([from, to]) => at >= from && at <= to);` is the only test for `created`/`modified`; `ownDeletes` covers only `deleted`.
@@ -38,7 +38,7 @@ files were deleted.
 
 ### 4. Minor — own-write window assumes sub-100 ms mtime resolution
 
-- **Where**: [`hooks.ts:166-167`](../../../exampels/clients/hooks/hooks.ts#L166-L167) `ownWindows.push([started - 100, Date.now() + 100]);`
+- **Where**: [`hooks.ts:166-167`](../../../examples/clients/hooks/hooks.ts#L166-L167) `ownWindows.push([started - 100, Date.now() + 100]);`
 - **Trigger**: FAT32 rounds mtime down to 2 s (ext3: 1 s). A write at `T` gets `floor(T, 2 s)`, up to 2 000 ms before `started`, so `isOwn` fails and the write is treated as external.
 - **Impact**: on such a workspace every approved write starts another turn; if the task writes again, the loop repeats with model spend each cycle.
 - **Ruled out**: refuter grep of `src/` for `utimes|futimes` → none; the server never sets mtime explicitly, so the filesystem's rounding stands.

@@ -45,7 +45,7 @@ notification before a turn starts.
 
 ### Startup and arguments
 
-- **R1** The `hooks` app shall accept `node hooks.ts <dir> <task> [--provider <name>] [--model <id>] [--yes]`, where `<dir>` is the workspace root and `<task>` the standing instruction, and shall read `LLM_MODEL`, `LLM_BASE_URL`, `LLM_API_KEY` and `FS_MCP_BIN` exactly as gatekeeper does ([`agent.ts:19-49`](../../../exampels/clients/gatekeeper/agent.ts#L19-L49)).
+- **R1** The `hooks` app shall accept `node hooks.ts <dir> <task> [--provider <name>] [--model <id>] [--yes]`, where `<dir>` is the workspace root and `<task>` the standing instruction, and shall read `LLM_MODEL`, `LLM_BASE_URL`, `LLM_API_KEY` and `FS_MCP_BIN` exactly as gatekeeper does ([`agent.ts:19-49`](../../../examples/clients/gatekeeper/agent.ts#L19-L49)).
   - Falsified by: a gatekeeper-valid provider/model/env combination that gatekeeper accepts and hooks rejects, or vice versa.
   - Given `LLM_BASE_URL` and `LLM_MODEL` set, When run with `<dir> <task>` only, Then the app starts watching.
   - Given `--provider gemini` and no `GEMINI_API_KEY`, When run, Then the request to the model carries no authorization header (same as gatekeeper).
@@ -127,7 +127,7 @@ notification before a turn starts.
 
 ## Constraints
 
-- Rules for apps — [`exampels/AGENTS.md`](../../../exampels/AGENTS.md): ≤250 lines, ≤2 runtime deps, erasable TypeScript, keyless check not named `*.test.ts`, model access via `fetch`, add to the table.
+- Rules for apps — [`exampels/AGENTS.md`](../../../examples/AGENTS.md): ≤250 lines, ≤2 runtime deps, erasable TypeScript, keyless check not named `*.test.ts`, model access via `fetch`, add to the table.
 - The 2026-07-28 era has no `resources/subscribe`; the client subscribes with `subscriptions/listen` carrying `resourceSubscriptions` ([`resources.ts:484-497`](../../../src/resources.ts#L484-L497), [`stdio.test.ts:100-111`](../../../__tests__/stdio.test.ts#L100-L111)). gatekeeper already negotiates that era.
 - A directory URI takes one recursive watch, so the root URI covers new files; the notification names the directory, not the file ([`watcher-registry.ts:192-216`](../../../src/core/watcher-registry.ts#L192-L216)). Change discovery is the client's job (R7).
 - The server debounces 50 ms per URI ([`watcher-registry.ts:106-130`](../../../src/core/watcher-registry.ts#L106-L130)); the app's quiet period sits on top.

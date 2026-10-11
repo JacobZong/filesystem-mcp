@@ -1,4 +1,4 @@
-# exampels/
+# examples/
 
 Example MCP client apps for filesystem-mcp. Audience: developers building
 their own client with `@modelcontextprotocol/client`. Each app must be useful
@@ -22,6 +22,6 @@ on its own, not a feature tour.
 
 ## Tooling
 
-- The root ESLint config ignores `exampels/**`; Prettier still formats it.
+- The root ESLint config ignores `examples/**`; Prettier still formats it.
 - The root `npm run check` does not run app checks. Run
-  `npm test --prefix exampels/clients/<app>` after `npm run build`.
+  `npm test --prefix examples/clients/<app>` after `npm run build`.

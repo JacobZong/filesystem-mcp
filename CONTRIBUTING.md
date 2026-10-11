@@ -1,117 +1,152 @@
-# Contributing to Filesystem MCP Server
+# Contributing to Filesystem MCP
 
-How to set up, branch, and test.
+Thanks for helping. This guide takes you from a fresh clone to a pull request.
+
+## Ways to help
+
+- Report a bug or suggest a feature with the
+  [issue templates](https://github.com/j0hanz/filesystem-mcp/issues/new/choose).
+  Keep reports short, and remove secrets, private paths, and file contents
+  from logs.
+- Improve the docs. If something in the README or the
+  [configuration reference](docs/configuration.md) confused you, a fix is
+  very welcome.
+- Pick up an issue, but comment on it first so nobody duplicates the work.
+- Spread the word by starring the repo or suggesting it for a list of MCP
+  servers.
+
+Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## Setup
 
-1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/filesystem-mcp.git`
-3. Add upstream remote: `git remote add upstream https://github.com/j0hanz/filesystem-mcp.git`
-4. Install dependencies: `npm install`
-
-## Branch workflow
-
-1. Create a feature branch from `main`: `git checkout -b feat/your-feature`
-2. Make commits with clear messages.
-3. Push to your fork: `git push origin feat/your-feature`
-4. Open a pull request against the upstream repository.
-
-## Issues and project board
-
-Use the issue chooser for **Bug report**, **Feature request**, or **Maintenance
-task**. Keep reports short and sanitize paths, logs, and file contents. Never
-include secrets or credentials. Report vulnerabilities privately through
-[GitHub Security Advisories](https://github.com/j0hanz/filesystem-mcp/security/advisories),
-not public issues or project cards.
-
-The intended **Filesystem MCP** project uses issues as work items and linked PRs
-as implementation. Do not add both an issue and its PR as separate cards.
-Repository templates do not create the hosted Project; a maintainer must complete
-the setup below before the board is available. Hosted setup is tracked in
-[issue #57](https://github.com/j0hanz/filesystem-mcp/issues/57).
-
-### Maintainer setup
-
-1. Create a GitHub Project named **Filesystem MCP** under the repository owner's
-   account and link it from the repository's **Projects** tab. Check for an
-   existing project first to avoid duplicates.
-2. Configure the **Status** field with these five values:
-
-   | Status      | Meaning                               |
-   | ----------- | ------------------------------------- |
-   | Backlog     | New reports and ideas awaiting triage |
-   | Ready       | Accepted, clear scope, ready to start |
-   | In progress | Someone is actively working on it     |
-   | In review   | Implementation is ready for review    |
-   | Done        | Accepted work completed               |
-
-3. Add a single-select **Priority** field: **High**, **Normal**, **Low**.
-   Assign priority during triage; use Normal unless urgency or impact warrants
-   otherwise.
-4. Create a **Board** view grouped by Status. Show only title, assignee, and
-   priority on cards. Create a **Triage** table filtered to `status:Backlog`.
-   Scope both views to this repository's issues and exclude `duplicate`,
-   `invalid`, and `wontfix` labels.
-5. Where available, enable the built-in auto-add workflow for
-   `repo:j0hanz/filesystem-mcp is:issue is:open -label:duplicate -label:invalid -label:wontfix`.
-   Set newly added items to Backlog with the item-added workflow. If auto-add is
-   unavailable for the account, add eligible issues manually during triage.
-6. Enable the issue-closed workflow to move completed issues to Done. If the
-   workflow also handles issues closed as not planned, remove those items from
-   the project rather than treating them as completed work. Keep review
-   transitions manual.
-7. Add only genuinely unfinished issues after checking linked PRs and existing
-   plans. Do not bulk-import completed plans or unrelated promotional issues.
-
-Use **bug**, **enhancement**, **maintenance**, and **documentation** to describe
-work, plus **blocked** when needed. Keep existing housekeeping labels for
-duplicates and rejected reports; do not create labels that duplicate Status.
-
-### Daily workflow
-
-- Triage Backlog: confirm relevance, check for duplicates, assign priority, and
-  clarify scope and acceptance criteria before moving an issue to Ready.
-- Assign an owner when work starts. Aim for one or two In progress items per
-  person.
-- For blocked work, add **blocked**, link the dependency, and explain what is
-  needed to proceed. Keep its current status; remove the label when unblocked.
-- Link the implementation PR to the issue and move the issue to In review when
-  ready. A PR that completes the issue should use a closing keyword.
-- Move accepted, completed work to Done. Close duplicates or rejected requests
-  with the appropriate reason and label, and remove them from the project.
-- Keep detailed design and investigation in existing planning documents, linked
-  from issues. Use the board as the active task tracker, not a second copy of
-  historical plan status tables.
-
-## Running tests locally
-
-Tests run on Node's built-in test runner:
+You need Node.js 24 or later (the version is in `.nvmrc`) and npm.
 
 ```bash
-# Run tests only
-npm test
+git clone https://github.com/YOUR_USERNAME/filesystem-mcp.git
+cd filesystem-mcp
+git remote add upstream https://github.com/j0hanz/filesystem-mcp.git
+npm install
+npm run build
 ```
 
-Tests must pass before your PR is merged.
-
-## PR checklist
-
-- [ ] Tests pass locally (`npm run check`)
-- [ ] No new console warnings or errors
-- [ ] Commit messages are clear and descriptive
-- [ ] Code follows the project's style guide (run `npm run fix`)
-- [ ] Related issues are referenced in the PR description
-
-## Code style
-
-Check formatting and apply auto-fixes:
+## Run the server from source
 
 ```bash
-npm run fix
-
-npm run check:static
+npm run build
+node dist/index.js /path/to/a/test/folder
 ```
 
-## Commit messages
+The server speaks MCP over stdio, so it waits for a client. You can try it in
+two easy ways:
 
-Commit messages are free-form. Describe what the commit does and why, and call out breaking changes explicitly.
+- Use MCP Inspector, a web UI for calling tools by hand:
+
+  ```bash
+  npx @modelcontextprotocol/inspector node dist/index.js /path/to/a/test/folder
+  ```
+
+- Point your own AI app at your build instead of the npm package:
+
+  ```json
+  {
+    "command": "node",
+    "args": ["/absolute/path/to/filesystem-mcp/dist/index.js", "/path/to/a/test/folder"]
+  }
+  ```
+
+`node dist/index.js --print-config /path` shows the resolved settings without
+starting the server.
+
+## Checks
+
+| Command                | What it runs                                                      |
+| :--------------------- | :---------------------------------------------------------------- |
+| `npm run check`        | Everything CI runs: build, type checks, lint, format, knip, tests |
+| `npm run fix`          | Formats and lint-fixes, then runs the full check                  |
+| `npm run check:static` | Static checks only, no tests                                      |
+| `npm test`             | Tests only, on Node's built-in test runner                        |
+
+Pass test runner flags after `--`, for example
+`npm test -- --test-name-pattern="resources"`.
+
+`__tests__/dist-smoke.test.ts` starts the built `dist/index.js` and skips when
+`dist/` is missing, so run `npm run build` (or `npm run check`) first.
+
+CI runs `npm run check` on Ubuntu and Windows. Please run it before you open a
+pull request.
+
+## Project structure
+
+```text
+filesystem-mcp/
+├── src/
+│   ├── index.ts         Process entry point, shutdown, transport selection
+│   ├── cli.ts           Argument parsing and --print-config
+│   ├── cli-help.ts      --help and --version text
+│   ├── server.ts        Server factory; wires tools, resources, and prompts
+│   ├── instructions.ts  Usage guide sent to every client
+│   ├── resources.ts     Resources, subscriptions, completion
+│   ├── prompts.ts       Prompts
+│   ├── transport.ts     Public entry re-exporting startServer / startHttpServer
+│   ├── core/            Path guard, guarded filesystem, search, caches, watchers
+│   ├── tools/           One file per tool, plus define.ts and batch.ts
+│   └── transport/       stdio.ts, http.ts, http-policy.ts (auth, Origin, rate limit)
+├── __tests__/           Test suites and shared helpers
+├── docs/                Configuration reference, ADRs, and design notes
+├── examples/            Runnable example MCP clients
+├── mcpb/manifest.json   Claude Desktop extension manifest
+├── scripts/             Release scripts (MCPB pack, Smithery publish)
+└── Dockerfile           Multi-stage Alpine build, non-root user
+```
+
+Requests flow from `src/index.ts` to `src/transport/` (stdio or HTTP), then to
+`src/server.ts`, the tool, resource, and prompt registrars, and finally
+`src/core/`. Two classes do the security work: `PathGuard`
+(`src/core/path.ts`) checks every path against the allowed folders and the
+denylist, and `GuardedFileSystem` (`src/core/fs.ts`) is the guarded facade
+tools use to read and write files.
+
+## Adding or changing a tool
+
+1. Give each tool its own file in `src/tools/`, build it with `defineTool`
+   from `src/tools/define.ts`, and describe its inputs with Zod schemas.
+2. Set `readOnlyHint` honestly, because it decides whether `--read-only`
+   removes the tool and which annotations clients see.
+3. Register it in `ALL_TOOLS` in `src/tools/index.ts`.
+4. Read and write through the guarded filesystem, so `PathGuard` checks every
+   path before anything touches the disk.
+5. Add tests in `__tests__/`, and add the tool to `mcpb/manifest.json`
+   (a test checks that list).
+6. Update the Tools table in `README.md`, and
+   [docs/configuration.md](docs/configuration.md) if limits or options change.
+
+The architecture decision records live in [`docs/adr/`](docs/adr/). Read the
+relevant one before you change the behavior it covers.
+
+## Pull requests
+
+1. Create a branch from `main`, for example `git checkout -b fix/search-crlf`.
+2. Keep the change focused, and include tests for new behavior or fixed bugs.
+3. Run `npm run check`.
+4. Push to your fork and open a pull request. The template asks for a summary,
+   the related issue, and how you validated the change.
+
+Checklist:
+
+- [ ] `npm run check` passes locally
+- [ ] Tests added or updated where it makes sense
+- [ ] Docs updated if behavior, options, or limits changed
+- [ ] Related issue linked (`Closes #123` only if the PR completes it)
+
+Commit messages are free-form. Say what changed and why, and call out
+breaking changes.
+
+Don't change the version in `package.json`, `server.json`, or
+`mcpb/manifest.json`. The Release workflow bumps all three together.
+
+## Issues and the project board
+
+Issues are the work items, and pull requests link to them. The labels are
+bug, enhancement, maintenance, documentation, and blocked. Maintainers track
+work on a GitHub Project, and [docs/project-board.md](docs/project-board.md)
+describes its setup and triage workflow.
