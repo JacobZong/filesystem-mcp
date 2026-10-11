@@ -45,6 +45,8 @@ graphify-out
 .agents/*
 .claude/
 !.github/workflows/
+!.github/ISSUE_TEMPLATE/
+!.github/pull_request_template.md
 .vscode/*
 !.vscode/extensions.json
 !.vscode/tasks.json

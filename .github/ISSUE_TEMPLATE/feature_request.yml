@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest an improvement to filesystem-mcp.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, credentials, or sensitive filesystem contents. Sanitize paths and logs.
+        Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/j0hanz/filesystem-mcp/security/advisories), not in a public issue.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What limitation are you facing?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should become possible? Describe observable behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Describe the workflow this would improve.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Optional. What workarounds or other approaches have you considered?
