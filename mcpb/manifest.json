@@ -47,6 +47,10 @@
     },
     { "name": "read_video_frames", "description": "Return evenly spaced video frames as images." },
     { "name": "create", "description": "Create, overwrite, or append to text files." },
+    {
+      "name": "write_binary",
+      "description": "Write one binary file from base64, with optional SHA-256 check."
+    },
     { "name": "edit", "description": "Apply literal string replacements to files." },
     { "name": "move", "description": "Move, rename, or copy files and directories." },
     { "name": "delete", "description": "Permanently delete files or directories." },
