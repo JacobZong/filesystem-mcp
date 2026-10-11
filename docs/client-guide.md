@@ -255,8 +255,8 @@ found by `resources/read`.
 
 Every result has a `content` array whose first block is text written for a
 model: a tree for `list`, grep-style lines for `search_text`, the file for
-`read`, a diff for `edit`. Do not parse that text. The same data is available
-as JSON, in one of two places:
+`read`, a diff for `edit`. Do not parse that text. Except for `read` (below),
+the same data is available as JSON, in one of two places:
 
 - Tools that write their own text keep their data in `_meta`: `list`,
   `find_files`, `search_text`, `read`, `diff`, `edit`, `patch`,
@@ -285,11 +285,17 @@ What is where:
 
 Notes on individual tools:
 
-- `read` returns the file as the text block. A partial read ends with a
-  `// truncated: ...` line, and its `_meta.results[].value.continuation` holds
-  the arguments for the next chunk. `includeHash: true` adds `contentHash`
-  (SHA-256). Images and audio come back as `image` and `audio` content blocks;
-  other binary files fail with `Binary file detected.`
+- `read` is the exception to the rule above: the file's text is only in the
+  text block, and `_meta` holds metadata about it (line counts,
+  `continuation`, `resourceUri`), not the text itself. With one `path` the
+  text block is the file; with `paths` the files are joined under
+  `// <path>` headers. For a file's exact text in code, read one `path` per
+  call, or call `resources/read` on its `resourceUri`.
+- A partial read ends with a `// truncated: ...` line, and its
+  `_meta.results[].value.continuation` holds the arguments for the next
+  chunk. `includeHash: true` adds `contentHash` (SHA-256). Images and audio
+  come back as `image` and `audio` content blocks; other binary files fail
+  with `Binary file detected.`
 - `read` and `create` add a `resource_link` block per file, pointing at its
   `filesystem-mcp://file/...` resource.
 - A dry run of `edit` or `replace_text` returns a unified diff as its text.
@@ -353,9 +359,11 @@ pattern. The [limits table](configuration.md#limits) has the numbers.
   progress. The SDK's default request timeout is 60 seconds.
 - Abort the call's `AbortSignal` to cancel it. The SDK sends
   `notifications/cancelled` and rejects with an `AbortError`.
-- `list`, `stat`, `find_files`, and `search_text` stop themselves after about
-  5 seconds with a `TIMEOUT` error. `maxResults` does not shorten a scan; a
-  narrower `path`, `pattern`, or `maxDepth` does.
+- `list` and `stat` stop themselves after about 5 seconds with a `TIMEOUT`
+  error. `find_files` and `search_text` stop at the same deadline but return
+  what they found so far, with `_meta.stoppedReason: 'timeout'` (see
+  [Pagination](#pagination-and-cached-results)). `maxResults` does not
+  shorten a scan; a narrower `path`, `pattern`, or `maxDepth` does.
 
 ## Confirmations
 

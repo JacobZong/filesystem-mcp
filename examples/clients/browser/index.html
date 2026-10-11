@@ -76,8 +76,11 @@
         flex-basis: 100%;
         color: var(--muted);
       }
+      /* Out of the layout when empty, but not display: none. A live region
+         has to be in the accessibility tree before its text changes, or
+         screen readers miss the update. */
       #status:empty {
-        display: none;
+        position: absolute;
       }
       main {
         display: grid;
@@ -188,13 +191,13 @@
       <button id="go" class="primary">Open</button>
       <input id="q" placeholder="Search in this folder" />
       <button id="new" data-write>New file</button>
-      <span id="status"></span>
+      <span id="status" role="status"></span>
     </header>
     <main>
       <nav id="side"></nav>
       <section id="view"></section>
     </main>
-    <dialog id="ask">
+    <dialog id="ask" aria-labelledby="ask-msg">
       <form method="dialog">
         <p id="ask-msg"></p>
         <div id="ask-fields"></div>

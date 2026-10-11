@@ -346,9 +346,10 @@ await client.close(); // stops the server process; without it the script never e
 The basics:
 
 - **Where the data is.** The text block is written for a model. The same data
-  as JSON is in `_meta` for tools that write their own text (`read`, `list`,
+  as JSON is in `_meta` for tools that write their own text (`list`,
   `search_text`, `edit`, ...) and in `structuredContent` for `stat`,
-  `create`, and `list_roots`.
+  `create`, and `list_roots`. `read` is the exception: the file's text is
+  only in the text block, and `_meta` holds metadata about it.
 - **Paths.** Relative paths resolve against the server's working directory,
   not its root: set `cwd` over stdio, and send absolute paths over HTTP.
 - **Confirmations.** Overwrites, recursive deletes, and paths outside the
