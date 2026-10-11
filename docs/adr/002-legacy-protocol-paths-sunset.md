@@ -80,7 +80,11 @@ project.
     added automatically, and the Folders over HTTP paragraph;
   - the README: the VS Code tip in the
     [quick start](../../README.md#quick-start) and the protocol note under
-    "For MCP client developers";
+    "Build your own client" (formerly "For MCP client developers");
+  - [`docs/client-guide.md`](../client-guide.md): the 2025 columns and rows
+    of Protocol versions, the `roots/list` and 2025-era sentences in Folders
+    and paths and Resources and file subscriptions, and the `--legacy` modes
+    of the fsq, tail, and python examples it lists;
   - the `legacy_roots` line in
     [`src/instructions.ts:67`](../../src/instructions.ts#L67).
 - A client that still opens with `initialize` after removal gets the SDK's

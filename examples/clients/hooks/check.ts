@@ -342,6 +342,16 @@ r = await runHooks({
 await trigger(r, dir, 2, 't3.txt');
 assert.match(lastToolMessage(r.requests[1]), /^ERROR: /);
 await r.end();
+// Two folders outside the root are one multi-select question; both picked.
+const bothOutside = [join(outside, 'a.txt'), join(await workspace(), 'a.txt')];
+r = await runHooks({
+  dir,
+  script: [{ tool: 'read', args: JSON.stringify({ paths: bothOutside }) }],
+  stdin: '1,2\n',
+});
+await trigger(r, dir, 2, 't4.txt');
+assert.equal(lastToolMessage(r.requests[1]).match(/hello/g)?.length, 2);
+await r.end();
 
 // R14: a failing model ends the turn, not the process; the next change runs.
 dir = await workspace();

@@ -159,6 +159,14 @@ r = await runAgent({ dir, stdin: 'n\n', script: [statOutside] });
 assert.match(lastToolMessage(r), /^ERROR: /);
 r = await runAgent({ dir, stdin: 'y\n1\n', script: [createFile('a.txt')] }); // gate y, then choice 1
 assert.equal(await readA(), 'x\n');
+// Two folders outside the root are one multi-select question; both picked.
+const readBoth = {
+  tool: 'read',
+  args: JSON.stringify({ paths: [join(outside, 'a.txt'), join(await workspace(), 'a.txt')] }),
+};
+r = await runAgent({ dir, stdin: '1,2\n', script: [readBoth] });
+assert.doesNotMatch(lastToolMessage(r), /ERROR/);
+assert.equal(lastToolMessage(r).match(/hello/g)?.length, 2);
 
 // Server dies mid-turn: the session ends with a clear message instead of
 // carrying on with no tools.

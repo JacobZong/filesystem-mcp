@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Workspace browser</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fff;
+        --fg: #1b1b1f;
+        --muted: #6b6b76;
+        --line: #e3e3e8;
+        --pane: #f6f6f8;
+        --accent: #2f6feb;
+        --on-accent: #fff;
+        --bad: #c62828;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #16161a;
+          --fg: #e8e8ee;
+          --muted: #9a9aa6;
+          --line: #2e2e36;
+          --pane: #1c1c21;
+          --accent: #6ea0ff;
+          --on-accent: #0b1020;
+          --bad: #ff6b6b;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        height: 100vh;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          14px/1.45 system-ui,
+          sans-serif;
+      }
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      input,
+      button {
+        font: inherit;
+        padding: 5px 9px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      button {
+        cursor: pointer;
+      }
+      .primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+      }
+      #path {
+        flex: 1 1 320px;
+        font-family: ui-monospace, monospace;
+      }
+      #status {
+        flex-basis: 100%;
+        color: var(--muted);
+      }
+      /* Out of the layout when empty, but not display: none. A live region
+         has to be in the accessibility tree before its text changes, or
+         screen readers miss the update. */
+      #status:empty {
+        position: absolute;
+      }
+      main {
+        display: grid;
+        grid-template-columns: minmax(200px, 320px) 1fr;
+        min-height: 0;
+      }
+      @media (max-width: 700px) {
+        main {
+          grid-template-columns: 1fr;
+          grid-template-rows: 40vh 1fr;
+        }
+      }
+      nav {
+        overflow: auto;
+        background: var(--pane);
+        border-right: 1px solid var(--line);
+      }
+      nav button {
+        display: block;
+        width: 100%;
+        padding: 4px 12px;
+        border: 0;
+        border-radius: 0;
+        background: none;
+        color: inherit;
+        text-align: left;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      nav button:hover {
+        background: var(--line);
+      }
+      nav button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+      }
+      #view {
+        overflow: auto;
+        padding: 12px 16px;
+        min-width: 0;
+      }
+      .bar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .bar h2 {
+        flex: 1;
+        margin: 0;
+        font-size: 15px;
+        overflow-wrap: anywhere;
+      }
+      pre,
+      textarea {
+        margin: 0;
+        font:
+          12.5px/1.5 ui-monospace,
+          monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      textarea {
+        width: 100%;
+        height: 60vh;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      img {
+        max-width: 100%;
+      }
+      .error {
+        color: var(--bad);
+      }
+      .ro [data-write] {
+        display: none;
+      }
+      dialog {
+        max-width: min(520px, 92vw);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      dialog label {
+        display: block;
+        margin: 4px 0;
+        font-family: ui-monospace, monospace;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <button id="up" title="Parent folder">↑</button>
+      <input
+        id="path"
+        list="suggest"
+        spellcheck="false"
+        autocomplete="off"
+        placeholder="Folder or file path"
+      />
+      <datalist id="suggest"></datalist>
+      <button id="go" class="primary">Open</button>
+      <input id="q" placeholder="Search in this folder" />
+      <button id="new" data-write>New file</button>
+      <span id="status" role="status"></span>
+    </header>
+    <main>
+      <nav id="side"></nav>
+      <section id="view"></section>
+    </main>
+    <dialog id="ask" aria-labelledby="ask-msg">
+      <form method="dialog">
+        <p id="ask-msg"></p>
+        <div id="ask-fields"></div>
+        <div class="bar">
+          <span style="flex: 1"></span><button value="decline">Decline</button
+          ><button value="accept" class="primary">Accept</button>
+        </div>
+      </form>
+    </dialog>
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const make = (tag, { dataset = {}, ...props } = {}, ...kids) => {
+        const node = Object.assign(document.createElement(tag), props);
+        Object.assign(node.dataset, dataset);
+        node.append(...kids);
+        return node;
+      };
+      const status = (msg, bad = false) =>
+        Object.assign($('status'), { textContent: msg, className: bad ? 'error' : '' });
+
+      async function api(route, body = {}) {
+        const res = await fetch(`/api/${route}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error);
+        return json;
+      }
+      // {+path} template values are percent-encoded with '/' kept.
+      const enc = (p) => encodeURIComponent(p.replaceAll('\\', '/')).replace(/%2F/gi, '/');
+      const text = (r) =>
+        r.content
+          .filter((b) => b.type === 'text')
+          .map((b) => b.text)
+          .join('\n');
+      // Tools that print their own text keep their data in _meta; stat, create and list_roots use structuredContent.
+      const data = (r) => r.structuredContent ?? r._meta ?? {};
+      const sep = (p) => (p.includes('\\') ? '\\' : '/');
+      const join = (dir, name) =>
+        (dir.endsWith(sep(dir)) ? dir : dir + sep(dir)) + name.replaceAll('/', sep(dir));
+
+      // One tool call, questions included. An input_required result lists the
+      // server's questions; the page answers them and repeats the call with the
+      // answers and the server's requestState, until a finished result comes back.
+      async function call(name, args) {
+        let body = { name, arguments: args };
+        for (;;) {
+          const result = await api('call', body);
+          if (result.resultType !== 'input_required') {
+            const d = data(result);
+            const failed = d.failures?.[0]?.error ?? d.results?.find((r) => r.error)?.error;
+            if (result.isError || failed) throw new Error(failed?.message ?? text(result));
+            return result;
+          }
+          const inputResponses = {};
+          for (const [key, request] of Object.entries(result.inputRequests ?? {}))
+            inputResponses[key] = await ask(request.params);
+          body = { ...body, inputResponses, requestState: result.requestState };
+        }
+      }
+
+      // The server's form, built from its JSON schema: a boolean (accept means
+      // yes), an enum (pick one), or an array of enum values (pick several).
+      function ask({ message, requestedSchema }) {
+        const props = Object.entries(requestedSchema.properties);
+        $('ask-msg').textContent = message;
+        $('ask-fields').replaceChildren(
+          ...props.flatMap(([key, field]) =>
+            field.type === 'boolean'
+              ? []
+              : (field.enum ?? field.items.enum).map((option) =>
+                  make(
+                    'label',
+                    {},
+                    make('input', {
+                      type: field.type === 'array' ? 'checkbox' : 'radio',
+                      name: key,
+                      value: option,
+                    }),
+                    ` ${option}`,
+                  ),
+                ),
+          ),
+        );
+        // A close request such as Escape leaves returnValue unchanged per the HTML
+        // spec (Firefox, Safari, older Chrome), so a stale 'accept' from the
+        // previous dialog would answer yes.
+        $('ask').returnValue = '';
+        $('ask').showModal();
+        return new Promise((done) =>
+          $('ask').addEventListener(
+            'close',
+            () => {
+              if ($('ask').returnValue !== 'accept') return done({ action: 'decline' });
+              const content = {};
+              for (const [key, field] of props) {
+                const picked = [
+                  ...$('ask-fields').querySelectorAll(`input[name="${CSS.escape(key)}"]:checked`),
+                ].map((i) => i.value);
+                content[key] =
+                  field.type === 'boolean' ? true : field.type === 'array' ? picked : picked[0];
+                if (content[key] === undefined) return done({ action: 'decline' }); // accepted with nothing picked
+              }
+              done({ action: 'accept', content });
+            },
+            { once: true },
+          ),
+        );
+      }
+
+      let cwd = '';
+      // A sidebar of [label, onclick] rows, plus "more" when the result has a nextCursor.
+      // Buttons, so a keyboard reaches them and Enter or Space opens them.
+      function side(rows, more, append = false) {
+        const links = rows.map(([label, onclick]) =>
+          make('button', { type: 'button', textContent: label, title: label, onclick }),
+        );
+        if (more)
+          links.push(
+            make('button', {
+              type: 'button',
+              textContent: 'more…',
+              className: 'error',
+              onclick: (e) => {
+                e.target.remove();
+                more();
+              },
+            }),
+          );
+        append ? $('side').append(...links) : $('side').replaceChildren(...links);
+        // Removing "more…" dropped the focus; give it to the first new row.
+        if (append && document.activeElement === document.body) links[0]?.focus();
+      }
+
+      async function list(args, append = false) {
+        const result = await call('list', args);
+        const d = data(result);
+        const entries = d.entries.toSorted(
+          (a, b) =>
+            (a.type === 'directory' ? 0 : 1) - (b.type === 'directory' ? 0 : 1) ||
+            a.name.localeCompare(b.name),
+        );
+        side(
+          entries.map((e) => [
+            `${e.type === 'directory' ? '📁' : '📄'} ${e.name}`,
+            () => open(join(d.path, e.name)),
+          ]),
+          d.nextCursor && (() => list({ ...args, cursor: d.nextCursor }, true)),
+          append,
+        );
+        return d.path;
+      }
+
+      // stat first: it tells a folder from a file, and outside the roots it is
+      // the call that makes the server ask for access.
+      async function open(path) {
+        status('');
+        try {
+          const info = data(await call('stat', { path })).results[0].value;
+          $('path').value = info.path;
+          if (info.type !== 'directory') return view(info.path);
+          cwd = await list({ path: info.path, maxEntries: 300 });
+          $('view').replaceChildren(
+            make(
+              'div',
+              { className: 'bar' },
+              make('h2', { textContent: `📁 ${info.path}` }),
+              make('button', {
+                textContent: 'Delete folder',
+                dataset: { write: '' },
+                onclick: () => remove(info.path, true),
+              }),
+            ),
+            make('p', { textContent: `modified ${info.modified} · ${info.permissions}` }),
+          );
+        } catch (error) {
+          status(error.message, true);
+        }
+      }
+
+      async function view(path) {
+        try {
+          const {
+            contents: [c],
+          } = await api('read', { uri: `filesystem-mcp://file/${enc(path)}` });
+          const body =
+            'text' in c
+              ? make('pre', { textContent: c.text })
+              : c.mimeType.startsWith('image/')
+                ? make('img', { src: `data:${c.mimeType};base64,${c.blob}`, alt: path })
+                : make('p', { textContent: `Binary file (${c.mimeType}).` });
+          const edit = () => {
+            const area = make('textarea', { value: c.text, spellcheck: false });
+            $('view').replaceChildren(
+              make(
+                'div',
+                { className: 'bar' },
+                make('h2', { textContent: path }),
+                make('button', { textContent: 'Cancel', onclick: () => view(path) }),
+                make('button', {
+                  textContent: 'Save',
+                  className: 'primary',
+                  onclick: () => save(path, area.value),
+                }),
+              ),
+              area,
+            );
+          };
+          $('view').replaceChildren(
+            make(
+              'div',
+              { className: 'bar' },
+              make('h2', { textContent: path }),
+              ...('text' in c
+                ? [make('button', { textContent: 'Edit', dataset: { write: '' }, onclick: edit })]
+                : []),
+              make('button', {
+                textContent: 'Delete',
+                dataset: { write: '' },
+                onclick: () => remove(path, false),
+              }),
+            ),
+            body,
+          );
+        } catch (error) {
+          status(error.message, true);
+        }
+      }
+
+      // create without overwrite: true, so replacing the file is the server's question to ask.
+      async function save(path, content) {
+        try {
+          const { skipped } = data(await call('create', { files: [{ path, content }] }));
+          // 'skip' is a normal result that lists the file in skipped. Nothing is
+          // reopened, so an open editor keeps its edits; Cancel shows the file on disk.
+          if (skipped?.length) return status(`not saved: kept the existing ${path}`);
+          status(`saved ${path}`);
+          view(path);
+        } catch (error) {
+          status(error.message, true);
+        }
+      }
+
+      // The page asks before any delete; the server asks again before a non-empty folder goes.
+      async function remove(path, folder) {
+        if (!confirm(`Delete ${path}?`)) return;
+        try {
+          const { results } = data(await call('delete', { paths: [path], recursive: folder }));
+          // 'skip' is not an error either: deleted is false and the folder stays, so the page does too.
+          if (results?.[0]?.value?.deleted === false) return status(`not deleted: kept ${path}`);
+          await open(folder ? path.slice(0, path.lastIndexOf(sep(path))) || sep(path) : cwd);
+          status(`deleted ${path}`);
+        } catch (error) {
+          status(error.message, true);
+        }
+      }
+
+      async function search(searchPattern, cursor) {
+        try {
+          const args = { path: cwd, searchPattern, maxResults: 100, ...(cursor ? { cursor } : {}) };
+          const d = data(await call('search_text', args));
+          side(
+            d.matches.map((m) => [
+              `${m.file}:${m.line}  ${m.content.trim()}`,
+              () => view(join(cwd, m.file)),
+            ]),
+            d.nextCursor && (() => search(searchPattern, d.nextCursor)),
+            Boolean(cursor),
+          );
+          status(`${d.totalMatches} matches for "${searchPattern}"`);
+        } catch (error) {
+          status(error.message, true);
+        }
+      }
+
+      let timer;
+      $('path').oninput = () => {
+        clearTimeout(timer);
+        timer = setTimeout(async () => {
+          const { completion } = await api('complete', { value: enc($('path').value) });
+          $('suggest').replaceChildren(
+            ...completion.values.map((v) => make('option', { value: decodeURIComponent(v) })),
+          );
+        }, 150);
+      };
+      $('go').onclick = () => open($('path').value.trim());
+      $('up').onclick = () => open(cwd.slice(0, cwd.lastIndexOf(sep(cwd))) || sep(cwd));
+      // Block bodies: an on* handler that returns false cancels the key, so
+      // nothing could be typed in these boxes and Tab could not leave them.
+      $('path').onkeydown = (e) => {
+        if (e.key === 'Enter') open($('path').value.trim());
+      };
+      $('q').onkeydown = (e) => {
+        if (e.key === 'Enter' && $('q').value) search($('q').value);
+      };
+      $('new').onclick = async () => {
+        const name = prompt(`New file in ${cwd}`);
+        if (!name) return;
+        await save(join(cwd, name), '');
+        await list({ path: cwd, maxEntries: 300 });
+      };
+
+      const { roots, tools } = await api('info');
+      document.body.classList.toggle('ro', !tools.includes('create')); // --read-only: no write tools
+      open(roots.roots[0]);
+    </script>
+  </body>
+</html>

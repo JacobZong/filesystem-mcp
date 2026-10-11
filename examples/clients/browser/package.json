@@ -1,0 +1,17 @@
+{
+  "name": "browser",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local web UI for a workspace, with the server's confirmations shown in the page, built on filesystem-mcp",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server.ts",
+    "test": "node check.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.3.1"
+  }
+}

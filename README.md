@@ -47,7 +47,7 @@ Once it is connected, you can ask things like:
   before reading it.
 - It works with any MCP client, over stdio or HTTP, on macOS, Linux, and
   Windows. You can install it with npx, Docker, or a one-click Claude Desktop
-  extension.
+  extension, or [build your own client](#build-your-own-client) on it.
 - It is private: it runs on your machine, has no telemetry, and makes no
   network calls.
 
@@ -312,28 +312,69 @@ with API keys, Docker, and troubleshooting.
 If you find a vulnerability, please report it privately.
 [SECURITY.md](SECURITY.md) explains how.
 
-## For MCP client developers
+## Build your own client
 
-The `filesystem-mcp://file/{+path}` resource reads a file, and you can
-subscribe to it for change notifications. Large tool results are cached as
-resources at `filesystem-mcp://result/{id}` for about 60 seconds. The
-`internal://instructions` resource holds the usage guide the server sends to
-the model, and the `get-help` prompt returns that guide, optionally one
-section of it.
+You can also call Filesystem MCP from your own code: an agent, an editor
+plugin, a web app, a CI job, or a script. The same rules apply as for an AI
+app, so your code cannot reach outside the allowed folders or read secret
+files.
 
-The server supports both 2025-era clients and the 2026-07-28 revision, over
-stdio and Streamable HTTP, and asks for confirmations through MCP elicitation.
-It reads workspace roots (`roots/list`) only on 2025-era stdio connections
-whose client declares the `roots` capability. Other clients get their folders
-from the server's configuration (arguments, `FS_ALLOWED_DIRS`, `--allow-cwd`)
-or, if they support elicitation (2025-era HTTP clients do not), from an
-approved access request.
+```ts
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
-[`examples/`](examples/) has two small, runnable clients:
-[gatekeeper](examples/clients/gatekeeper/), a coding agent that shows the
-server's dry-run diff and waits for your y/N before every change, and
-[hooks](examples/clients/hooks/), which runs a task through a model whenever
-the workspace changes.
+const dir = '/path/to/project';
+const client = new Client(
+  { name: 'my-app', version: '1.0.0' },
+  { capabilities: { elicitation: { form: {} } }, versionNegotiation: { mode: 'auto' } },
+);
+client.setRequestHandler('elicitation/create', async () => ({ action: 'decline' }));
+await client.connect(
+  new StdioClientTransport({
+    command: 'npx',
+    args: ['-y', '@j0hanz/filesystem-mcp', dir],
+    cwd: dir,
+  }),
+);
+
+const result = await client.callTool({ name: 'search_text', arguments: { searchPattern: 'TODO' } });
+const { matches } = (result.structuredContent ?? result._meta) as { matches: unknown[] };
+console.log(matches);
+await client.close(); // stops the server process; without it the script never exits
+```
+
+The basics:
+
+- **Where the data is.** The text block is written for a model. The same data
+  as JSON is in `_meta` for tools that write their own text (`list`,
+  `search_text`, `edit`, ...) and in `structuredContent` for `stat`,
+  `create`, and `list_roots`. `read` is the exception: the file's text is
+  only in the text block, and `_meta` holds metadata about it.
+- **Paths.** Relative paths resolve against the server's working directory,
+  not its root: set `cwd` over stdio, and send absolute paths over HTTP.
+- **Confirmations.** Overwrites, recursive deletes, and paths outside the
+  roots are questions for the user. Declare the `elicitation` capability and
+  answer them in a handler, or, on the 2026-07-28 protocol, take them as data
+  (`input_required`) and answer later.
+- **Protocol versions.** The server speaks the 2025 protocol and 2026-07-28,
+  over stdio and Streamable HTTP. Over HTTP, 2025-era clients get no
+  confirmations or change notifications.
+- **Resources.** Read and subscribe to any file as
+  `filesystem-mcp://file/{+path}`; `internal://instructions` and the
+  `get-help` prompt hold the server's guide for models.
+
+The [client guide](docs/client-guide.md) has the details, tested with the
+TypeScript and Python SDKs, and [`examples/`](examples/) has six runnable
+clients:
+
+| Example                                    | What it is                                                          |
+| :----------------------------------------- | :------------------------------------------------------------------ |
+| [fsq](examples/clients/fsq/)               | Any tool from your shell, over stdio or HTTP; `--json` for scripts  |
+| [browser](examples/clients/browser/)       | A local web UI where the server's questions appear in the page      |
+| [tail](examples/clients/tail/)             | `tail -f` through file subscriptions, locally or on a remote server |
+| [gatekeeper](examples/clients/gatekeeper/) | A coding agent that shows each change's diff and waits for your y/N |
+| [hooks](examples/clients/hooks/)           | Runs a task through a model whenever the workspace changes          |
+| [python](examples/clients/python/)         | A TODO report for a workspace, with the Python SDK                  |
 
 ## Privacy Policy
 

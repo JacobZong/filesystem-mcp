@@ -101,8 +101,9 @@ Each part maps to one piece of the MCP client API:
   and previewed when its `inputSchema` has a `dryRun` property. No tool names
   are hardcoded. `--yes` skips only this gate.
 - **Server confirmations.** The client declares `elicitation: { form: {} }`
-  and handles `elicitation/create` on stdin. This and `listen()` need the
-  2026-07-28 protocol, selected with `versionNegotiation: { mode: 'auto' }`.
+  and handles `elicitation/create` on stdin: a boolean, an enum, or an array
+  of enum values when several folders need access at once. `listen()` needs
+  the 2026-07-28 protocol, selected with `versionNegotiation: { mode: 'auto' }`.
 - **System prompt.** `client.readResource({ uri: 'internal://instructions' })`
   is the server's own usage guide. Every turn starts fresh from it; the
   workspace is the memory.
