@@ -65,10 +65,13 @@ piece of the MCP client API:
   lands while a read runs only causes one more read. Without that order, a
   write in the gap would sit unprinted until the next one.
 - **Reading.** `client.readResource()` returns the whole file. tail prints
-  what lies past the last printed position, up to the last newline; a
-  half-written line waits for its newline. A file shorter than before was
-  truncated and is printed from the start; a file that cannot be read was
-  deleted or rotated, and is picked up again when it reappears.
+  what lies past the text it has already printed, up to the last newline; a
+  half-written line waits for its newline. tail keeps that text, not just its
+  length, because a file replaced by a rename over it can be just as long or
+  longer. A file that no longer starts with it was truncated or replaced:
+  tail says so on stderr and prints it from the start. A file that cannot be
+  read was deleted or moved away; tail says so, and prints the file from the
+  start when it reappears.
 - **The cache.** The server marks file reads cacheable for 5 seconds, and the
   client SDK honors that. Right after a change notification the cached copy
   is exactly the stale one, so every read passes `cacheMode: 'bypass'`.
@@ -79,16 +82,27 @@ piece of the MCP client API:
 
 ## Limits
 
-Each change reads the whole file, so tail suits logs up to a few megabytes;
-`read` with `startLine` would fetch less, but a line range cannot say
-whether the file's last line is complete yet. Files over the server's size
-limit (10 MiB by default) cannot be read as resources at all. Every file must
-exist at startup: the server refuses to subscribe to a missing path. A file
-deleted later stays followed and is picked up again when it reappears.
+Each change reads the whole file, and tail holds on to what it has printed of
+each one, so tail suits logs up to a few megabytes; `read` with `startLine`
+would fetch less, but a line range cannot say whether the file's last line is
+complete yet, or whether the lines before it changed. Files over the server's
+size limit (10 MiB by default) cannot be read as resources at all. Every file
+must exist at startup: the server refuses to subscribe to a missing path. A
+file deleted later stays followed and is picked up again when it reappears.
+
+tail follows the path, not an open file, and compares each read only with
+the text it printed. So a replacement that starts with exactly that text,
+such as the old file copied with lines added, looks like an append: only the
+added lines are printed, with no note on stderr. A file deleted and recreated
+between two reads is judged the same way: tail only sees a deletion when a
+read lands while the file is gone. And lines written after tail's last read
+and before the file was truncated, moved away, or replaced are not printed:
+by the next read they are no longer at the path.
 
 ## Check
 
 `npm test` runs `check.ts`: the real app against the built server, over stdio
-in both protocol eras and over HTTP, including truncation, deletion, a
-half-written line, and a server restart. No network needed. Build the server
-first with `npm run build` at the repository root.
+in both protocol eras and over HTTP, including truncation, replacement by a
+rename (as long and longer), deletion, a half-written line, and a server
+restart. No network needed. Build the server first with `npm run build` at
+the repository root.

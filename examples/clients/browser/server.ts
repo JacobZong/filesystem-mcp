@@ -49,7 +49,9 @@ const client = new Client(
     inputRequired: { autoFulfill: false },
   },
 );
+let closing = false;
 client.onclose = () => {
+  if (closing) return;
   console.error('filesystem-mcp exited');
   process.exit(1);
 };
@@ -109,6 +111,7 @@ http.listen(Number(values.port), '127.0.0.1', () => {
   console.log(`browser: http://127.0.0.1:${port}/  (workspace ${dir})`);
 });
 process.on('SIGINT', () => {
+  closing = true; // the server exiting now is not a crash
   http.close();
   void client.close().then(() => process.exit(0));
 });

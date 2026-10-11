@@ -17,6 +17,9 @@ async function start(dir: string, args: string[] = []) {
   const child = spawn(process.execPath, [join(here, 'server.ts'), dir, '--port', '0', ...args], {
     env: { ...process.env, FS_MCP_BIN: serverBin },
   });
+  let err = '';
+  child.stderr.on('data', (c) => (err += c));
+  const exited = new Promise<number | null>((ok) => child.on('close', ok));
   const base = await new Promise<string>((ok, fail) => {
     let out = '';
     child.stdout.on(
@@ -34,7 +37,9 @@ async function start(dir: string, args: string[] = []) {
     const json = await res.json();
     return res.ok ? json : { httpStatus: res.status, ...json };
   };
-  return { base, api, stop: () => child.kill() };
+  // Ctrl+C: resolves with the exit code and everything the app wrote to stderr.
+  const interrupt = async () => (child.kill('SIGINT'), { code: await exited, err });
+  return { base, api, interrupt, stop: () => child.kill() };
 }
 
 // The page's call loop with scripted answers instead of a dialog.
@@ -154,6 +159,13 @@ try {
 const ro = await start(dir, ['--read-only']);
 try {
   assert.ok(!(await ro.api('info')).tools.includes('create'));
+  // Ctrl+C exits 0, without the server-crashed message. Not on Windows, where
+  // kill() ends the app without running its SIGINT handler.
+  if (process.platform !== 'win32') {
+    const { code, err } = await ro.interrupt();
+    assert.equal(code, 0, err);
+    assert.doesNotMatch(err, /filesystem-mcp exited/);
+  }
 } finally {
   ro.stop();
 }

@@ -57,12 +57,15 @@ client.onclose = () => {
   process.exit(1);
 };
 
-// Per file: how much of it has been printed, and whether a read is running.
+// Per file: the text printed (or skipped by -n) so far, and whether a read is
+// running. The text is kept, not just its length: a file replaced by one at
+// least as long (a rename over it) only shows by no longer starting with it.
+// That is one copy of the file, which every read fetches whole anyway.
 // Busy from the start: a change that lands before the first read (the
 // subscription comes first) only marks the file for one more read.
-type Follow = { path: string; printed: number; busy: boolean; again: boolean; gone: boolean };
+type Follow = { path: string; printed: string; busy: boolean; again: boolean; gone: boolean };
 const byUri = new Map<string, Follow>(
-  files.map((path) => [uriOf(path), { path, printed: 0, busy: true, again: false, gone: false }]),
+  files.map((path) => [uriOf(path), { path, printed: '', busy: true, again: false, gone: false }]),
 );
 let lastHeader = '';
 
@@ -93,17 +96,17 @@ async function catchUp(uri: string, follow: Follow, first = false): Promise<void
       } catch (error) {
         if (!follow.gone) console.error(`tail: ${follow.path}: ${(error as Error).message}`);
         follow.gone = true; // deleted or rotated away; a new file at the path is picked up
-        follow.printed = 0;
+        follow.printed = '';
         continue;
       }
       if (follow.gone && !initial) console.error(`tail: ${follow.path}: file reappeared`);
       follow.gone = false;
-      if (text.length < follow.printed) {
-        console.error(`tail: ${follow.path}: file truncated`);
-        follow.printed = 0;
+      if (!text.startsWith(follow.printed)) {
+        console.error(`tail: ${follow.path}: file truncated or replaced`);
+        follow.printed = '';
       }
       const end = text.lastIndexOf('\n') + 1; // through the last complete line
-      let from = follow.printed;
+      let from = follow.printed.length;
       if (initial) {
         const lines = text.slice(0, end).split('\n').slice(0, -1);
         const n = Number(values.lines);
@@ -111,7 +114,7 @@ async function catchUp(uri: string, follow: Follow, first = false): Promise<void
         from = end - keep.length - (keep ? 1 : 0);
       }
       if (end > from) print(follow, text.slice(from, end));
-      follow.printed = Math.max(end, follow.printed);
+      follow.printed = text.slice(0, end); // never shorter: it ended at a newline
     } while (follow.again);
   } finally {
     follow.busy = false;

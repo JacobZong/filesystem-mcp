@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -36,6 +36,13 @@ function tail(args: string[]) {
     see: (text: string) => waitFor(`"${text}" in:\n${out}\n${err}`, () => out.includes(text)),
     stop: () => (child.kill('SIGINT'), done),
   };
+}
+
+// A rename over the file, as an editor's atomic save does it: the path never
+// goes missing, so only the content says the file is a new one.
+async function replace(path: string, text: string): Promise<void> {
+  await writeFile(`${path}.tmp`, text);
+  await rename(`${path}.tmp`, path);
 }
 
 function httpServer(dir: string, port: number): ChildProcess {
@@ -80,15 +87,36 @@ for (const era of [[], ['--legacy']]) {
   assert.doesNotMatch(t.out(), /part(?!ial)/);
   await appendFile(log, 'ial\n');
   await t.see('partial\n');
+  assert.doesNotMatch(t.err(), /truncated or replaced/); // appends are not reported
 
-  // Truncation starts over; a deleted file is reported, and picked up again.
+  // Truncation starts over.
   await writeFile(log, 'after truncate\n');
   await t.see('after truncate\n');
   assert.match(t.err(), /app\.log: file truncated/);
+  // A replaced file starts over too, even one as long or longer, which a
+  // length check takes for an append. Its half-written line still waits.
+  const reports = () => t.err().split('app.log: file truncated or replaced').length - 1;
+  let seen = reports();
+  await replace(log, 'swapped inside\n'); // as long as 'after truncate\n'
+  await t.see('after truncate\nswapped inside\n');
+  await waitFor('the same-length replacement', () => reports() > seen);
+  seen = reports();
+  // Four complete lines, one more than -n 3: all of them are printed.
+  await replace(log, 'replaced 1\nreplaced 2\nreplaced 3\nreplaced 4\nhalf');
+  await t.see('swapped inside\nreplaced 1\nreplaced 2\nreplaced 3\nreplaced 4\n');
+  await waitFor('the longer replacement', () => reports() > seen);
+  assert.doesNotMatch(t.out(), /half/);
+  seen = reports();
+  await appendFile(log, ' done\n'); // the new file is appended to, not replaced again
+  await t.see('replaced 4\nhalf done\n');
+  assert.equal(reports(), seen, t.err());
+
+  // A deleted file is reported, and picked up again.
   await rm(other);
   await waitFor('the deletion', () => /other\.log: Path not found/.test(t.err()));
   await writeFile(other, 'reborn\n');
   await t.see('reborn\n');
+  assert.doesNotMatch(t.err(), /other\.log: file truncated or replaced/); // just reappeared
 
   const code = await t.stop();
   if (process.platform !== 'win32') assert.equal(code, 0, t.err());

@@ -95,18 +95,25 @@
         background: var(--pane);
         border-right: 1px solid var(--line);
       }
-      nav a {
+      nav button {
         display: block;
+        width: 100%;
         padding: 4px 12px;
+        border: 0;
+        border-radius: 0;
+        background: none;
         color: inherit;
-        text-decoration: none;
+        text-align: left;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        cursor: pointer;
       }
-      nav a:hover {
+      nav button:hover {
         background: var(--line);
+      }
+      nav button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
       }
       #view {
         overflow: auto;
@@ -274,6 +281,10 @@
                 ),
           ),
         );
+        // A close request such as Escape leaves returnValue unchanged per the HTML
+        // spec (Firefox, Safari, older Chrome), so a stale 'accept' from the
+        // previous dialog would answer yes.
+        $('ask').returnValue = '';
         $('ask').showModal();
         return new Promise((done) =>
           $('ask').addEventListener(
@@ -298,13 +309,15 @@
 
       let cwd = '';
       // A sidebar of [label, onclick] rows, plus "more" when the result has a nextCursor.
+      // Buttons, so a keyboard reaches them and Enter or Space opens them.
       function side(rows, more, append = false) {
         const links = rows.map(([label, onclick]) =>
-          make('a', { textContent: label, title: label, onclick }),
+          make('button', { type: 'button', textContent: label, title: label, onclick }),
         );
         if (more)
           links.push(
-            make('a', {
+            make('button', {
+              type: 'button',
               textContent: 'more…',
               className: 'error',
               onclick: (e) => {
@@ -314,6 +327,8 @@
             }),
           );
         append ? $('side').append(...links) : $('side').replaceChildren(...links);
+        // Removing "more…" dropped the focus; give it to the first new row.
+        if (append && document.activeElement === document.body) links[0]?.focus();
       }
 
       async function list(args, append = false) {
@@ -463,9 +478,15 @@
         }, 150);
       };
       $('go').onclick = () => open($('path').value.trim());
-      $('path').onkeydown = (e) => e.key === 'Enter' && open($('path').value.trim());
       $('up').onclick = () => open(cwd.slice(0, cwd.lastIndexOf(sep(cwd))) || sep(cwd));
-      $('q').onkeydown = (e) => e.key === 'Enter' && $('q').value && search($('q').value);
+      // Block bodies: an on* handler that returns false cancels the key, so
+      // nothing could be typed in these boxes and Tab could not leave them.
+      $('path').onkeydown = (e) => {
+        if (e.key === 'Enter') open($('path').value.trim());
+      };
+      $('q').onkeydown = (e) => {
+        if (e.key === 'Enter' && $('q').value) search($('q').value);
+      };
       $('new').onclick = async () => {
         const name = prompt(`New file in ${cwd}`);
         if (!name) return;

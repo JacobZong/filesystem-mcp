@@ -8,7 +8,9 @@ usage: python todo_report.py [dir] [--out FILE] [--url URL] [--legacy]
 
 import argparse
 import asyncio
+import ntpath
 import os
+import posixpath
 import re
 import sys
 from collections import defaultdict
@@ -20,8 +22,15 @@ from mcp.client.streamable_http import create_mcp_http_client, streamable_http_c
 TAGS = ["FIXME", "HACK", "XXX", "TODO"]  # report order: most urgent first
 # The server runs regexes with RE2: no lookarounds or backreferences.
 SEARCH = r"\b(" + "|".join(TAGS) + r")\b"
-# TAG, an optional (owner), an optional colon, then the note.
-MARKER = re.compile(r"\b(" + "|".join(TAGS) + r")\b(?:\(([^)]*)\))?:?\s*(.*)")
+# search_text returns one row per line, and a line can hold several markers.
+# A later tag starts a new note only when written as a marker (TAG: or
+# TAG(owner)), so prose such as "drop this HACK" stays in the note. An owner
+# stops at any parenthesis, or a long "TODO(TODO(..." line would be rescanned
+# to its end at every tag.
+LATER = r"(?:(?://|#|/\*|<!--|--|;)\s*)?\b(?:" + "|".join(TAGS) + r")\b(?:\([^()]*\)|:)"
+# TAG, an optional (owner), an optional colon, then the note: up to the next
+# marker and its comment opener (Python's re can look ahead), or the line's end.
+MARKER = re.compile(SEARCH + r"(?:\(([^()]*)\))?:?\s*(.*?)(?=" + LATER + r"|$)")
 
 
 def transport(args: argparse.Namespace):
@@ -61,7 +70,8 @@ async def confirm(_context, params: types.ElicitRequestParams) -> types.ElicitRe
         file=sys.stderr,
         flush=True,
     )
-    answer = (await asyncio.to_thread(sys.stdin.readline)).strip()
+    # With fd 0 closed at startup there is no sys.stdin at all.
+    answer = (await asyncio.to_thread(sys.stdin.readline)).strip() if sys.stdin else ""
     if field.get("type") == "boolean":
         accepted = answer.lower() == "y"
         return (
@@ -85,12 +95,16 @@ def text(result: types.CallToolResult) -> str:
     return "\n".join(block.text for block in result.content if isinstance(block, types.TextContent))
 
 
-async def find_markers(client: Client, path: str | None) -> tuple[list[dict], dict, str | None]:
+async def find_markers(client: Client, path: str) -> tuple[list[dict], dict, str | None]:
     """Every match, following nextCursor. search_text keeps its data in _meta
     (result.meta here); its text content is the grep-style view for people."""
-    args = {"searchPattern": SEARCH, "isRegex": True, "caseSensitive": True, "maxResults": 1000}
-    if path:
-        args["path"] = path
+    args = {
+        "path": path,
+        "searchPattern": SEARCH,
+        "isRegex": True,
+        "caseSensitive": True,
+        "maxResults": 1000,
+    }
     matches: list[dict] = []
     first: dict = {}
     while True:
@@ -105,13 +119,31 @@ async def find_markers(client: Client, path: str | None) -> tuple[list[dict], di
         args = {**args, "cursor": meta["nextCursor"]}  # same arguments plus the cursor
 
 
+def os_path(path: str):
+    """os.path for a server path; over HTTP the server may run on another OS."""
+    return posixpath if path.startswith("/") else ntpath
+
+
+async def only_root(client: Client) -> tuple[str | None, str | None]:
+    """The server's root, or an error when it has none or several."""
+    result = await client.call_tool("list_roots", {})
+    if result.is_error:
+        return None, text(result)
+    # list_roots keeps its data in structuredContent; none is [] plus a hint.
+    roots = (result.structured_content or {}).get("roots") or []
+    if len(roots) == 1:
+        return roots[0], None
+    if not roots:
+        return None, "the server has no roots, so pass an absolute dir"
+    return None, f"the server has {len(roots)} roots, so pass an absolute dir: {', '.join(roots)}"
+
+
 def render(where: str, matches: list[dict], meta: dict) -> str:
     by_tag: dict[str, list[str]] = defaultdict(list)
     for match in matches:
-        found = MARKER.search(match["content"])
-        if found:
+        for found in MARKER.finditer(match["content"]):
             tag, owner, note = found.groups()
-            note = note.strip().removesuffix("*/").removesuffix("-->").strip()
+            note = note.split("*/")[0].split("-->")[0].strip()  # a block comment ends here
             entry = f"- `{match['file']}:{match['line']}` {note}" + (f" ({owner})" if owner else "")
             by_tag[tag].append(entry.rstrip())
     files = len({m["file"] for m in matches})
@@ -130,9 +162,11 @@ async def main() -> str | None:
     would surface as an exception group from the SDK's task groups."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
-        "dir", nargs="?", help="folder to report on (default: . or the server's root)"
+        "dir",
+        nargs="?",
+        help="folder to report on (default: ., or the server's only root with --url)",
     )
-    parser.add_argument("--out", help="write the report to this file inside the workspace")
+    parser.add_argument("--out", help="write the report to this file (relative to dir)")
     parser.add_argument("--url", help="a running server's /mcp URL; FS_API_KEY is the bearer token")
     parser.add_argument("--legacy", action="store_true", help="speak the 2025 protocol")
     args = parser.parse_args()
@@ -143,16 +177,24 @@ async def main() -> str | None:
     # back to the 2025 handshake for older servers; "legacy" skips the probe.
     mode = "legacy" if args.legacy else "auto"
     async with Client(transport(args), mode=mode, elicitation_callback=confirm) as client:
+        # The server resolves a relative path against its cwd, not its root,
+        # so over HTTP the script anchors dir (and with it --out) to the root.
+        if args.url and not (args.dir and os_path(args.dir).isabs(args.dir)):
+            root, error = await only_root(client)
+            if root is None:
+                return error
+            osp = os_path(root)
+            args.dir = osp.normpath(osp.join(root, args.dir or "."))  # abspath, on the server
         matches, meta, error = await find_markers(client, args.dir)
         if error:
             return error
-        out = args.out and (
-            args.out if os.path.isabs(args.out) else os.path.join(args.dir or "", args.out)
-        )
-        if out and args.dir:  # a previous report is not a source of TODOs
-            own = os.path.relpath(out, args.dir).replace(os.sep, "/")
-            matches = [m for m in matches if m["file"] != own]
-        report = render(args.dir or "workspace", matches, meta)
+        osp = os_path(args.dir)
+        # An absolute --out replaces dir. Normalized, because the server refuses
+        # a path that still contains "..".
+        out = args.out and osp.normpath(osp.join(args.dir, args.out))
+        if out:  # a previous report is not a source of TODOs
+            matches = [m for m in matches if osp.normpath(osp.join(args.dir, m["file"])) != out]
+        report = render(args.dir, matches, meta)
         if not out:
             sys.stdout.write(report)
             return None

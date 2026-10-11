@@ -33,18 +33,19 @@ pip install -r requirements.txt
 python todo_report.py [dir] [--out FILE] [--url URL] [--legacy]
 ```
 
-| Option       | What it does                                                                  |
-| :----------- | :---------------------------------------------------------------------------- |
-| `dir`        | The folder to report on. Default `.`, or the server's first root with `--url` |
-| `--out FILE` | Writes the report into the workspace instead of printing it                   |
-| `--url URL`  | Uses a running server over HTTP; `FS_API_KEY` is sent as the bearer token     |
-| `--legacy`   | Speaks the 2025 protocol instead of negotiating 2026-07-28                    |
+| Option       | What it does                                                                 |
+| :----------- | :--------------------------------------------------------------------------- |
+| `dir`        | The folder to report on. Default `.`, or the server's only root with `--url` |
+| `--out FILE` | Writes the report to `FILE`, relative to `dir`, instead of printing it       |
+| `--url URL`  | Uses a running server over HTTP; `FS_API_KEY` is sent as the bearer token    |
+| `--legacy`   | Speaks the 2025 protocol instead of negotiating 2026-07-28                   |
 
 Without `--out` the server is started with `--read-only`, so a report run
 cannot change anything. With `--out`, replacing an existing report is the
 server's question: it is asked on stderr and answered on stdin, and closed
-stdin declines. `FS_MCP_BIN` points the script at a local `dist/index.js`
-instead of the npm package.
+stdin declines. Over HTTP with `--legacy` the server cannot ask, so replacing
+a report fails with an error instead. `FS_MCP_BIN` points the script at a
+local `dist/index.js` instead of the npm package.
 
 ## How it works
 
@@ -56,6 +57,11 @@ Each part maps to one piece of the Python SDK:
   `streamable_http_client()` with an `http_client` from
   `create_mcp_http_client(headers=...)`, which carries the API key. The
   client is used as `async with Client(...) as client`.
+- **Paths over HTTP.** A running server resolves a relative path against its
+  own working directory, not its root. So with `--url` the script calls
+  `list_roots` and resolves a missing or relative `dir`, and with it `--out`,
+  against the root. If the server has no root or several, the script stops
+  with an error asking for an absolute `dir`.
 - **Protocol era.** The Python SDK's default `mode="auto"` negotiates the
   2026-07-28 revision and falls back to the 2025 handshake for older
   servers; `mode="legacy"` skips the probe. (The TypeScript SDK's default is
@@ -69,6 +75,10 @@ Each part maps to one piece of the Python SDK:
 - **Pagination.** While `meta["nextCursor"]` is set, the script repeats the
   call with the same arguments plus `cursor`. Each page has up to
   `maxResults` matches; cursors expire after about 60 seconds.
+- **Markers.** A match is a whole line, so the script finds the markers in it.
+  The first tag on a line always counts; a later one only when written as a
+  marker (`TODO:` or `TODO(owner)`), so "remove this HACK" stays in the note.
+  A note ends at the next marker or at a comment closer (`*/`, `-->`).
 - **Confirmations.** `elicitation_callback=confirm` answers the server's
   forms. Each has one field: a boolean, an enum, or an array of enum values.
   On the 2026-07-28 era the SDK fulfils the server's `input_required` result
@@ -82,6 +92,7 @@ Each part maps to one piece of the Python SDK:
 ## Check
 
 `python check.py` runs the real script against the built server, over stdio
-in both protocol eras and over HTTP with an API key, on a workspace with more
-matches than fit on one page. No network needed. Build the server first with
-`npm run build` at the repository root. Tested with `mcp` 2.2.0 and 2.3.0.
+in both protocol eras and over HTTP with an API key and one, two, or no roots,
+on a workspace with more matches than fit on one page. No network needed.
+Build the server first with `npm run build` at the repository root. Tested
+with `mcp` 2.2.0 and 2.3.0.

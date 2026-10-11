@@ -339,6 +339,8 @@ await client.connect(
 
 const result = await client.callTool({ name: 'search_text', arguments: { searchPattern: 'TODO' } });
 const { matches } = (result.structuredContent ?? result._meta) as { matches: unknown[] };
+console.log(matches);
+await client.close(); // stops the server process; without it the script never exits
 ```
 
 The basics:
