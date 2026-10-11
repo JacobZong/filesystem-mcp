@@ -314,9 +314,10 @@ If you find a vulnerability, please report it privately.
 
 ## Build your own client
 
-Filesystem MCP also works as a guarded file engine for your own code: an
-agent, an editor plugin, a web app, a CI job, or a script. You get the same
-sandbox, secret-file blocking, and confirmations, without writing any of it.
+You can also call Filesystem MCP from your own code: an agent, an editor
+plugin, a web app, a CI job, or a script. The same rules apply as for an AI
+app, so your code cannot reach outside the allowed folders or read secret
+files.
 
 ```ts
 import { Client } from '@modelcontextprotocol/client';
@@ -340,7 +341,7 @@ const result = await client.callTool({ name: 'search_text', arguments: { searchP
 const { matches } = (result.structuredContent ?? result._meta) as { matches: unknown[] };
 ```
 
-What to know before you start:
+The basics:
 
 - **Where the data is.** The text block is written for a model. The same data
   as JSON is in `_meta` for tools that write their own text (`read`, `list`,
@@ -359,10 +360,9 @@ What to know before you start:
   `filesystem-mcp://file/{+path}`; `internal://instructions` and the
   `get-help` prompt hold the server's guide for models.
 
-The [client guide](docs/client-guide.md) covers all of it: transports,
-protocol versions, result shapes, errors, pagination, progress, confirmations,
-subscriptions, and completions, checked against the TypeScript and Python
-SDKs. [`examples/`](examples/) has six runnable clients:
+The [client guide](docs/client-guide.md) has the details, tested with the
+TypeScript and Python SDKs, and [`examples/`](examples/) has six runnable
+clients:
 
 | Example                                    | What it is                                                          |
 | :----------------------------------------- | :------------------------------------------------------------------ |

@@ -1,11 +1,11 @@
 # fsq
 
-Call any filesystem-mcp tool from your shell. Text output for people, `--json`
-for scripts and `jq`. fsq starts the server over stdio, or uses one that is
-already running over HTTP, so a script, a Makefile, or a CI job can search and
-edit a workspace through the same guarded tools an AI assistant gets: secret
-files stay hidden, nothing outside the roots is reachable, and overwrites ask
-first. An abridged session:
+Call any filesystem-mcp tool from your shell, with text output for people
+and `--json` for scripts and `jq`. fsq starts the server over stdio, or uses
+one already running over HTTP. A script or a CI job then works on the
+workspace under the same limits as an AI assistant: it sees only the allowed
+folders and no secret files. An overwrite waits for an answer. An abridged
+session:
 
 ```text
 $ node fsq.ts search_text searchPattern=TODO context=1

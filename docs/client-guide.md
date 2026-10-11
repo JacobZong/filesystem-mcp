@@ -8,8 +8,8 @@ use the server from an AI app, the [README](../README.md) is enough.
 
 The behavior described here was checked against filesystem-mcp 2.7.5 with the
 TypeScript SDK (`@modelcontextprotocol/client` 2.3.1) and the Python SDK
-(`mcp` 2.2.0 and 2.3.0). The [example clients](../examples/) are runnable
-versions of everything below.
+(`mcp` 2.2.0 and 2.3.0). Most of it also appears as running code in the
+[example clients](../examples/).
 
 - [Quick start](#quick-start)
 - [Transports](#transports)

@@ -2,9 +2,9 @@
 
 `tail -f` through filesystem-mcp: print the last lines of one or more files,
 then each new line as it is written. Point it at a server running over HTTP
-and you can follow a log on another machine without a shell there; the
-server's sandbox still applies, so only files inside its roots can be read
-and secret files stay blocked. An abridged session:
+to follow a log on another machine without a shell there. Only files inside
+that server's roots can be read, and secret files stay blocked. An abridged
+session:
 
 ```text
 $ node tail.ts logs/app.log logs/worker.log -n 2

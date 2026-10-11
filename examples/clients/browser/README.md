@@ -1,11 +1,11 @@
 # browser
 
-A local web UI for one workspace: browse folders, view text and images,
-search, edit, create, and delete files. filesystem-mcp does all of the file
-work, so the page gets its guarantees for free: secret files never show up,
-nothing outside the workspace opens until you allow it, and replacing a file
-or deleting a non-empty folder waits for your OK. Those questions are the
-server's own, rendered in the page from the form it sends.
+A local web UI for one workspace. You can browse folders, view text and
+images, search, and edit, create, or delete files. filesystem-mcp does the
+file work, so its rules hold in the page too: secret files never show up, and
+a folder outside the workspace stays closed until you allow it. When the
+server wants your OK before replacing a file or deleting a non-empty folder,
+the page shows its question as a dialog built from the form the server sends.
 
 ![The browser app asking whether to overwrite a file](screenshot.png)
 
@@ -53,8 +53,8 @@ client API:
   folders at once). The page builds radio buttons or checkboxes from the
   schema, so it never needs to know which question it is answering.
 - **`requestState` is signed.** The server signs it with an HMAC and rejects
-  a changed one (`Invalid or expired requestState`). The page can carry it,
-  but cannot forge an answer to a question the server did not ask.
+  a changed one (`Invalid or expired requestState`), so the page only
+  carries it from one round to the next.
 - **Reading files.** The viewer uses `resources/read` on
   `filesystem-mcp://file/{+path}`, with the path percent-encoded and `/`
   kept. Text arrives as `text`; images and other binaries as base64 `blob`.
