@@ -147,6 +147,24 @@ try:
     res, text, _ = s.tool("write_binary", {"path": "/data/read/fixtures/must-fail.mp3", "data_base64": b64})
     check("write_binary under /data/read is blocked", bool(res.get("isError")), "blocked" if res.get("isError") else "WRITE SUCCEEDED")
 
+    # No per-file limit: 20 MB (above the 10 MiB per-call bound) in appended chunks, then moved into place.
+    big = os.urandom(20 * 1024 * 1024)
+    whole = hashlib.sha256(big).hexdigest()
+    step, ok = 6 * 1024 * 1024, True
+    for off in range(0, len(big), step):
+        chunk = big[off:off + step]
+        args = {"path": "/data/write/big/video.bin.part", "data_base64": base64.b64encode(chunk).decode(),
+                "sha256": hashlib.sha256(chunk).hexdigest(), "append": True}
+        if off + step >= len(big):
+            args["file_sha256"] = whole
+        res, text, _ = s.tool("write_binary", args)
+        ok = ok and not res.get("isError")
+    res, text, _ = s.tool("move", {"moves": [{"source": "/data/write/big/video.bin.part", "destination": "/data/write/big/video.bin"}]})
+    landed = os.path.join(write_dir, "big", "video.bin")
+    same = os.path.exists(landed) and hashlib.sha256(open(landed, "rb").read()).hexdigest() == whole
+    check("write_binary uploads a 20 MB file in chunks (no per-file limit)", ok and not res.get("isError") and same,
+          "verified" if same else text[:120])
+
     res = s.call("tools/call", {"name": "read", "arguments": {"path": "/data/write/learning/sample.mp3"}}).get("result", {})
     blocks = [b for b in res.get("content", []) if b.get("type") == "audio"]
     check("read returns the MP3 as an audio block", len(blocks) == 1 and base64.b64decode(blocks[0].get("data", "")) == audio,

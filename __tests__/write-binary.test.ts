@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -10,6 +10,7 @@ import {
   createTestRoot,
   firstTextBlock,
   type TestClientContext,
+  withEnv,
 } from './helpers.ts';
 
 // Bytes that are not valid UTF-8 and include NUL: a text round-trip would corrupt them.
@@ -86,6 +87,51 @@ describe('write_binary', () => {
     });
     assert.strictEqual(malformed.isError, true);
     await assert.rejects(readFile(target));
+  });
+
+  it('has no per-file size limit: a file larger than one call goes up in appended chunks', async () => {
+    const big = randomBytes(2_500_000);
+    const whole = createHash('sha256').update(big).digest('hex');
+    const target = join(tmpDir, 'video', 'large.bin.part');
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const single = await harness.client.callTool({
+        name: 'write_binary',
+        arguments: {
+          path: join(tmpDir, 'video', 'single.bin'),
+          data_base64: big.toString('base64'),
+        },
+      });
+      assert.strictEqual(single.isError, true, 'one call above FS_MAX_FILE_SIZE must be refused');
+
+      const step = 700_000;
+      for (let off = 0; off < big.length; off += step) {
+        const chunk = big.subarray(off, off + step);
+        const last = off + step >= big.length;
+        const res = await harness.client.callTool({
+          name: 'write_binary',
+          arguments: {
+            path: target,
+            data_base64: chunk.toString('base64'),
+            sha256: createHash('sha256').update(chunk).digest('hex'),
+            append: true,
+            ...(last ? { file_sha256: whole } : {}),
+          },
+        });
+        assert.notStrictEqual(res.isError, true, firstTextBlock(res).text);
+        if (last) assert.match(firstTextBlock(res).text ?? '', /file sha256 [0-9a-f]{64} verified/);
+      }
+    });
+    assert.deepStrictEqual(await readFile(target), big);
+  });
+
+  it('reports a whole-file mismatch after the last chunk', async () => {
+    const target = join(tmpDir, 'mismatch-whole.bin');
+    const res = await harness.client.callTool({
+      name: 'write_binary',
+      arguments: { path: target, data_base64: B64, append: true, file_sha256: 'f'.repeat(64) },
+    });
+    assert.strictEqual(res.isError, true);
+    assert.match(firstTextBlock(res).text ?? '', /expected f{64}/);
   });
 
   it('never writes outside the roots, directly or through a symbolic link', async () => {
