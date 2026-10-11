@@ -75,8 +75,12 @@ Each part maps to one piece of the MCP client API:
   are hardcoded. The preview is the same `callTool` with `dryRun: true`.
 - **Server confirmations.** The client declares `elicitation: { form: {} }`
   and handles `elicitation/create`, so the server can ask about access outside
-  the root, overwrites and recursive deletes. This needs the 2026-07-28
-  protocol, selected with `versionNegotiation: { mode: 'auto' }`.
+  the root, overwrites and recursive deletes. Each form has one field: a
+  boolean, an enum, or an array of enum values when several folders need
+  access at once. Over stdio this works in both protocol eras;
+  `versionNegotiation: { mode: 'auto' }` selects 2026-07-28, where the SDK
+  turns the server's `input_required` results into calls to the same
+  handler.
 - **System prompt.** `client.readResource({ uri: 'internal://instructions' })`
   is the server's own usage guide.
 - **Errors.** A tool failure comes back as `isError` and is sent to the model

@@ -49,7 +49,8 @@ source. The server skips a folder outside it at startup with a warning, and
 refuses requests to add a folder outside it.
 
 Approved folders last until the server stops. Removing a folder from your
-editor does not remove access in the running session.
+editor does not remove access in the running session. Over HTTP, a folder
+approved for one client is open to every client of that server.
 
 ## Folders that are never added automatically
 
@@ -253,7 +254,12 @@ delete, or a request for a new folder fails with an error that says so. For
 those clients, use stdio, or `overwrite: true` where a tool offers it.
 
 The server never picks up a client's workspace folders over HTTP, whatever
-the client's version, so pass folders as arguments when you start it.
+the client's version, so pass folders as arguments when you start it. All
+clients of one server share its folders, including any folder one of them was
+granted. Clients should send absolute paths: a relative path resolves against
+the folder the server was started in, not against a root. The
+[client guide](client-guide.md) covers this and the rest of what a client
+needs to know.
 
 ## Running in Docker
 

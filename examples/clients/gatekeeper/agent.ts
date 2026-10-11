@@ -104,13 +104,17 @@ client.onclose = () => {
 };
 
 // The server's own questions: access outside the root, overwrites, recursive
-// deletes. Its forms are one boolean `confirm` or one enum `choice`.
+// deletes. Each form has one field: a boolean, an enum, or (granting several
+// folders at once) an array of enum values.
 client.setRequestHandler('elicitation/create', async (request) => {
   const params = request.params;
   if (params.mode === 'url') return { action: 'decline' };
   const fields = Object.entries(params.requestedSchema.properties);
   if (fields.length !== 1) return { action: 'decline' };
-  const [key, field] = fields[0] as [string, { type?: string; enum?: string[] }];
+  const [key, field] = fields[0] as [
+    string,
+    { type?: string; enum?: string[]; items?: { enum?: string[] } },
+  ];
   console.log(`server asks: ${params.message}`);
   if (field.type === 'boolean') {
     const answer = await ask('y/N ');
@@ -118,12 +122,14 @@ client.setRequestHandler('elicitation/create', async (request) => {
       ? { action: 'accept', content: { [key]: true } }
       : { action: 'decline' };
   }
-  if (field.enum) {
-    field.enum.forEach((option, n) => console.log(`  ${n + 1}) ${option}`));
-    const picked = field.enum[Number(await ask('choice: ')) - 1];
-    return picked ? { action: 'accept', content: { [key]: picked } } : { action: 'decline' };
-  }
-  return { action: 'decline' }; // e.g. a multi-select grant
+  const options = field.enum ?? field.items?.enum;
+  if (!options) return { action: 'decline' };
+  options.forEach((option, n) => console.log(`  ${n + 1}) ${option}`));
+  const many = field.type === 'array';
+  const answer = await ask(many ? 'choices, comma-separated: ' : 'choice: ');
+  const picked = (answer ?? '').split(',').flatMap((n) => options[Number(n) - 1] ?? []);
+  if (picked.length === 0) return { action: 'decline' };
+  return { action: 'accept', content: { [key]: many ? picked : picked[0] } };
 });
 
 function toText(result: CallToolResult): string {

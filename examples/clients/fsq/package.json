@@ -1,0 +1,17 @@
+{
+  "name": "fsq",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Call any filesystem-mcp tool from the shell, over stdio or HTTP",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node fsq.ts",
+    "test": "node check.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.3.1"
+  }
+}
