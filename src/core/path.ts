@@ -155,15 +155,27 @@ export async function resolveAllowedDirectoriesState(
 // ---------------------------------------------------------------------------
 
 /**
- * Accepted risk: validation methods resolve/verify a path (symlinks, boundaries,
+ * TOCTOU note: validation methods resolve/verify a path (symlinks, boundaries,
  * sensitivity) and then return a plain string; the actual fs operation happens
- * afterward as a separate syscall (classic TOCTOU). A symlink swapped in that
- * exact window could redirect the follow-up operation. This is mitigated by
- * re-validating the resolved real path (not just the requested path) and by
- * walking ancestors to catch escapes before the target exists, but it is not
- * eliminated — doing so would require fd-based operations (open with
- * O_NOFOLLOW / operate on the resolved fd) throughout core/fs.ts. Acceptable
- * tradeoff for a local, single-user filesystem server today.
+ * afterward as a separate syscall. A symlink swapped onto the path in that
+ * window could redirect the follow-up operation.
+ *
+ * The read and append open seams in core/fs.ts (and core/read.ts) close the
+ * confirmed vector: they open the resolved target with O_NOFOLLOW, so a
+ * FINAL-component regular-file→symlink swap is refused (ELOOP) rather than
+ * followed, and `GuardedFileSystem.#assertFdWithinRoots` re-checks the opened
+ * descriptor's real path (Linux `/proc/self/fd`) against the allowed roots so
+ * an ANCESTOR-directory swap that O_NOFOLLOW cannot see is caught before any
+ * byte is read or written. Opens receive the realpath-resolved target, so a
+ * legitimate in-root symlink is unaffected; O_NOFOLLOW is 0 on Windows.
+ *
+ * Residual, requiring an openat()-relative-to-dirfd rewrite that Node lacks:
+ * write-side operations that resolve a parent directory by name — the final
+ * `rename` in the atomic write (safe on its final component: rename replaces
+ * the link itself and the temp is O_EXCL), and `mkdir`/`rm`/`rmdir`/`cp` — can
+ * still be redirected by an ancestor-directory swap; and on non-Linux /
+ * inode-less filesystems the `/proc` ancestor check is skipped, leaving
+ * O_NOFOLLOW (final component) as the only guard.
  */
 export class PathGuard {
   private allowedDirectoriesState: string[] | undefined;

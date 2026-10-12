@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Stats } from 'node:fs';
+import { constants as fsConstants, type Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
   chmod as fsChmod,
@@ -31,7 +31,7 @@ import {
 import { detectMimeFromContent } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
-import { respellCaseOnlyTarget } from './path-utils.ts';
+import { normalizePath, respellCaseOnlyTarget } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
 import { assertFileStats, createTooLargeError, readFileWithStats } from './read.ts';
@@ -70,6 +70,28 @@ const CHAR_LF = 10;
 
 const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
 
+// O_NOFOLLOW makes the kernel refuse (ELOOP) to open a path whose FINAL
+// component is a symlink, closing the TOCTOU where a validated regular file is
+// swapped for a symlink between validation and open (so a read returns, or an
+// append writes through, a link pointing outside the sandbox). Every open below
+// is handed the realpath-resolved target, whose final component is a real file,
+// so O_NOFOLLOW never trips a legitimate in-root symlink. It is 0 on Windows,
+// where symlink creation needs privilege; the numeric flags are passed to
+// fs.open in place of the 'r'/'a'/'ax' string modes.
+// @types/node declares every fs constant as an always-present number, but
+// O_NOFOLLOW and O_NONBLOCK are absent on Windows at runtime, so read them
+// through a type that admits undefined and fall back to 0 (a no-op flag bit).
+const platformConstants = fsConstants as { O_NOFOLLOW?: number; O_NONBLOCK?: number };
+const O_NOFOLLOW = platformConstants.O_NOFOLLOW ?? 0;
+const O_NONBLOCK = platformConstants.O_NONBLOCK ?? 0;
+const READ_NOFOLLOW = fsConstants.O_RDONLY | O_NOFOLLOW;
+// O_NONBLOCK turns an append to a symlink-swapped FIFO (which O_NOFOLLOW does
+// not reject — a FIFO is not a symlink) from an unabortable open hang into an
+// immediate error; it is a no-op for a regular file.
+const APPEND_NOFOLLOW = fsConstants.O_WRONLY | fsConstants.O_APPEND | O_NOFOLLOW | O_NONBLOCK;
+const APPEND_CREATE_NOFOLLOW =
+  fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW;
+
 /**
  * Line count for a file on disk, counting newline bytes in fixed 64 KiB
  * chunks so an arbitrarily large file (one append's result metadata) costs
@@ -80,7 +102,7 @@ const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
  * a new line, an unterminated final line counts, an empty file is 0.
  */
 export async function countFileLines(filePath: string): Promise<number> {
-  const handle = await fsOpen(filePath, 'r');
+  const handle = await fsOpen(filePath, READ_NOFOLLOW);
   try {
     let newlines = 0;
     let lastByte = 0;
@@ -109,6 +131,41 @@ export class GuardedFileSystem {
 
   constructor(pathGuard: PathGuard) {
     this.pathGuard = pathGuard;
+  }
+
+  /**
+   * Defense against an ancestor-DIRECTORY symlink swap in the validate→open
+   * window: O_NOFOLLOW only rejects a swapped final component, so once a handle
+   * is open, re-derive the file descriptor's real path and require it still
+   * lands inside the allowed roots and is not sensitive. Checks containment,
+   * not inode identity, so a benign same-path rewrite (new inode, same path)
+   * does not trip it. Linux-only and best-effort: `/proc/self/fd` resolves the
+   * descriptor's current real path; where it is unavailable (non-Linux) the
+   * check is skipped and O_NOFOLLOW still guards the final component. Callers
+   * must run this BEFORE reading or writing through the handle.
+   */
+  async #assertFdWithinRoots(handle: FileHandle, requestedPath: string): Promise<void> {
+    let fdRealPath: string;
+    try {
+      fdRealPath = await fsReadlink(`/proc/self/fd/${String(handle.fd)}`);
+    } catch {
+      return; // no /proc (non-Linux): rely on O_NOFOLLOW for the final component
+    }
+    // A target deleted and replaced mid-flight reads back as "<path> (deleted)";
+    // treat anything that is not a plain absolute path as changed under us.
+    const changed = !isAbsolute(fdRealPath) || fdRealPath.endsWith(' (deleted)');
+    const normalized = changed ? undefined : normalizePath(fdRealPath);
+    if (
+      normalized === undefined ||
+      this.pathGuard.allowedRootContaining(normalized) === undefined ||
+      this.pathGuard.isSensitive(normalized)
+    ) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+      );
+    }
   }
 
   /**
@@ -275,18 +332,28 @@ export class GuardedFileSystem {
     let created = false;
     let handle: FileHandle;
     if (existed) {
-      handle = await fsOpen(validPath, 'a');
+      // O_NOFOLLOW: refuse to append through a symlink swapped onto the target
+      // after resolveForWrite — the exact TOCTOU that let an append write
+      // outside the sandbox.
+      handle = await fsOpen(validPath, APPEND_NOFOLLOW);
     } else {
       try {
-        handle = await fsOpen(validPath, 'ax');
+        // O_CREAT|O_EXCL|O_NOFOLLOW: create exclusively and never through a
+        // final-component symlink.
+        handle = await fsOpen(validPath, APPEND_CREATE_NOFOLLOW);
         created = true;
       } catch (error) {
         if (!isNodeError(error) || error.code !== 'EEXIST') throw error;
-        handle = await fsOpen(validPath, 'a');
+        handle = await fsOpen(validPath, APPEND_NOFOLLOW);
       }
     }
     try {
       signal?.throwIfAborted();
+      // An existing target reached through a swapped ANCESTOR directory passes
+      // O_NOFOLLOW (the final component is a real file) but resolves outside the
+      // roots; reject before writing. A freshly O_CREAT|O_EXCL-created file is a
+      // new regular file, so this only matters for the existed branch.
+      if (!created) await this.#assertFdWithinRoots(handle, filePath);
       // Ceiling: an append is not transactional, so an abort landing
       // mid-write can leave a prefix of the content on disk. Unwiring the
       // signal would trade that for a silently-completed write; a client
@@ -315,7 +382,7 @@ export class GuardedFileSystem {
    */
   async readLeadingSample(filePath: string, size: number): Promise<Buffer> {
     const { validPath } = await this.stat(filePath);
-    const handle = await fsOpen(validPath, 'r');
+    const handle = await fsOpen(validPath, READ_NOFOLLOW);
     try {
       const buffer = Buffer.alloc(size);
       const { bytesRead } = await handle.read(buffer, 0, size, 0);
@@ -393,14 +460,24 @@ export class GuardedFileSystem {
       throw createTooLargeError(stats.size, maxTextFileSize, filePath);
     }
     let content: Buffer;
+    // Open with O_NOFOLLOW and read THROUGH the handle (fsReadFile accepts a
+    // FileHandle), so a symlink swapped onto the target after validation is
+    // refused (ELOOP) rather than followed outside the sandbox; the
+    // ancestor-directory swap is caught by the fd containment re-check before
+    // any bytes are read. The read still goes through the module-level
+    // fsReadFile so its signal/abort-reason handling is unchanged.
+    const handle = await fsOpen(validPath, READ_NOFOLLOW);
     try {
-      content = await fsReadFile(validPath, options);
+      await this.#assertFdWithinRoots(handle, filePath);
+      content = await fsReadFile(handle, options);
     } catch (error) {
       // Node wraps even a TimeoutError signal reason in AbortError.
       if (error instanceof Error && error.name === 'AbortError') {
         options?.signal?.throwIfAborted();
       }
       throw error;
+    } finally {
+      await handle.close();
     }
     const mimeInfo = detectMimeFromContent(validPath, content);
     return {
@@ -412,7 +489,16 @@ export class GuardedFileSystem {
 
   async open(filePath: string): Promise<FileHandle> {
     const validPath = await this.pathGuard.validateExistingPath(filePath);
-    return fsOpen(validPath, 'r');
+    // O_NOFOLLOW + fd containment re-check: refuse a final-component or
+    // ancestor-directory symlink swapped onto the target after validation.
+    const handle = await fsOpen(validPath, READ_NOFOLLOW);
+    try {
+      await this.#assertFdWithinRoots(handle, filePath);
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+    return handle;
   }
 
   // Single resolution + stat: validateExistingPathDetailed resolves the real

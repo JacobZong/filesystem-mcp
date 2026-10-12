@@ -6,10 +6,11 @@
 //   H5 a read whose encoded result would blow the stdio buffer errors cleanly
 //   H6 a single over-long line is reported skipped, not a false empty / OOM
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import { searchContent } from '../src/core/search.ts';
 import { RE2_MAX_INPUT_BYTES } from '../src/core/search.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
@@ -285,6 +286,91 @@ describe('High-severity bug-hunt regressions', () => {
         await http.close();
         await cleanupTestRoot(httpTmp);
       }
+    });
+  });
+
+  describe('H4: a symlink swapped onto a validated path cannot escape the sandbox', () => {
+    let base: string;
+    let root: string;
+    let secret: string;
+    let ctx: FilesystemServerContext;
+    let fs: GuardedFileSystem;
+
+    before(async () => {
+      base = await createTestRoot();
+      root = join(base, 'root');
+      await mkdir(root, { recursive: true });
+      secret = join(base, 'OUTSIDE_SECRET.txt'); // a sibling of the root, never allowed
+      await writeFile(secret, 'TOP_SECRET\n');
+      ctx = await createTestServer([root]);
+      fs = new GuardedFileSystem(ctx.pathGuard);
+    });
+    after(async () => {
+      ctx.disposeRuntimeState();
+      await ctx.mcp.close();
+      await cleanupTestRoot(base);
+    });
+
+    it('a concurrent file↔symlink flip never leaks out-of-root content or writes outside', async (t) => {
+      if (process.platform === 'win32') return t.skip('POSIX symlink race');
+      const victim = join(root, 'victim.txt');
+      const reg = join(root, 'victim.reg');
+      const lnk = join(root, 'victim.lnk');
+      await writeFile(victim, 'in-root\n');
+
+      // Flip victim between a regular file and a symlink-to-secret via rename,
+      // so it is never briefly absent — the exact TOCTOU window.
+      let stop = false;
+      const flipper = (async () => {
+        while (!stop) {
+          try {
+            await rm(lnk, { force: true });
+            await symlink(secret, lnk);
+            await rename(lnk, victim);
+            await writeFile(reg, 'in-root\n');
+            await rename(reg, victim);
+          } catch {
+            /* races on the temp names are expected */
+          }
+        }
+      })();
+
+      try {
+        for (let i = 0; i < 400; i++) {
+          try {
+            const { content } = await fs.readRaw(victim);
+            assert.ok(
+              !content.includes('TOP_SECRET'),
+              'a read must never return the out-of-root secret',
+            );
+          } catch {
+            /* ELOOP / ACCESS_DENIED / NOT_FOUND are all acceptable refusals */
+          }
+          try {
+            await fs.appendFile(victim, 'x\n');
+          } catch {
+            /* refusals are fine */
+          }
+        }
+      } finally {
+        stop = true;
+        await flipper;
+      }
+
+      // The decisive assertion: no append escaped into the out-of-root secret.
+      assert.strictEqual(await readFile(secret, 'utf-8'), 'TOP_SECRET\n');
+    });
+
+    it('a legitimate in-root symlink still reads and appends to its target', async (t) => {
+      const target = join(root, 'legit-target.txt');
+      const link = join(root, 'legit-link.txt');
+      await writeFile(target, 'hello\n');
+      if (!(await trySymlink(target, link, () => t.skip('symlinks not permitted'), 'file'))) return;
+
+      const { content } = await fs.readRaw(link);
+      assert.strictEqual(content.toString('utf-8'), 'hello\n');
+      await fs.appendFile(link, 'more\n');
+      assert.strictEqual(await readFile(target, 'utf-8'), 'hello\nmore\n');
     });
   });
 });

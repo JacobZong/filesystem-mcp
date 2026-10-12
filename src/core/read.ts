@@ -1,5 +1,6 @@
 // File reading pipeline split out of fs.ts. fs.ts imports from here; never the reverse.
 import { isUtf8 } from 'node:buffer';
+import { constants } from 'node:fs';
 import type { Stats } from 'node:fs';
 import { open as fsOpen } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
@@ -13,7 +14,16 @@ import { getMaxTextFileSize } from './util.ts';
 
 const STREAM_CHUNK_SIZE = 64 * 1024;
 
-const READ_ONLY_FILE_FLAG = 'r';
+// O_NOFOLLOW refuses (ELOOP) to open a path whose final component is a symlink,
+// closing the TOCTOU where a validated regular file is swapped for a symlink
+// between validation and this open and the read returns the link's target
+// (e.g. a secret or an out-of-root file). filePath here is always the
+// realpath-resolved target, whose final component is a real file, so a
+// legitimate in-root symlink is unaffected. O_NOFOLLOW is absent on Windows
+// (@types/node types it as always-present), so it is read through a type that
+// admits undefined and falls back to 0, a no-op flag bit.
+const O_NOFOLLOW = (constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+const READ_ONLY_FILE_FLAG = constants.O_RDONLY | O_NOFOLLOW;
 
 async function openReadableFileHandle(filePath: string, signal?: AbortSignal): Promise<FileHandle> {
   const handlePromise = fsOpen(filePath, READ_ONLY_FILE_FLAG);

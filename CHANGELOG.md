@@ -42,6 +42,14 @@ pathological inputs.
   reported as skipped** rather than aborting the regex engine and returning a
   misleading "no files were searched" with a wrong reason. A later search in
   the same process keeps working.
+- **A symlink swapped onto a path between validation and the file operation can
+  no longer escape the sandbox on reads or appends.** The read and append open
+  seams now open the resolved target with `O_NOFOLLOW`, so a regular file
+  swapped for a symlink is refused rather than followed outside the allowed
+  folders, and the opened descriptor's real path is re-checked against the
+  allowed folders (on Linux) to catch a swapped parent directory, before any
+  byte is read or written. Legitimate symlinks that resolve inside an allowed
+  folder are unaffected.
 
 ## [2.7.5] - 2026-10-09
 
