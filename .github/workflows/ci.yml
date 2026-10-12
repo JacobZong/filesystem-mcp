@@ -53,8 +53,14 @@ jobs:
         run: npx knip
       - name: Test
         # dist-smoke boots dist/index.js, so tests need a successful build.
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.os != 'ubuntu-latest' }}
         run: npm test
+      - name: Test with coverage floor
+        # Ubuntu runs the POSIX-only sandbox branches; the floor lives in
+        # package.json test:coverage. Raise it when coverage rises; never lower it
+        # without a recorded reason.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.os == 'ubuntu-latest' }}
+        run: npm run test:coverage
 
   release-paths:
     name: Release build paths

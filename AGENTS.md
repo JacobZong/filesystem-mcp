@@ -10,6 +10,7 @@ npm run check        # full repository check (static + tests)
 npm run fix          # format and lint-fix, then run the full check
 npm run check:static # static checks only, no tests
 npm test             # Node test runner; pass native flags after --
+npm run test:coverage # tests + src coverage floor (CI enforces it on ubuntu)
 ```
 
 Tests run on Node's built-in test runner; `npm test --

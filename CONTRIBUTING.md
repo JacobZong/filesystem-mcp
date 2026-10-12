@@ -59,12 +59,13 @@ starting the server.
 
 ## Checks
 
-| Command                | What it runs                                                      |
-| :--------------------- | :---------------------------------------------------------------- |
-| `npm run check`        | Everything CI runs: build, type checks, lint, format, knip, tests |
-| `npm run fix`          | Formats and lint-fixes, then runs the full check                  |
-| `npm run check:static` | Static checks only, no tests                                      |
-| `npm test`             | Tests only, on Node's built-in test runner                        |
+| Command                 | What it runs                                                      |
+| :---------------------- | :---------------------------------------------------------------- |
+| `npm run check`         | Everything CI runs: build, type checks, lint, format, knip, tests |
+| `npm run fix`           | Formats and lint-fixes, then runs the full check                  |
+| `npm run check:static`  | Static checks only, no tests                                      |
+| `npm test`              | Tests only, on Node's built-in test runner                        |
+| `npm run test:coverage` | Tests plus the src coverage floor CI enforces on Ubuntu           |
 
 Pass test runner flags after `--`, for example
 `npm test -- --test-name-pattern="resources"`.
