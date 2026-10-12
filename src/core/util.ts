@@ -142,10 +142,14 @@ export const READ_MANY_MAX_TOTAL_BYTES = 512 * KIB;
  * The SDK's fixed 10 MiB ReadBuffer applies regardless of `--max-file-size`;
  * escaping, duplicated metadata, and base64 can overflow it even when the
  * source fits. These reads return TOO_LARGE instead; HTTP is unaffected.
- * ~256 KiB covers the JSON-RPC envelope this measure omits. Mutating tools
+ * ~256 KiB covers the JSON-RPC envelope this measure omits, including the
+ * bounded request ID. Mutating tools
  * need pre-commit safeguards rather than a post-commit output refusal.
  */
 export const MAX_OUTBOUND_RESULT_BYTES = 10 * MIB - 256 * KIB;
+
+/** JSON-encoded stdio request IDs, including quotes/escapes, must fit the envelope reserve. */
+export const MAX_STDIO_REQUEST_ID_BYTES = KIB;
 
 /** Default line chunk size for read continuation when no explicit range was given. */
 export const DEFAULT_CONTINUATION_CHUNK_SIZE = 200;

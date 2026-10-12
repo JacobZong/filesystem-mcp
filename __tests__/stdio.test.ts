@@ -11,7 +11,7 @@ import { setTimeout } from 'node:timers/promises';
 
 import { isNodeError } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { MIB } from '../src/core/util.ts';
+import { MAX_STDIO_REQUEST_ID_BYTES, MIB } from '../src/core/util.ts';
 import { MUTATING_TOOL_NAMES } from '../src/tools/index.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
@@ -243,6 +243,117 @@ describe('Stdio CLI flags (real subprocess)', () => {
     } finally {
       await harness.close();
       await cleanupTestRoot(outside);
+    }
+  });
+});
+
+describe('Stdio request ID envelope bounds', () => {
+  it('rejects oversized IDs without echoing them or dispatching work, and stays usable', async () => {
+    const root = await createTestRoot();
+    const harness = await createRawStdioServer(root, { FS_ROOT_BOUNDARY: root });
+    try {
+      const target = join(root, 'must-not-exist.txt');
+      for (const request of [
+        {
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-11-25',
+            capabilities: {},
+            clientInfo: { name: 'test', version: '1' },
+          },
+        },
+        {
+          method: 'tools/call',
+          params: {
+            name: 'create',
+            arguments: { files: [{ path: target, content: 'not authorized' }] },
+          },
+        },
+        { method: 'resources/read', params: { uri: buildFileResourceUri(target) } },
+        {
+          method: 'subscriptions/listen',
+          params: { notifications: { resourceSubscriptions: [buildFileResourceUri(target)] } },
+        },
+      ]) {
+        for (const id of [
+          'x'.repeat(MAX_STDIO_REQUEST_ID_BYTES - 1),
+          '"'.repeat(MAX_STDIO_REQUEST_ID_BYTES / 2),
+          'é'.repeat(MAX_STDIO_REQUEST_ID_BYTES / 2),
+          'x'.repeat(11 * MIB),
+        ]) {
+          await harness.send({
+            jsonrpc: '2.0',
+            id,
+            ...request,
+            params: { ...request.params, _meta: MODERN_META },
+          });
+          const response = await within(harness.nextMessage(), 5000);
+          assert.ok('error' in response);
+          assert.equal(response.id, undefined);
+          assert.equal(response.error.code, ProtocolErrorCode.InvalidRequest);
+          assert.match(response.error.message, /request ID.*1024.*shorter ID/);
+          assert.ok(Buffer.byteLength(JSON.stringify(response)) < 1024);
+        }
+      }
+      await assert.rejects(stat(target), { code: 'ENOENT' });
+      await discoverModern(harness);
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('echoes numeric and boundary-sized encoded IDs with near-limit tool and resource results', async () => {
+    const root = await createTestRoot();
+    const harness = await createRawStdioServer(root, { FS_ROOT_BOUNDARY: root });
+    try {
+      const file = await writeTestFile(root, 'near-limit.txt', 'x'.repeat(9.5 * MIB));
+      await discoverModern(harness);
+      for (const id of [
+        0,
+        'x'.repeat(MAX_STDIO_REQUEST_ID_BYTES - 2),
+        '"'.repeat((MAX_STDIO_REQUEST_ID_BYTES - 2) / 2),
+        'é'.repeat((MAX_STDIO_REQUEST_ID_BYTES - 2) / 2),
+      ]) {
+        for (const request of [
+          { method: 'tools/call', params: { name: 'read', arguments: { path: file } } },
+          { method: 'resources/read', params: { uri: buildFileResourceUri(file) } },
+        ]) {
+          await harness.send({
+            jsonrpc: '2.0',
+            id,
+            ...request,
+            params: { ...request.params, _meta: MODERN_META },
+          });
+          const response = await within(harness.nextMessage(), 5000);
+          assert.ok('result' in response);
+          assert.equal(response.id, id);
+          const bytes = Buffer.byteLength(JSON.stringify(response));
+          assert.ok(bytes > 9.5 * MIB && bytes < 10 * MIB, `wire response: ${String(bytes)} bytes`);
+        }
+      }
+      await writeFile(file, '"'.repeat(6 * MIB));
+      const id = 'x'.repeat(MAX_STDIO_REQUEST_ID_BYTES - 2);
+      for (const request of [
+        { method: 'tools/call', params: { name: 'read', arguments: { path: file } } },
+        { method: 'resources/read', params: { uri: buildFileResourceUri(file) } },
+      ]) {
+        await harness.send({
+          jsonrpc: '2.0',
+          id,
+          ...request,
+          params: { ...request.params, _meta: MODERN_META },
+        });
+        const response = await within(harness.nextMessage(), 5000);
+        assert.ok('id' in response);
+        assert.equal(response.id, id);
+        assert.match(JSON.stringify(response), /TOO_LARGE/);
+        assert.ok(Buffer.byteLength(JSON.stringify(response)) < 4096);
+      }
+      await discoverModern(harness);
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(root);
     }
   });
 });
