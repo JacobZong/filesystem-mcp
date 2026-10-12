@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { globEntries, type GlobEntriesOptions, isSafeGlobSyntax } from '../src/core/glob.ts';
+import { IS_WINDOWS } from '../src/core/path-utils.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -159,8 +160,26 @@ describe('globEntries', () => {
     });
 
     it('refuses a pattern with more brace alternatives than it will expand', () => {
-      assert.strictEqual(isSafeGlobSyntax('{a,b}'.repeat(11)), false);
-      assert.strictEqual(isSafeGlobSyntax('{a,b}'.repeat(200)), false);
+      assert.strictEqual(isSafeGlobSyntax('{1..1024}.txt'), true);
+      for (const bad of [
+        '{1..1025}.txt',
+        '{a,b}'.repeat(11),
+        '{a,b}'.repeat(200),
+        // Bounds a step cannot move (2^53 + 1 === 2^53) or that read as Infinity.
+        '{9007199254740992..9007199254740994}',
+        `{${'9'.repeat(309)}..${'9'.repeat(309)}}`,
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(bad), false, bad.slice(0, 40));
+      }
+    });
+
+    it('reads a first segment ending in : as a drive only on Windows', () => {
+      // fs.glob takes `X:` for a drive only on Windows, where no name holds a
+      // `:`; elsewhere `logs:` is an ordinary directory. `C:/x` parses as a
+      // drive root on every host.
+      assert.strictEqual(isSafeGlobSyntax('logs:/*.txt'), !IS_WINDOWS);
+      assert.strictEqual(isSafeGlobSyntax('[C]:/x'), !IS_WINDOWS);
+      assert.strictEqual(isSafeGlobSyntax('C:/x'), false);
     });
   });
 

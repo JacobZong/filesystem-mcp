@@ -8,7 +8,7 @@ import { processInParallel } from './concurrency.ts';
 import { formatUnknownErrorMessage } from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
-import { isPathInsideDirectory, toPosixPath } from './path-utils.ts';
+import { IS_WINDOWS, isPathInsideDirectory, toPosixPath } from './path-utils.ts';
 import { MIB } from './util.ts';
 
 /**
@@ -16,7 +16,7 @@ import { MIB } from './util.ts';
  * dedupes its alternatives pairwise, synchronously: `{1..100000}` pins the
  * event loop for most of a minute, where 1024 costs tens of milliseconds.
  */
-const MAX_BRACE_ALTERNATIVES = 1024;
+export const MAX_BRACE_ALTERNATIVES = 1024;
 
 // The range bodies fs.glob's brace expansion recognises, as it writes them.
 const NUMERIC_RANGE_RE = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/u;
@@ -30,9 +30,10 @@ function rangeValues(body: string): string[] | undefined {
   const start = bound(from);
   const stop = bound(to);
   const stride = Math.max(Math.abs(Number.parseInt(step, 10)), 1);
-  // A bound past Number.MAX_VALUE reads as Infinity, which the engine counts
-  // up from forever (to its own cap): refuse it like any other long range.
-  if (!Number.isFinite(start) || !Number.isFinite(stop)) return undefined;
+  // Past 2^53 a step no longer moves the number (2^53 + 1 === 2^53), and past
+  // Number.MAX_VALUE it reads as Infinity: either way the loop below would
+  // never end. Refuse them like any other long range.
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(stop)) return undefined;
   if (Math.floor(Math.abs(stop - start) / stride) >= MAX_BRACE_ALTERNATIVES) return undefined;
   const values: string[] = [];
   const direction = stop < start ? -1 : 1;
@@ -111,9 +112,14 @@ function expandBraceSets(pattern: string, out: string[] = []): string[] | undefi
 const isTraversalSegment = (segment: string): boolean =>
   segment.includes('.') && matchesGlob('..', segment);
 
-/** An alternative that starts at a root: `/x`, `//host/share`, `C:/x`, `C:x`. */
+/**
+ * An alternative that starts at a root: `/x`, `//host/share`, `C:/x`, `C:x`,
+ * on any host. On Windows fs.glob also reads a literal first segment ending in
+ * `:` as a drive (`[C]:/x`); elsewhere that is an ordinary name (`logs:`).
+ */
 const isRooted = (alternative: string): boolean =>
-  win32.parse(alternative).root !== '' || (alternative.split('/')[0] ?? '').endsWith(':');
+  win32.parse(alternative).root !== '' ||
+  (IS_WINDOWS && (alternative.split('/')[0] ?? '').endsWith(':'));
 
 export function isSafeGlobSyntax(pattern: string): boolean {
   if (!pattern || pattern.trim().length === 0) {
