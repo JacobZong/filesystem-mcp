@@ -2427,6 +2427,23 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
   });
 
+  it('replace_text failure rows name same-named files by their full relative paths', async () => {
+    const limit = 1024 * 1024;
+    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+      const dir = join(tmpDir, 'size_cap_rows');
+      await writeTestFile(dir, 'a/big.txt', 'FIND\n' + 'x'.repeat(limit));
+      await writeTestFile(dir, 'b/big.txt', 'FIND\n' + 'x'.repeat(limit));
+      const swept = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: dir, searchPattern: 'FIND', replacement: 'FOUND' },
+      });
+      assert.strictEqual(swept.isError, true);
+      const text = firstTextBlock(swept).text ?? '';
+      assert.match(text, /a\/big\.txt: TOO_LARGE File exceeds size limit/);
+      assert.match(text, /b\/big\.txt: TOO_LARGE File exceeds size limit/);
+    });
+  });
+
   // Decoding these as UTF-8 and writing the result back swaps every invalid
   // byte for U+FFFD, corrupting the file even though the match itself is ASCII.
   it('replace_text leaves binary and non-UTF-8 files untouched', async () => {
