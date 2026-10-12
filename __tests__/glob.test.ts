@@ -154,9 +154,25 @@ describe('globEntries', () => {
         '[[]x',
         'a{b',
         '{a,b}'.repeat(10),
+        // Extglobs and classes compile to patterns, which the walk never
+        // follows to `..`; main accepted these and they cannot leave cwd.
+        '.!(git)',
+        '**/.!(git|svn|hg)',
+        '**/?(.)*',
+        '@(.|)*',
+        '*.[[:alpha:]],',
       ]) {
         assert.strictEqual(isSafeGlobSyntax(ok), true, ok);
       }
+    });
+
+    it('checks a pattern of 1024 long dotted segments without a compile each', () => {
+      // Each alternative's segment holds `*`, so it can never be a literal
+      // `..` and must not cost a minimatch compile (1.5-9 s for all of them).
+      const pattern = `{0..1023}.${'*.'.repeat(495)}`;
+      const started = performance.now();
+      assert.strictEqual(isSafeGlobSyntax(pattern), true);
+      assert.ok(performance.now() - started < 1000, 'validation must not pin the event loop');
     });
 
     it('refuses a pattern with more brace alternatives than it will expand', () => {

@@ -103,14 +103,26 @@ function expandBraceSets(pattern: string, out: string[] = []): string[] | undefi
   return out;
 }
 
+/** The characters minimatch can spell a literal `..` with: dots and one-character classes. */
+const DOTDOT_SPELLING_RE = /^[.[\]-]+$/u;
+
 /**
- * Whether the glob engine reads this brace-free segment as `..`. Asks the
- * engine itself, so a single-character class (`[.]`, `[.-.]`) is caught as it
- * would be walked. A segment with no `.` cannot: readdir never yields `..`, so
- * only a literal reaches it.
+ * Whether the glob engine reads this brace-free segment as `..`. readdir never
+ * yields `..`, so only a literal reaches it, and minimatch spells a literal dot
+ * as `.`, `[.]` or `[.-.]`. Any other character (`*`, `?`, an extglob, a
+ * letter) either makes the segment a pattern the walk never follows to `..`,
+ * or puts that character in the name. Only the rest is worth asking the engine
+ * about, so a long or exotic segment costs no compile; one the engine cannot
+ * compile is refused.
  */
-const isTraversalSegment = (segment: string): boolean =>
-  segment.includes('.') && matchesGlob('..', segment);
+const isTraversalSegment = (segment: string): boolean => {
+  if (!segment.includes('.') || !DOTDOT_SPELLING_RE.test(segment)) return false;
+  try {
+    return matchesGlob('..', segment);
+  } catch {
+    return true;
+  }
+};
 
 /**
  * An alternative that starts at a root: `/x`, `//host/share`, `C:/x`, `C:x`,
