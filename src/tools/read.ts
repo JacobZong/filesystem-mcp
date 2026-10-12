@@ -22,6 +22,7 @@ import {
   DEFAULT_CONTINUATION_CHUNK_SIZE,
   DEFAULT_SEARCH_TIMEOUT_MS,
   getMaxTextFileSize,
+  MAX_OUTBOUND_RESULT_BYTES,
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
 } from '../core/util.ts';
@@ -430,6 +431,26 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       const { content: _content, mediaData: _mediaData, ...value } = result.value;
       return { ...result, value };
     });
+
+    // Only stdio has the SDK's fixed 10 MiB ReadBuffer; a result that overflows
+    // it drops the connection. Measure the encoded payload (text, media blocks,
+    // structured half) so escaping and base64 are counted exactly.
+    if (ctx.transport === 'stdio') {
+      const encodedBytes =
+        Buffer.byteLength(JSON.stringify([{ type: 'text', text }, ...resources]), 'utf8') +
+        Buffer.byteLength(JSON.stringify({ results: structuredResults, summary }), 'utf8');
+      if (encodedBytes > MAX_OUTBOUND_RESULT_BYTES) {
+        // Media cannot be sliced, so head/tail is no remedy for it.
+        const isMedia = resources.some((b) => b.type === 'image' || b.type === 'audio');
+        const remedy = isMedia
+          ? 'This media file is too large to return over the stdio transport; connect over HTTP, or raise it as a smaller file.'
+          : 'Read a slice with head, tail, or startLine/endLine.';
+        throw new FsError(
+          ErrorCode.TOO_LARGE,
+          `Read result too large to return (${String(encodedBytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit). ${remedy}`,
+        );
+      }
+    }
 
     return {
       structured: { results: structuredResults, summary },

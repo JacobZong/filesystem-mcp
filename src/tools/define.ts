@@ -89,6 +89,8 @@ export interface ToolCtx {
   readonly clientCapabilities?: ClientCapabilities | undefined;
   /** The SDK request context this call runs under; `pendingRoundTrip` binds minted state to it. */
   readonly serverCtx: ServerContext;
+  /** `stdio` alone has a 10 MiB frame limit; unset on HTTP and the in-memory test pair. */
+  readonly transport?: 'stdio' | 'http' | undefined;
 }
 
 interface ToolDeps {
@@ -97,6 +99,7 @@ interface ToolDeps {
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore;
   readonly era?: 'legacy' | 'modern';
+  readonly transport?: 'stdio' | 'http';
 }
 
 interface RunResult<T> {
@@ -143,7 +146,10 @@ export interface DefinedTool {
 
 function toToolCtx(
   ctx: ServerContext,
-  deps: Pick<ToolDeps, 'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era'>,
+  deps: Pick<
+    ToolDeps,
+    'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era' | 'transport'
+  >,
 ): Omit<ToolCtx, 'log' | 'onProgress'> {
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
@@ -186,6 +192,7 @@ function toToolCtx(
     requestState: ctx.mcpReq.requestState,
     serverCtx: ctx,
     ...(clientCapabilities ? { clientCapabilities } : {}),
+    ...(deps.transport ? { transport: deps.transport } : {}),
   };
 }
 

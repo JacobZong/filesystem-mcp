@@ -157,6 +157,7 @@ interface EditMatches {
   count: number;
   /** UTF-16 start offsets of the first {@link MAX_REPORTED_MATCH_LINES} matches. */
   starts: number[];
+  truncated: boolean;
 }
 
 /**
@@ -184,11 +185,16 @@ function newlineRunPattern(token: string, edge: { leading: boolean; trailing: bo
  * kept: a short oldText in a large file can match millions of times.
  */
 function findEditMatches(content: string, oldText: string, ignoreWhitespace: boolean): EditMatches {
-  const found: EditMatches = { first: undefined, count: 0, starts: [] };
-  const add = (startIndex: number, length: number): void => {
+  const found: EditMatches = { first: undefined, count: 0, starts: [], truncated: false };
+  // Returns true once the match is known ambiguous: applyEdits only needs
+  // 0 / 1 / >1 and a few starts, and counting every occurrence of a short
+  // oldText in a big file is wasted work (seconds under re2-wasm).
+  const add = (startIndex: number, length: number): boolean => {
     found.first ??= { startIndex, length };
     found.count += 1;
     if (found.starts.length < MAX_REPORTED_MATCH_LINES) found.starts.push(startIndex);
+    found.truncated = found.count > MAX_REPORTED_MATCH_LINES;
+    return found.truncated;
   };
 
   if (ignoreWhitespace) {
@@ -225,7 +231,7 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
       const scan = (from: number): void => {
         for (const match of execMatches(regex, from === 0 ? content : content.slice(from))) {
           // A zero-length match names an empty span, which cannot be replaced.
-          if (match.text.length > 0) add(from + match.start, match.text.length);
+          if (match.text.length > 0 && add(from + match.start, match.text.length)) return;
           if (from > 0) return;
         }
       };
@@ -255,7 +261,7 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     i !== -1;
     i = content.indexOf(oldText, i + oldText.length)
   ) {
-    add(i, oldText.length);
+    if (add(i, oldText.length)) break;
   }
   if (found.count === 1 && found.first) {
     const overlap = content.indexOf(oldText, afterCodePoint(content, found.first.startIndex));
@@ -283,9 +289,10 @@ function ambiguousEditError(
   // Offsets come from the content as earlier edits in this call left it, which
   // is not the file the caller read once one of them has applied.
   const where = shifted ? ' after earlier edits' : '';
+  const count = found.truncated ? `at least ${String(found.count)}` : String(found.count);
   return new FsError(
     ErrorCode.INVALID_INPUT,
-    `edits[${String(editIndex)}]: oldText matches ${String(found.count)} places${where} ` +
+    `edits[${String(editIndex)}]: oldText matches ${count} places${where} ` +
       `(${label} ${lines.join(', ')}${more}). Add surrounding lines so it matches once.`,
   );
 }
@@ -369,6 +376,17 @@ interface EditFileOptions {
 }
 
 async function handleEditFile(
+  filePath: string,
+  edits: z.infer<typeof EditSpecSchema>[],
+  options: EditFileOptions,
+  ctx: ToolCtx,
+): Promise<{ file: EditFileValue; resourceLink?: ContentBlock }> {
+  // A dry run never writes, so it needs no lock.
+  if (options.dryRun) return editOnce(filePath, edits, options, ctx);
+  return ctx.fs.lockForWrite(filePath, () => editOnce(filePath, edits, options, ctx));
+}
+
+async function editOnce(
   filePath: string,
   edits: z.infer<typeof EditSpecSchema>[],
   options: EditFileOptions,

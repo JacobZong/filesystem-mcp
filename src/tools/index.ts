@@ -56,6 +56,7 @@ interface ToolRegistrarDeps {
   readonly resourceStore: ResourceStore;
   readonly readOnly?: boolean;
   readonly era?: 'legacy' | 'modern';
+  readonly transport?: 'stdio' | 'http';
 }
 
 export function registerTools(deps: ToolRegistrarDeps): void {
@@ -65,6 +66,7 @@ export function registerTools(deps: ToolRegistrarDeps): void {
     pageStore: deps.pageStore,
     resourceStore: deps.resourceStore,
     ...(deps.era ? { era: deps.era } : {}),
+    ...(deps.transport ? { transport: deps.transport } : {}),
   };
   for (const tool of registeredTools(deps.readOnly ?? false)) {
     tool.register(toolDeps);

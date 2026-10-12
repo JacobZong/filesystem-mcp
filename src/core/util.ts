@@ -137,6 +137,15 @@ export function getMaxInboundMessageBytes(): number {
 /** Combined byte budget for one batched `read`. */
 export const READ_MANY_MAX_TOTAL_BYTES = 512 * KIB;
 
+/**
+ * Ceiling on the JSON-encoded size of one `read` result. The MCP SDK's stdio
+ * transport caps a message at a fixed 10 MiB ReadBuffer regardless of
+ * `--max-file-size`, so a file under the size limit can still overflow it once
+ * escaped; `read` returns TOO_LARGE instead. ~256 KiB covers the JSON-RPC
+ * envelope this measure omits.
+ */
+export const MAX_OUTBOUND_RESULT_BYTES = 10 * MIB - 256 * KIB;
+
 /** Default line chunk size for read continuation when no explicit range was given. */
 export const DEFAULT_CONTINUATION_CHUNK_SIZE = 200;
 

@@ -3,6 +3,28 @@ import { PARALLEL_CONCURRENCY } from './util.ts';
 
 export type StoppedReason = 'maxResults' | 'maxFiles' | 'timeout';
 
+const exclusiveChains = new Map<unknown, Promise<unknown>>();
+
+/**
+ * Run `fn` as the next holder of `key`'s lock: a read-`await`-write under one
+ * key never interleaves with another. A rejected `fn` does not poison the next
+ * waiter, and the entry is dropped once the chain drains. Keys: a PathGuard
+ * instance (allowed-set grants) or a resolved write target (per-file writes).
+ */
+export async function runExclusive<T>(key: unknown, fn: () => Promise<T>): Promise<T> {
+  const run = (exclusiveChains.get(key) ?? Promise.resolve()).then(fn, fn);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  exclusiveChains.set(key, tail);
+  try {
+    return await run;
+  } finally {
+    if (exclusiveChains.get(key) === tail) exclusiveChains.delete(key);
+  }
+}
+
 /** The one precedence both scans share: the result cap wins over an abort that fired the same iteration. */
 export function resolveStopReason(
   hitCap: boolean,

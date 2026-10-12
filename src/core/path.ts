@@ -3,7 +3,7 @@ import { lstat, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
-import { withAbort } from './concurrency.ts';
+import { runExclusive, withAbort } from './concurrency.ts';
 import { cli } from './config.ts';
 import {
   classifyCauseChain,
@@ -155,15 +155,13 @@ export async function resolveAllowedDirectoriesState(
 // ---------------------------------------------------------------------------
 
 /**
- * Accepted risk: validation methods resolve/verify a path (symlinks, boundaries,
- * sensitivity) and then return a plain string; the actual fs operation happens
- * afterward as a separate syscall (classic TOCTOU). A symlink swapped in that
- * exact window could redirect the follow-up operation. This is mitigated by
- * re-validating the resolved real path (not just the requested path) and by
- * walking ancestors to catch escapes before the target exists, but it is not
- * eliminated — doing so would require fd-based operations (open with
- * O_NOFOLLOW / operate on the resolved fd) throughout core/fs.ts. Acceptable
- * tradeoff for a local, single-user filesystem server today.
+ * TOCTOU note: validation returns a plain string and the fs operation is a
+ * later syscall, so a symlink swapped in between could redirect it. Reads and
+ * appends in core/fs.ts and core/read.ts open with O_NOFOLLOW (final component)
+ * and re-check the fd's real path on Linux (ancestor swap). Residual: write
+ * paths that resolve a parent by name (`rename`, `mkdir`, `rm`, `cp`) would
+ * need openat()-relative-to-dirfd, which Node lacks; non-Linux skips the fd
+ * re-check.
  */
 export class PathGuard {
   private allowedDirectoriesState: string[] | undefined;
@@ -187,11 +185,6 @@ export class PathGuard {
   private grantedDirectories: string[] = [];
   private rootBoundaries: string[] = [];
 
-  // ponytail: one mutex per PathGuard. If per-session grant throughput ever
-  // matters, split into per-grant-dir locks; a single lock is correct for the
-  // stdio + InMemoryEventStore single-process model.
-  #mutex = Promise.resolve();
-
   private readonly options: ServerOptions | undefined;
 
   constructor(options?: ServerOptions) {
@@ -209,20 +202,6 @@ export class PathGuard {
 
   isInitialized(): boolean {
     return this.allowedDirectoriesState !== undefined;
-  }
-
-  /**
-   * Run `fn` as the next holder of the guard's single mutation lock. Every
-   * change to the allowed set goes through this so concurrent grants cannot
-   * interleave their read-`await`-write and lose a grant (GRANT-1).
-   */
-  private async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const result = this.#mutex.then(fn, fn);
-    this.#mutex = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
   }
 
   getAllowedDirectories(): string[] {
@@ -407,7 +386,7 @@ export class PathGuard {
     // Read + write under the mutation lock so a concurrent grant cannot
     // interleave and lose this grant (GRANT-1). runExclusive is not reentrant:
     // nothing in this body may take the lock again.
-    return this.runExclusive(async () => {
+    return runExclusive(this, async () => {
       const previous = this.grantedDirectories;
       this.grantedDirectories = [...previous, normalizePath(targetDir)];
       try {

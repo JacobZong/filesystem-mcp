@@ -25,7 +25,13 @@ import {
   SafeGlobPattern,
 } from '../core/schema.ts';
 import type { Regex } from '../core/search.ts';
-import { compileRegex, execMatches, freeRegex, RE2_MAX_INPUT_BYTES } from '../core/search.ts';
+import {
+  compileRegex,
+  createYielder,
+  execMatches,
+  freeRegex,
+  RE2_MAX_INPUT_BYTES,
+} from '../core/search.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
   DEFAULT_SEARCH_TIMEOUT_MS,
@@ -126,7 +132,12 @@ function recordChangedFile(summary: ReplaceSummary, plan: ReplacementPlan, fileP
 }
 
 interface ReplacementMatcher {
-  replace(content: string, replacement: string): { content: string; matchCount: number };
+  /** Yields periodically and throws on abort: a partial splice must never be written. */
+  replace(
+    content: string,
+    replacement: string,
+    signal: AbortSignal | undefined,
+  ): Promise<{ content: string; matchCount: number }>;
   testBuffer(buffer: Buffer): boolean;
   /** Releases any compiled pattern this matcher owns. Idempotent. */
   dispose(): void;
@@ -190,7 +201,7 @@ function createRegexReplacementMatcher(
       regex.lastIndex = 0;
       return regex.test(buffer.toString('utf-8'));
     },
-    replace(content: string, replacement: string): { content: string; matchCount: number } {
+    async replace(content, replacement, signal) {
       // Splicing by hand rather than through `String.replace(regex, …)`: RE2's
       // own replacer indexes the JS string with the code-point offsets it
       // reports, which lands the replacement short by one per astral character
@@ -198,6 +209,7 @@ function createRegexReplacementMatcher(
       let matchCount = 0;
       let updated = '';
       let cursor = 0;
+      const tick = createYielder(signal);
       for (const match of execMatches(regex, content)) {
         matchCount++;
         // Only isRegex=true opts into $1/$& substitution. A literal search
@@ -216,6 +228,7 @@ function createRegexReplacementMatcher(
               )
             : replacement);
         cursor = match.end;
+        if (await tick()) signal?.throwIfAborted();
       }
       return { content: updated + content.slice(cursor), matchCount };
     },
@@ -232,13 +245,14 @@ function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMa
     testBuffer(buffer: Buffer): boolean {
       return buffer.indexOf(searchBuffer) !== -1;
     },
-    replace(content: string, replacement: string): { content: string; matchCount: number } {
+    // One native O(n) pass; nothing to yield for.
+    replace(content, replacement) {
       let matchCount = 0;
       const updated = content.replaceAll(searchPattern, () => {
         matchCount++;
         return replacement;
       });
-      return { content: updated, matchCount };
+      return Promise.resolve({ content: updated, matchCount });
     },
     dispose(): void {
       // no compiled pattern to release
@@ -269,15 +283,17 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
   const { options, signal, summary } = ctx;
 
   try {
-    const plan = await readReplacementPlan(entryPath, ctx);
+    // Lock the read→write per file so a concurrent writer is not lost; a dry
+    // run never writes and skips the lock.
+    const plan = options.dryRun
+      ? await readReplacementPlan(entryPath, ctx)
+      : await ctx.fs.lockForWrite(entryPath, async () => {
+          const planned = await readReplacementPlan(entryPath, ctx);
+          if (planned) await ctx.fs.writeFile(entryPath, planned.updatedContent, { signal });
+          return planned;
+        });
     if (!plan) {
       return;
-    }
-
-    if (!options.dryRun) {
-      await ctx.fs.writeFile(entryPath, plan.updatedContent, {
-        signal,
-      });
     }
 
     // Bookkeep only after the write succeeds (or in dryRun, where there is no
@@ -294,6 +310,10 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
       includeDiff: options.dryRun || options.returnDiff,
     });
   } catch (error) {
+    // A timeout/cancel aborts the whole scan, not just this file: don't record
+    // it as a per-file failure. processEntriesConcurrently reports the run as
+    // stoppedReason 'timeout' instead.
+    if (signal?.aborted) return;
     summary.failedFiles++;
     recordFailure(summary.failures, {
       path: toPosixRelative(summary.root, entryPath),
@@ -330,7 +350,11 @@ async function readReplacementPlan(
   }
 
   const originalContent = buffer.toString('utf-8');
-  const { content: updatedContent, matchCount } = matcher.replace(originalContent, replacement);
+  const { content: updatedContent, matchCount } = await matcher.replace(
+    originalContent,
+    replacement,
+    signal,
+  );
   return matchCount === 0 ? undefined : { matchCount, originalContent, updatedContent };
 }
 
@@ -540,6 +564,12 @@ async function handleSearchAndReplace(
     matcher.dispose();
   }
   if (stoppedReason !== undefined) summary.stoppedReason = stoppedReason;
+  // A single file that aborts mid-scan throws inside processEntry (caught and
+  // swallowed as a timeout) and leaves the dispatch loop with no more entries,
+  // so processEntriesConcurrently returns undefined; surface the timeout here so
+  // the result is not reported as a clean "0 matches". search_text's engine
+  // checks the signal directly, so only replace needs this fallback.
+  else if (ctx.signal.aborted) summary.stoppedReason = 'timeout';
 
   ctx.onProgress({ current: summary.processedFiles });
 

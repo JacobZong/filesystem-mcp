@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+A reliability release fixing six high-severity issues found by a stress and
+fuzz sweep. No schema-legal tool call changes shape and the declared tool
+surface is unchanged; the fixes are in behaviour under load, concurrency, and
+pathological inputs.
+
+### Fixed
+
+- **A regex search or replace over a many-match or very long input no longer
+  freezes the whole server.** `search_text`, `replace_text`, and `edit` with
+  `ignoreWhitespace` scan through RE2, which copies the whole input on every
+  match, so a dense pattern ran for tens of seconds with the event loop pinned
+  and the 5-second timeout unable to fire. The scans now yield periodically so
+  the timeout fires, other requests interleave, and an aborted `replace_text`
+  never writes a partially-substituted file. `edit` stops as soon as a match is
+  known ambiguous instead of counting every occurrence.
+- **Concurrent or aliased writes no longer silently lose changes.** Two edits
+  of one file — two batch entries reaching it through a symlinked parent, or two
+  overlapping tool calls — each read the same base and the last atomic rename
+  won, dropping the other's changes while both reported success. `edit`,
+  `patch`, `replace_text`, and `create` now serialize the read-modify-write per
+  resolved file.
+- **A `move` batch whose entries overlap is refused instead of destroying
+  data.** A swap (`A→B`, `B→A`) or a chain (`B→C`, `A→B`) ran its renames
+  concurrently and lost a file; such a batch now fails closed per entry with a
+  clear message, and independent entries still run in parallel.
+- **Over stdio, a `read` whose result would exceed the client's 10 MiB message
+  buffer now returns a clear `TOO_LARGE` error** telling you to read a slice,
+  instead of a response that overflowed the buffer and dropped the whole
+  connection. This could happen for a file under the size limit once its text
+  was JSON-encoded. The cap applies to stdio only — HTTP streams responses with
+  no such frame limit and keeps returning large reads.
+- **A file containing a single line larger than the regex input bound is now
+  reported as skipped** rather than aborting the regex engine and returning a
+  misleading "no files were searched" with a wrong reason. A later search in
+  the same process keeps working.
+- **A symlink swapped onto a path between validation and the file operation can
+  no longer escape the sandbox on reads or appends.** The read and append open
+  seams now open the resolved target with `O_NOFOLLOW`, so a regular file
+  swapped for a symlink is refused rather than followed outside the allowed
+  folders, and the opened descriptor's real path is re-checked against the
+  allowed folders (on Linux) to catch a swapped parent directory, before any
+  byte is read or written. Legitimate symlinks that resolve inside an allowed
+  folder are unaffected.
+
 ## [2.7.5] - 2026-10-09
 
 A hardening and documentation release. Nothing breaks for existing callers:

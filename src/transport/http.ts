@@ -303,6 +303,7 @@ export async function startHttpServer(
         resourceStore: sharedStore,
         pageStore: sharedPageStore,
         era,
+        transport: 'http',
         ...(apiKey !== undefined ? { apiKey } : {}),
       });
       return c.mcp;
