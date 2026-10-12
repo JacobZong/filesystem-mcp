@@ -144,10 +144,14 @@ export const READ_MANY_MAX_TOTAL_BYTES = 512 * KIB;
  * A tool call that changed nothing (read-only, or a dry run) and a resource
  * read return TOO_LARGE instead, and the stdio result store refuses an entry
  * whose read would overflow it; HTTP is unaffected. ~256 KiB covers the
- * JSON-RPC envelope this measure omits. Mutating tools need pre-commit
- * safeguards rather than a post-commit output refusal.
+ * JSON-RPC envelope this measure omits, including the bounded request ID.
+ * Mutating tools need pre-commit safeguards rather than a post-commit output
+ * refusal.
  */
 export const MAX_OUTBOUND_RESULT_BYTES = 10 * MIB - 256 * KIB;
+
+/** JSON-encoded stdio request IDs, including quotes/escapes, must fit the envelope reserve. */
+export const MAX_STDIO_REQUEST_ID_BYTES = KIB;
 
 /**
  * An upper bound on `Buffer.byteLength(JSON.stringify(value))` for the plain

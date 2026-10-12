@@ -206,6 +206,12 @@ These variables are for HTTP only:
 `read` handles text files and returns images and audio as media. It refuses
 other binary files and UTF-16 text files.
 
+Stdio request IDs may occupy at most 1024 bytes when JSON-encoded, including
+quotes and escapes. Longer IDs are rejected before execution with JSON-RPC
+`InvalidRequest` (`-32600`) without an `id`; the oversized ID is not echoed.
+Use a shorter ID and retry. This bound reserves space for IDs in both successful
+and error responses under the client's 10 MiB stdio buffer limit. HTTP is unchanged.
+
 ## Running over HTTP
 
 By default the server talks to one client over stdio, which is what desktop

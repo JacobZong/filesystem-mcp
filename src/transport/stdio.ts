@@ -15,7 +15,7 @@ import { formatUnknownErrorMessage } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PathGuard } from '../core/path.ts';
-import { getMaxInboundMessageBytes } from '../core/util.ts';
+import { getMaxInboundMessageBytes, MAX_STDIO_REQUEST_ID_BYTES } from '../core/util.ts';
 import { createWatcherRegistry } from '../core/watcher-registry.ts';
 import type { FilesystemServerContext } from '../server.ts';
 import { createServer } from '../server.ts';
@@ -277,6 +277,29 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
   }
   let gated = Promise.resolve();
   wire.onmessage = (message) => {
+    if (
+      'method' in message &&
+      'id' in message &&
+      typeof message.id === 'string' &&
+      Buffer.byteLength(JSON.stringify(message.id), 'utf8') > MAX_STDIO_REQUEST_ID_BYTES
+    ) {
+      // Never echo the rejected ID: it could overflow even a compact error.
+      // Reject before dispatch so no write or subscription can take effect.
+      void wire
+        .send({
+          jsonrpc: '2.0',
+          error: {
+            code: ProtocolErrorCode.InvalidRequest,
+            message: `Stdio request ID exceeds ${String(MAX_STDIO_REQUEST_ID_BYTES)} JSON-encoded bytes. Use a shorter ID.`,
+          },
+        })
+        .catch((error: unknown) => {
+          wire.onerror?.(
+            error instanceof Error ? error : new Error(formatUnknownErrorMessage(error)),
+          );
+        });
+      return;
+    }
     const cancelId = cancelledRequestId(message);
     if (cancelId !== null) {
       const state = listens.get(cancelId);
