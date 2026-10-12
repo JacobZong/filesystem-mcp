@@ -6,6 +6,7 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { normalizePath } from '../src/core/path-utils.ts';
 import {
   bootHttpTest,
   cleanupTestRoot,
@@ -82,6 +83,14 @@ async function assertBytes(path: string, expected: string) {
   assert.deepEqual(await readFile(path), Buffer.from(expected), path);
 }
 
+async function finishConcurrent(operations: readonly Promise<void>[]): Promise<void> {
+  // A failed assertion must not start teardown while sibling requests still write.
+  const results = await Promise.allSettled(operations);
+  for (const result of results) {
+    if (result.status === 'rejected') throw result.reason;
+  }
+}
+
 async function isolated(
   transport: 'stdio' | 'http',
   run: (client: Client, root: string, outside: string) => Promise<void>,
@@ -93,7 +102,7 @@ async function isolated(
       .map((key) => [key, undefined]),
   );
   await withEnv(cleanEnv, async () => {
-    const fixture = await createTestRoot();
+    const fixture = normalizePath(await createTestRoot());
     let harness: Harness | undefined;
     try {
       const root = join(fixture, 'workspace');
@@ -352,7 +361,7 @@ async function stress(client: Client, root: string) {
   const names = Array.from({ length: count }, (_, i) => `item-${String(i).padStart(2, '0')}.txt`);
   // Four independent requests in flight, with deterministic bytes checked before the next wave.
   for (let offset = 0; offset < count; offset += 4) {
-    await Promise.all(
+    await finishConcurrent(
       names.slice(offset, offset + 4).map(async (name) => {
         const path = join(directory, name);
         const content = `marker ${name}\n`;
@@ -369,7 +378,7 @@ async function stress(client: Client, root: string) {
 
   const journal = join(root, 'journal.txt');
   const appended = ['append-0\n', 'append-1\n', 'append-2\n', 'append-3\n'];
-  await Promise.all(
+  await finishConcurrent(
     appended.map(async (content) => {
       const result = metadata<{ files: Written[] }>(
         await call(client, 'create', { files: [{ path: journal, content, append: true }] }),
@@ -447,6 +456,21 @@ async function stress(client: Client, root: string) {
 }
 
 describe('isolated sandbox integration', { concurrency: false }, () => {
+  it('waits for sibling operations before propagating a concurrent failure', async () => {
+    const failure = new Error('synthetic assertion failure');
+    const sibling = Promise.withResolvers<undefined>();
+    let finished = false;
+    const completion = finishConcurrent([Promise.reject(failure), sibling.promise]).finally(() => {
+      finished = true;
+    });
+    const rejected = assert.rejects(completion, (error) => error === failure);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(finished, false, 'cleanup must wait for the pending sibling');
+    sibling.resolve(undefined);
+    await rejected;
+    assert.equal(finished, true);
+  });
+
   for (const transport of ['stdio', 'http'] as const) {
     it(`${transport}: all tools cooperate in a guarded lifecycle`, async () => {
       await isolated(transport, lifecycle);
