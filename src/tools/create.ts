@@ -9,6 +9,8 @@ import {
   ErrorCode,
   formatUnknownErrorMessage,
   FsError,
+  isFsError,
+  isNotFoundErrno,
   type Problem,
   rethrowIfAborted,
 } from '../core/errors.ts';
@@ -165,7 +167,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     const batch = await runOverPaths<
       z.infer<typeof CreateFileItemSchema>,
       { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
-    >(args.files, ctx, ErrorCode.UNKNOWN, async ({ path, content, append }) => {
+    >(args.files, ctx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
       const pendingPath = pendingByPath.get(path);
       if (pendingPath !== undefined) {
         const key = confirmKey(pendingSorted.indexOf(pendingPath));
@@ -183,7 +185,27 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       // Serialize the write per resolved file so two entries naming one file
       // (e.g. through a symlinked parent) cannot interleave and tear each
       // other's content; O_APPEND keeps concurrent appends safe regardless (H2).
-      return ctx.fs.lockForWrite(path, async () => {
+      return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
+        if (!append && !overwrite && pendingPath === undefined) {
+          let exists = true;
+          try {
+            await ctx.fs.stat(resolvedTarget);
+          } catch (error) {
+            if (
+              isNotFoundErrno(error) ||
+              (isFsError(error) && error.code === ErrorCode.NOT_FOUND)
+            ) {
+              exists = false;
+            } else throw error;
+          }
+          if (exists) {
+            throw new FsError(
+              ErrorCode.INVALID_INPUT,
+              `create refused: "${path}" appeared after overwrite confirmation was checked`,
+              path,
+            );
+          }
+        }
         await ctx.fs.mkdir(dirname(path), { recursive: true });
 
         // Overwrite: file content == `content`, so content-derived meta is

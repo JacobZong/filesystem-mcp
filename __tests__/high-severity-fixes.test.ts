@@ -68,6 +68,29 @@ describe('High-severity bug-hunt regressions', () => {
       assert.ok(!after.includes('= 0'), 'no slot should keep its original value');
     });
 
+    it('aliased creates never overwrite a file that appeared after planning', async (t) => {
+      const file = join(tmpDir, 'concurrent-create.txt');
+      const alias = join(tmpDir, 'create-alias');
+      if (!(await trySymlink(tmpDir, alias, () => t.skip('symlinks not permitted')))) return;
+      const result = await pair.client.callTool({
+        name: 'create',
+        arguments: {
+          files: [
+            { path: file, content: 'first' },
+            { path: join(alias, 'concurrent-create.txt'), content: 'second' },
+          ],
+        },
+      });
+      const structured = result.structuredContent as {
+        files?: unknown[];
+        failures?: unknown[];
+      };
+      assert.strictEqual(structured.files?.length, 1, JSON.stringify(result));
+      assert.strictEqual(structured.failures?.length, 1);
+      const contents = await readFile(file, 'utf-8');
+      assert.ok(contents === 'first' || contents === 'second');
+    });
+
     it('a batch naming one file through a symlinked parent applies both entries', async (t) => {
       const file = join(tmpDir, 'aliased.txt');
       await writeFile(file, 'AAA\nBBB\n');
@@ -190,7 +213,7 @@ describe('High-severity bug-hunt regressions', () => {
           },
         });
         assert.strictEqual(result.isError, true, 'an ambiguous match is an error');
-        assert.match(firstTextBlock(result).text ?? '', /matches/i);
+        assert.match(firstTextBlock(result).text ?? '', /matches at least \d+ places/i);
         // Nothing should have been written.
         assert.strictEqual(await readFile(file, 'utf-8'), 'a b\n'.repeat(20_000));
       },
@@ -200,12 +223,15 @@ describe('High-severity bug-hunt regressions', () => {
   describe('H1 + H6: core search is interruptible and guards over-long lines', () => {
     let tmpDir: string;
     let ctx: FilesystemServerContext;
+    let pair: Awaited<ReturnType<typeof createTestClientPair>>;
 
     before(async () => {
       tmpDir = await createTestRoot();
       ctx = await createTestServer([tmpDir]);
+      pair = await createTestClientPair([tmpDir]);
     });
     after(async () => {
+      await pair.close();
       ctx.disposeRuntimeState();
       await ctx.mcp.close();
       await cleanupTestRoot(tmpDir);
@@ -228,12 +254,47 @@ describe('High-severity bug-hunt regressions', () => {
 
     it('H1: an aborted search over a dense-match line resolves as timeout, not a hang', async () => {
       const dir = join(tmpDir, 'dense-line');
-      await writeTestFile(dir, 'line.txt', 'a'.repeat(200_000) + '\n');
-      const signal = AbortSignal.abort(new Error('deadline'));
-      const outcome = await searchContent(dir, 'a', { isRegex: false, signal }, ctx.pathGuard);
+      await writeTestFile(dir, 'line.txt', 'needle\n'.repeat(200_000));
+      const controller = new AbortController();
+      const search = searchContent(
+        dir,
+        'needle',
+        { isRegex: false, maxResults: 100_000, signal: controller.signal },
+        ctx.pathGuard,
+      );
+      setTimeout(() => controller.abort(new DOMException('deadline', 'TimeoutError')), 50);
+      const outcome = await search;
       assert.strictEqual(outcome.summary.stoppedReason, 'timeout');
       assert.ok(outcome.summary.truncated, 'an aborted scan is incomplete');
+      assert.ok(outcome.summary.filesScanned > 0, 'the scan started before cancellation');
     });
+
+    it(
+      'H1: a live replace_text timeout never writes a partially spliced file',
+      { timeout: 5000 },
+      async (t) => {
+        const file = join(tmpDir, 'dense-replace.txt');
+        const original = 'a'.repeat(200_000) + '\n';
+        await writeFile(file, original);
+        t.mock.method(AbortSignal, 'timeout', () => {
+          const controller = new AbortController();
+          setTimeout(() => controller.abort(new DOMException('test timeout', 'TimeoutError')), 100);
+          return controller.signal;
+        });
+        const result = await pair.client.callTool({
+          name: 'replace_text',
+          arguments: {
+            path: file,
+            searchPattern: 'a',
+            replacement: 'b',
+            isRegex: true,
+            caseSensitive: true,
+          },
+        });
+        assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
+        assert.strictEqual(await readFile(file, 'utf-8'), original);
+      },
+    );
   });
 
   describe('H5: a read whose encoded result exceeds the transport buffer errors cleanly', () => {
@@ -337,14 +398,26 @@ describe('High-severity bug-hunt regressions', () => {
 
       try {
         for (let i = 0; i < 400; i++) {
+          let rawContent: string | undefined;
           try {
-            const { content } = await fs.readRaw(victim);
-            assert.ok(
-              !content.includes('TOP_SECRET'),
-              'a read must never return the out-of-root secret',
-            );
+            rawContent = (await fs.readRaw(victim)).content.toString('utf-8');
           } catch {
             /* ELOOP / ACCESS_DENIED / NOT_FOUND are all acceptable refusals */
+          }
+          if (rawContent !== undefined) {
+            assert.ok(!rawContent.includes('TOP_SECRET'), 'a read must never return the secret');
+          }
+          let textContent: string | undefined;
+          try {
+            textContent = (await fs.readFile(victim, { kind: 'full' })).content;
+          } catch {
+            /* ELOOP / ACCESS_DENIED / NOT_FOUND are all acceptable refusals */
+          }
+          if (textContent !== undefined) {
+            assert.ok(
+              !textContent.includes('TOP_SECRET'),
+              'a text read must never return the secret',
+            );
           }
           try {
             await fs.appendFile(victim, 'x\n');

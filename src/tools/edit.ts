@@ -157,6 +157,7 @@ interface EditMatches {
   count: number;
   /** UTF-16 start offsets of the first {@link MAX_REPORTED_MATCH_LINES} matches. */
   starts: number[];
+  truncated: boolean;
 }
 
 /**
@@ -184,7 +185,7 @@ function newlineRunPattern(token: string, edge: { leading: boolean; trailing: bo
  * kept: a short oldText in a large file can match millions of times.
  */
 function findEditMatches(content: string, oldText: string, ignoreWhitespace: boolean): EditMatches {
-  const found: EditMatches = { first: undefined, count: 0, starts: [] };
+  const found: EditMatches = { first: undefined, count: 0, starts: [], truncated: false };
   const add = (startIndex: number, length: number): void => {
     found.first ??= { startIndex, length };
     found.count += 1;
@@ -233,7 +234,10 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
           // of a dense pattern is O(matches x content) — seconds on a big file,
           // with no timeout on edit to interrupt it. Safe because oldText is
           // schema-non-blank, so the pattern cannot match empty and spin here.
-          if (found.count > MAX_REPORTED_MATCH_LINES) return;
+          if (found.count > MAX_REPORTED_MATCH_LINES) {
+            found.truncated = true;
+            return;
+          }
         }
       };
       scan(0);
@@ -265,7 +269,10 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     add(i, oldText.length);
     // Once ambiguous, the count and first few starts are all applyEdits needs;
     // counting every occurrence of a short oldText in a huge file is wasted work.
-    if (found.count > MAX_REPORTED_MATCH_LINES) break;
+    if (found.count > MAX_REPORTED_MATCH_LINES) {
+      found.truncated = true;
+      break;
+    }
   }
   if (found.count === 1 && found.first) {
     const overlap = content.indexOf(oldText, afterCodePoint(content, found.first.startIndex));
@@ -293,9 +300,10 @@ function ambiguousEditError(
   // Offsets come from the content as earlier edits in this call left it, which
   // is not the file the caller read once one of them has applied.
   const where = shifted ? ' after earlier edits' : '';
+  const count = found.truncated ? `at least ${String(found.count)}` : String(found.count);
   return new FsError(
     ErrorCode.INVALID_INPUT,
-    `edits[${String(editIndex)}]: oldText matches ${String(found.count)} places${where} ` +
+    `edits[${String(editIndex)}]: oldText matches ${count} places${where} ` +
       `(${label} ${lines.join(', ')}${more}). Add surrounding lines so it matches once.`,
   );
 }

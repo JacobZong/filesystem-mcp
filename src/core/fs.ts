@@ -90,7 +90,11 @@ const READ_NOFOLLOW = fsConstants.O_RDONLY | O_NOFOLLOW;
 // immediate error; it is a no-op for a regular file.
 const APPEND_NOFOLLOW = fsConstants.O_WRONLY | fsConstants.O_APPEND | O_NOFOLLOW | O_NONBLOCK;
 const APPEND_CREATE_NOFOLLOW =
-  fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW;
+  fsConstants.O_WRONLY |
+  fsConstants.O_APPEND |
+  fsConstants.O_CREAT |
+  fsConstants.O_EXCL |
+  O_NOFOLLOW;
 
 /**
  * Line count for a file on disk, counting newline bytes in fixed 64 KiB
@@ -418,7 +422,9 @@ export class GuardedFileSystem {
     spec.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     const stats = await withAbort(fsStat(validPath), spec.signal);
-    return readFileWithStats(filePath, validPath, stats, spec);
+    return readFileWithStats(filePath, validPath, stats, spec, (handle) =>
+      this.#assertFdWithinRoots(handle, filePath),
+    );
   }
 
   async readEditableText(
@@ -436,11 +442,17 @@ export class GuardedFileSystem {
         { size: stats.size, maxFileSize: maxSize },
       );
     }
-    const { content } = await readFileWithStats(filePath, validPath, stats, {
-      kind: 'full',
-      strictUtf8: true,
-      ...(options?.signal ? { signal: options.signal } : {}),
-    });
+    const { content } = await readFileWithStats(
+      filePath,
+      validPath,
+      stats,
+      {
+        kind: 'full',
+        strictUtf8: true,
+        ...(options?.signal ? { signal: options.signal } : {}),
+      },
+      (handle) => this.#assertFdWithinRoots(handle, filePath),
+    );
     return { validPath, content, stats };
   }
 
