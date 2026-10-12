@@ -1,3 +1,4 @@
+# Runs on agent PRs without manual approval: keep this workflow secret-free and contents:read.
 name: CI
 
 on:
