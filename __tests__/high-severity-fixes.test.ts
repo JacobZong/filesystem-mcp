@@ -214,6 +214,17 @@ describe('High-severity bug-hunt regressions', () => {
         });
         assert.strictEqual(result.isError, true, 'an ambiguous match is an error');
         assert.match(firstTextBlock(result).text ?? '', /matches at least \d+ places/i);
+
+        const exact = await pair.client.callTool({
+          name: 'edit',
+          arguments: {
+            path: file,
+            edits: [{ oldText: 'a b', newText: 'X' }],
+          },
+        });
+        assert.strictEqual(exact.isError, true, 'repeated exact matches are ambiguous too');
+        assert.match(firstTextBlock(exact).text ?? '', /matches at least \d+ places/i);
+
         // Nothing should have been written.
         assert.strictEqual(await readFile(file, 'utf-8'), 'a b\n'.repeat(20_000));
       },
