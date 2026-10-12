@@ -229,6 +229,28 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       );
     });
 
+    it('partial reads never combine UTF-8 bytes across line boundaries', async () => {
+      const filePath = join(tmpDir, 'split-lines.txt');
+      const prefix = 'a'.repeat(512);
+      await writeFile(
+        filePath,
+        Buffer.concat([Buffer.from(prefix), Buffer.from([0xe2, 0x0a, 0x82, 0xac, 0x0a])]),
+      );
+
+      const full = await fs.readFile(filePath, { kind: 'full' });
+      assert.strictEqual(full.content, `${prefix}\uFFFD\n\uFFFD\uFFFD\n`);
+      const head = await fs.readFile(filePath, { kind: 'head', lines: 2 });
+      assert.strictEqual(head.content, `${prefix}\uFFFD\n\uFFFD\uFFFD`);
+      const range = await fs.readFile(filePath, { kind: 'range', start: 2, end: 2 });
+      assert.strictEqual(range.content, '\uFFFD\uFFFD');
+
+      await writeFile(filePath, `${prefix}€\n😀\né`);
+      assert.strictEqual(
+        (await fs.readFile(filePath, { kind: 'head', lines: 3 })).content,
+        `${prefix}€\n😀\né`,
+      );
+    });
+
     it('readEditableText rejects non-UTF-8 bytes past the binary probe', async () => {
       const filePath = join(tmpDir, 'latin1-late.txt');
       await writeFile(

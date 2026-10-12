@@ -32,6 +32,7 @@ import { Logger } from './core/observability.ts';
 import { suggestPaths } from './core/path-completer.ts';
 import type { PathGuard } from './core/path.ts';
 import type { ResourceStore } from './core/store.ts';
+import { MAX_OUTBOUND_RESULT_BYTES } from './core/util.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,
@@ -64,6 +65,8 @@ export interface ResourceRegistrationOptions {
   notifier?: ServerNotifier;
   /** The protocol era this instance serves; omitted where the caller does not know. */
   era?: 'legacy' | 'modern';
+  /** Only stdio has the SDK's fixed-size read buffer. */
+  transport?: 'stdio' | 'http';
   /**
    * Scope for shared-content cache hints. 'private' when the endpoint is
    * API-key gated, mirroring the list hints in server.ts — a shared cache must
@@ -408,10 +411,23 @@ function fsErrorToProtocolError(error: FsError): ProtocolError {
   });
 }
 
-function wrapRead(contract: ResourceContract) {
+function wrapRead(contract: ResourceContract, transport: ResourceRegistrationOptions['transport']) {
   return async (uri: URL, variables: Record<string, string | string[]>, ctx: ServerContext) => {
     try {
-      return await contract.read(uri, variables, ctx);
+      const result = await contract.read(uri, variables, ctx);
+      if (transport === 'stdio') {
+        // Cache/file bytes exclude outer JSON escaping and binary base64.
+        const encodedBytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
+        if (encodedBytes > MAX_OUTBOUND_RESULT_BYTES) {
+          const suggestion = 'Read smaller slices/pages with tools, or connect over HTTP.';
+          throw new ProtocolError(
+            ProtocolErrorCode.InvalidParams,
+            `Resource result too large to return (${String(encodedBytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit). ${suggestion}`,
+            { code: ErrorCode.TOO_LARGE, suggestion },
+          );
+        }
+      }
+      return result;
     } catch (error) {
       // The SDK brands ProtocolError with `static [Symbol.hasInstance]`, so this
       // holds across separately bundled SDK copies and realms.
@@ -473,10 +489,10 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
         ...(contract.complete ? { complete: contract.complete } : {}),
       });
 
-      server.registerResource(contract.name, template, config, wrapRead(contract));
+      server.registerResource(contract.name, template, config, wrapRead(contract, deps.transport));
     } else if (contract.uri) {
       server.registerResource(contract.name, contract.uri, config, (uri: URL, ctx: ServerContext) =>
-        wrapRead(contract)(uri, {}, ctx),
+        wrapRead(contract, deps.transport)(uri, {}, ctx),
       );
     }
   }

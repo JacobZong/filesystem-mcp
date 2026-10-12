@@ -1640,6 +1640,26 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(!tailText.includes('Continue:'), 'tail offers no continuation args');
   });
 
+  it('read continuations remain usable beyond line 100,000', async () => {
+    const file = await writeTestFile(tmpDir, 'long-lines.txt', `${'x\n'.repeat(100000)}last\n`);
+    const first = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: file, head: 100000 },
+    });
+    assert.notStrictEqual(first.isError, true);
+    const meta = first._meta as {
+      results: {
+        value: { continuation: { args: { path: string; startLine: number; endLine: number } } };
+      }[];
+    };
+    const continuation = meta.results[0]?.value.continuation;
+    assert.ok(continuation);
+    assert.strictEqual(continuation.args.startLine, 100001);
+    const next = await harness.client.callTool({ name: 'read', arguments: continuation.args });
+    assert.notStrictEqual(next.isError, true);
+    assert.strictEqual(firstTextBlock(next).text, 'last');
+  });
+
   it('TC-FUNC-060: diff two files returns a unified diff', async () => {
     const a = join(tmpDir, 'diff_a.txt');
     const b = join(tmpDir, 'diff_b.txt');

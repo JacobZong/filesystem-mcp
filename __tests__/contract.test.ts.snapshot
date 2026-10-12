@@ -460,13 +460,13 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "description": "Start line (1-indexed)",
             "type": "integer",
             "minimum": 1,
-            "maximum": 100000
+            "maximum": 2147483647
           },
           "endLine": {
             "description": "End line (1-indexed)",
             "type": "integer",
             "minimum": 1,
-            "maximum": 100000
+            "maximum": 2147483647
           },
           "path": {
             "description": "Single file path; mutually exclusive with paths",
@@ -1039,13 +1039,13 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             "description": "Start line (1-indexed)",
             "type": "integer",
             "minimum": 1,
-            "maximum": 100000
+            "maximum": 2147483647
           },
           "endLine": {
             "description": "End line (1-indexed)",
             "type": "integer",
             "minimum": 1,
-            "maximum": 100000
+            "maximum": 2147483647
           },
           "path": {
             "description": "Single file path; mutually exclusive with paths",

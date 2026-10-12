@@ -20,6 +20,7 @@ import {
   confirmKey,
   describeRefusal,
   pendingRoundTrip,
+  type PendingState,
   readAcceptedChoice,
 } from '../core/input-required.ts';
 import { resolveEntryType } from '../core/path-utils.ts';
@@ -279,10 +280,19 @@ async function handleDelete(
 
   const out = new Array<DeletePerPathResult | undefined>(paths.length).fill(undefined);
   const plans: { plan: DeletePlan; index: number }[] = [];
+  const confirmationState = ctx.requestState?.<PendingState>();
+  const previouslyPendingPaths = new Set(
+    confirmationState?.op === 'delete' ? confirmationState.paths : [],
+  );
   for (const { index, value: r } of planned.results) {
     if (r.status === 'fail') out[index] = { path: r.failure.path, error: r.failure.error };
     else if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
-    else plans.push({ plan: r.plan, index });
+    else {
+      // Emptying a directory while its prompt is open must not discard the
+      // answer. Keep that path pending so the verified retry still honors skip.
+      r.plan.pending ||= previouslyPendingPaths.has(r.plan.validPath);
+      plans.push({ plan: r.plan, index });
+    }
   }
   for (const { index, error } of planned.errors) {
     out[index] = {

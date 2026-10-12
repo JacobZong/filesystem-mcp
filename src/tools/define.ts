@@ -21,7 +21,7 @@ import {
 
 import type * as z from 'zod/v4';
 
-import { ErrorCode, formatUnknownErrorMessage, Problem } from '../core/errors.ts';
+import { ErrorCode, formatUnknownErrorMessage, FsError, Problem } from '../core/errors.ts';
 import type { ProgressCtx } from '../core/fmt.ts';
 import { plainMessage } from '../core/fmt.ts';
 import { GuardedFileSystem } from '../core/fs.ts';
@@ -37,6 +37,7 @@ import { isSamePath } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import { withSplitArgsRecovery } from '../core/schema.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
+import { MAX_OUTBOUND_RESULT_BYTES } from '../core/util.ts';
 import { ProgressSession } from './progress.ts';
 
 export interface ToolCtx {
@@ -384,8 +385,21 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       if (isInputRequiredResult(result)) {
         return result;
       }
+      const response = buildSuccessResponse(result);
+      // A post-run refusal is safe only for reads: a mutation may have already
+      // committed. Count the whole encoded response, including duplicated
+      // metadata and escaping; the ceiling reserves room for the SDK envelope.
+      if (this.def.readOnlyHint && this.toolCtx.transport === 'stdio') {
+        const encodedBytes = Buffer.byteLength(JSON.stringify(response), 'utf8');
+        if (encodedBytes > MAX_OUTBOUND_RESULT_BYTES) {
+          throw new FsError(
+            ErrorCode.TOO_LARGE,
+            `${this.def.name} result too large to return (${String(encodedBytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit). Reduce the requested output or connect over HTTP.`,
+          );
+        }
+      }
       await this.completeProgress(result.structured);
-      return buildSuccessResponse(result);
+      return response;
     } catch (error) {
       return await this.failProgress(error);
     } finally {

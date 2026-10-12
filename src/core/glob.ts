@@ -132,7 +132,7 @@ class GitignoreManager {
     const manager = new GitignoreManager();
     try {
       const gitignorePaths: string[] = [];
-      const gitignoreEntries = fsGlob('**/.gitignore', {
+      const gitignoreEntries = fsGlob([...buildHiddenPatterns('**/.gitignore')], {
         cwd: root,
         // Skip what the walk itself skips, and stop one level past its depth
         // bound: a .gitignore at depth d only affects entries at depth >= d.
@@ -310,7 +310,7 @@ function addFirstDotSegment(patterns: Set<string>, prefix: string, remainder: st
 
   if (idx !== -1) {
     const original = segments[idx];
-    if (original && original.charCodeAt(0) !== DOT_CHAR_CODE) {
+    if (original && GLOB_MAGIC_RE.test(original) && original.charCodeAt(0) !== DOT_CHAR_CODE) {
       const newSegments = [...segments];
       newSegments[idx] = `.${original}`;
       patterns.add(`${prefix}${newSegments.join(SEP)}`);
@@ -338,7 +338,9 @@ function expandHiddenGlobstars(patterns: Set<string>, prefix: string, remainder:
   // unroll did: contents of dot-directories anywhere, and dotfiles/dotdirs
   // anywhere.
   patterns.add(`${prefix}**/.*/**/${afterGlobstar}`);
-  const addDotFile = afterGlobstar.length > 0 && afterGlobstar.charCodeAt(0) !== DOT_CHAR_CODE;
+  const firstSegment = afterGlobstar.split(SEP)[0] ?? '';
+  const addDotFile =
+    GLOB_MAGIC_RE.test(firstSegment) && firstSegment.charCodeAt(0) !== DOT_CHAR_CODE;
   if (addDotFile) patterns.add(`${prefix}**/.${afterGlobstar}`);
 }
 

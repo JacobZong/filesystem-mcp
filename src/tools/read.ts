@@ -31,17 +31,16 @@ import { isTotalFailure, runOverPaths } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 
-const rangeField = (description: string) =>
-  z
-    .int32()
-    .min(1, { message: 'Min: 1' })
-    .max(100000, { message: 'Max: 100,000' })
+const rangeField = (description: string, count = false) => {
+  const field = z.int32().min(1, { message: 'Min: 1' });
+  return (count ? field.max(100000, { message: 'Max: 100,000' }) : field)
     .optional()
     .describe(description);
+};
 
 const readRangeFields = {
-  head: rangeField('Return first N lines'),
-  tail: rangeField('Return last N lines'),
+  head: rangeField('Return first N lines', true),
+  tail: rangeField('Return last N lines', true),
   startLine: rangeField('Start line (1-indexed)'),
   endLine: rangeField('End line (1-indexed)'),
 };

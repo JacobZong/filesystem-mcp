@@ -381,6 +381,89 @@ describe('globEntries characterization', () => {
       await cleanupTestRoot(root);
     }
   });
+
+  it('includeHidden keeps literal names literal at any depth', async () => {
+    const root = await createTestRoot();
+    try {
+      const files = [
+        'target.txt',
+        '.target.txt',
+        'src/target.txt',
+        '.src/target.txt',
+        '.one/.two/target.txt',
+        '.one/.two/.target.txt',
+      ];
+      for (const file of files) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: 'target.txt', includeHidden: true }),
+        ['target.txt'],
+      );
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: 'src/target.txt', includeHidden: true }),
+        ['src/target.txt'],
+      );
+      assert.deepStrictEqual(
+        await walk({
+          cwd: root,
+          pattern: 'target.txt',
+          baseNameMatch: true,
+          includeHidden: true,
+        }),
+        ['.one/.two/target.txt', '.src/target.txt', 'src/target.txt', 'target.txt'],
+      );
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: '**/target.txt', includeHidden: true }),
+        ['.one/.two/target.txt', '.src/target.txt', 'src/target.txt', 'target.txt'],
+      );
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: '**/*', includeHidden: true }),
+        [...files].sort(),
+      );
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('loads gitignore rules inside nested hidden directories', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of [
+        '.workspace/drop.txt',
+        '.workspace/keep.txt',
+        '.workspace/.nested/drop.txt',
+        '.workspace/.nested/keep.txt',
+      ]) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      await writeFile(join(root, '.workspace/.gitignore'), 'drop.txt\n');
+      await writeFile(join(root, '.workspace/.nested/.gitignore'), '!drop.txt\nkeep.txt\n');
+      const options = { cwd: root, pattern: '**/*', includeHidden: true, skipIgnored: true };
+      assert.deepStrictEqual(await walk(options), [
+        '.workspace/.gitignore',
+        '.workspace/.nested/.gitignore',
+        '.workspace/.nested/drop.txt',
+        '.workspace/keep.txt',
+      ]);
+      assert.deepStrictEqual(await walk({ ...options, maxDepth: 1 }), [
+        '.workspace/.gitignore',
+        '.workspace/keep.txt',
+      ]);
+      assert.deepStrictEqual(await walk({ ...options, skipIgnored: false }), [
+        '.workspace/.gitignore',
+        '.workspace/.nested/.gitignore',
+        '.workspace/.nested/drop.txt',
+        '.workspace/.nested/keep.txt',
+        '.workspace/drop.txt',
+        '.workspace/keep.txt',
+      ]);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
 });
 
 describe('ancestor .gitignore', () => {

@@ -215,9 +215,9 @@ async function* readLinesBounded(
         const segment = buffer.subarray(offset, nl);
         const lineBytes = pendingBytes + segment.length;
         lineNumber++;
-        // Decode even when skipping: the decoder carries multi-byte
-        // continuation state into the first line the caller keeps.
-        const decoded = decoder.write(segment);
+        // LF ends a character sequence as well as a line. Flush incomplete
+        // UTF-8 here instead of combining bytes from separate lines.
+        const decoded = decoder.write(segment) + decoder.end();
         if (lineNumber >= startLine) {
           if (lineBytes > options.maxSize) throw tooLong(lineBytes);
           yield (pending + decoded).replace(/\r$/, '');
