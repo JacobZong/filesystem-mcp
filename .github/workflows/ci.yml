@@ -8,27 +8,53 @@ on:
 permissions:
   contents: read
 
+# Pull requests cancel their own superseded runs. Pushes get one group per
+# ref and commit, so every commit on main/dev keeps a complete result: the
+# release workflow checks that result before it tags (plan 063).
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: true
 
 jobs:
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       # One OS failing must not cancel the other: the point is to see both.
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+    # Mirrors package.json's check script (check:static + test) as separate
+    # steps, so one failure does not hide the others. Keep the two in sync.
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
-      - run: npm run check
+      - name: Install
+        id: install
+        run: npm ci
+      - name: Build
+        id: build
+        run: npm run build
+      - name: Type-check tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run type-check:test
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run lint
+      - name: Format
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npx prettier --check .
+      - name: Knip
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npx knip
+      - name: Test
+        # dist-smoke boots dist/index.js, so tests need a successful build.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: npm test
 
   release-paths:
     name: Release build paths
