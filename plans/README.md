@@ -82,7 +82,7 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 | 061  | Suite green as root; stdio lease tests run concurrently         | P3       | S      | 056        | PARTIAL (step 1 only; blocked on 056; branch `advisor/061-suite-root-safe-and-faster-stdio`, tip `6c0ebe6c`)                              |
 | 062  | CI adds a macOS leg and a Node 26 leg (non-blocking)            | P2       | S      | 055, 058   | TODO                                                                                                                                      |
 | 063  | Release refuses a commit without green CI; atomic push          | P1       | S      | 055 (soft) | DONE (branch `advisor/063-release-requires-green-ci`, tip `0d0871c3`; PR #64)                                                             |
-| 064  | `main` ruleset, agent-PR CI without approval, CodeQL (settings) | P1       | S      | 055, 063   | TODO                                                                                                                                      |
+| 064  | `main` ruleset, agent-PR CI without approval, CodeQL (settings) | P1       | S      | 055, 063   | DONE (ruleset `24928791`, deploy-key bypass; release push verified at next release) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
@@ -492,6 +492,19 @@ hang` (`__tests__/high-severity-fixes.test.ts:229`) aborts after 50 ms and
 - 056: not reproduced in 200 targeted + 30 full runs on WSL Ubuntu (Node
   24.21.0, non-root); diagnostic message added so the next CI failure is
   classifiable.
+- 064: the ruleset API refuses GitHub Actions (integration 15368) as a
+  bypass actor on a user-owned repository (HTTP 422, "must be part of the
+  ruleset source or owner organization"). Fallback taken with the operator's
+  approval: a write deploy key (secret `RELEASE_DEPLOY_KEY`), the release
+  job checks out with it (PR #65), and ruleset `24928791` bypasses
+  `DeployKey` and the admin role. CodeQL default setup is on; first scan:
+  alerts #3 `js/insufficient-password-hash` and #2
+  `js/missing-rate-limiting` dismissed as false positives (SHA-256 only
+  equalizes lengths before `timingSafeEqual`; `createRateLimiter` precedes
+  auth on `/mcp`), #1 `js/stack-trace-exposure` (medium,
+  `examples/clients/browser/server.ts:86`, localhost-only example) left open.
+  Still the operator's: Settings → Copilot → Cloud agent → clear "Require
+  approval for workflow runs" (web UI only).
 - `move.ts:500-508` (the protected-entry walk failing closed) is not
   reachable from a test: Node 24's `fs.glob` swallows `readdir` errors, so an
   unreadable subdirectory lists as empty and the walk never throws. It is
