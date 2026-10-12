@@ -4,7 +4,7 @@ import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { stat, writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
@@ -297,6 +297,61 @@ describe('Stdio request ID envelope bounds', () => {
       }
       await assert.rejects(stat(target), { code: 'ENOENT' });
       await discoverModern(harness);
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('rejects oversized progress tokens under their request ID before dispatching work', async () => {
+    const root = await createTestRoot();
+    const harness = await createRawStdioServer(root, { FS_ROOT_BOUNDARY: root });
+    try {
+      await discoverModern(harness);
+      const target = join(root, 'token-target.txt');
+      const createCall = (id: string, progressToken: string, content: string) =>
+        harness.send({
+          jsonrpc: '2.0',
+          id,
+          method: 'tools/call',
+          params: {
+            name: 'create',
+            arguments: { files: [{ path: target, content }] },
+            _meta: { ...MODERN_META, progressToken },
+          },
+        });
+      for (const progressToken of [
+        'x'.repeat(MAX_STDIO_REQUEST_ID_BYTES - 1),
+        '"'.repeat(MAX_STDIO_REQUEST_ID_BYTES / 2),
+        'é'.repeat(MAX_STDIO_REQUEST_ID_BYTES / 2),
+        'x'.repeat(11 * MIB),
+      ]) {
+        await createCall('token', progressToken, 'not authorized');
+        // The refusal is the first frame: no progress notification went out.
+        const response = await within(harness.nextMessage(), 5000);
+        assert.ok('error' in response, JSON.stringify(response).slice(0, 200));
+        assert.equal(response.id, 'token');
+        assert.equal(response.error.code, ProtocolErrorCode.InvalidRequest);
+        assert.match(response.error.message, /progress token.*1024.*shorter token/);
+        assert.ok(Buffer.byteLength(JSON.stringify(response)) < 1024);
+      }
+      await assert.rejects(stat(target), { code: 'ENOENT' });
+
+      // A token exactly at the bound runs, and every progress frame echoes it.
+      const progressToken = 'x'.repeat(MAX_STDIO_REQUEST_ID_BYTES - 2);
+      await createCall('bounded', progressToken, 'authorized');
+      let frames = 0;
+      let response = await within(harness.nextMessage(), 5000);
+      while ('method' in response) {
+        assert.equal(response.method, 'notifications/progress');
+        assert.equal(response.params?.['progressToken'], progressToken);
+        frames++;
+        response = await within(harness.nextMessage(), 5000);
+      }
+      assert.ok('result' in response, JSON.stringify(response).slice(0, 200));
+      assert.equal(response.id, 'bounded');
+      assert.ok(frames > 0, 'progress frames carry the bounded token');
+      assert.equal(await readFile(target, 'utf8'), 'authorized');
     } finally {
       await harness.close();
       await cleanupTestRoot(root);

@@ -150,7 +150,10 @@ export const READ_MANY_MAX_TOTAL_BYTES = 512 * KIB;
  */
 export const MAX_OUTBOUND_RESULT_BYTES = 10 * MIB - 256 * KIB;
 
-/** JSON-encoded stdio request IDs, including quotes/escapes, must fit the envelope reserve. */
+/**
+ * JSON-encoded stdio request IDs and string progress tokens, including
+ * quotes/escapes, must fit the envelope reserve: each is echoed into frames.
+ */
 export const MAX_STDIO_REQUEST_ID_BYTES = KIB;
 
 /**

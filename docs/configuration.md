@@ -209,8 +209,12 @@ other binary files and UTF-16 text files.
 Stdio request IDs may occupy at most 1024 bytes when JSON-encoded, including
 quotes and escapes. Longer IDs are rejected before execution with JSON-RPC
 `InvalidRequest` (`-32600`) without an `id`; the oversized ID is not echoed.
-Use a shorter ID and retry. This bound reserves space for IDs in both successful
-and error responses under the client's 10 MiB stdio buffer limit. HTTP is unchanged.
+Use a shorter ID and retry. A string `_meta.progressToken` has the same limit,
+because every progress notification echoes it; a request whose token is longer
+is rejected the same way, but the error carries the request's `id`. This bound
+reserves space for IDs and tokens in successful responses, error responses and
+progress notifications under the client's 10 MiB stdio buffer limit. HTTP is
+unchanged.
 
 ## Running over HTTP
 

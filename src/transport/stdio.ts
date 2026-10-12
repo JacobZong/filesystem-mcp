@@ -40,6 +40,28 @@ function isListenCancelled(state: StdioListenState): boolean {
   return state.cancelled;
 }
 
+/**
+ * The client-chosen string a request would have echoed into a frame of its
+ * own, when it encodes past the envelope reserve: the ID into its response, or
+ * `_meta.progressToken` into every progress notification. `undefined` when
+ * both fit, or for anything that is not a request.
+ */
+function oversizedEcho(message: unknown): 'request ID' | 'progress token' | undefined {
+  if (typeof message !== 'object' || message === null) return undefined;
+  const request = message as {
+    method?: unknown;
+    id?: unknown;
+    params?: { _meta?: { progressToken?: unknown } };
+  };
+  if (request.method === undefined || request.id === undefined) return undefined;
+  const tooLong = (value: unknown): boolean =>
+    typeof value === 'string' &&
+    Buffer.byteLength(JSON.stringify(value), 'utf8') > MAX_STDIO_REQUEST_ID_BYTES;
+  if (tooLong(request.id)) return 'request ID';
+  if (tooLong(request.params?._meta?.progressToken)) return 'progress token';
+  return undefined;
+}
+
 function cancelledRequestId(message: unknown): string | number | null {
   if (typeof message !== 'object' || message === null) return null;
   const notification = message as {
@@ -277,20 +299,21 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
   }
   let gated = Promise.resolve();
   wire.onmessage = (message) => {
-    if (
-      'method' in message &&
-      'id' in message &&
-      typeof message.id === 'string' &&
-      Buffer.byteLength(JSON.stringify(message.id), 'utf8') > MAX_STDIO_REQUEST_ID_BYTES
-    ) {
-      // Never echo the rejected ID: it could overflow even a compact error.
-      // Reject before dispatch so no write or subscription can take effect.
+    const oversized = oversizedEcho(message);
+    if (oversized !== undefined) {
+      // Never echo an oversized ID: it could overflow even a compact error. A
+      // short ID with an oversized progress token is answered under that ID.
+      // Reject before dispatch so no write, subscription or progress frame
+      // can take effect.
+      const shorter = oversized === 'request ID' ? 'ID' : 'token';
+      const id = oversized === 'progress token' && 'id' in message ? message.id : undefined;
       void wire
         .send({
           jsonrpc: '2.0',
+          ...(id !== undefined ? { id } : {}),
           error: {
             code: ProtocolErrorCode.InvalidRequest,
-            message: `Stdio request ID exceeds ${String(MAX_STDIO_REQUEST_ID_BYTES)} JSON-encoded bytes. Use a shorter ID.`,
+            message: `Stdio ${oversized} exceeds ${String(MAX_STDIO_REQUEST_ID_BYTES)} JSON-encoded bytes. Use a shorter ${shorter}.`,
           },
         })
         .catch((error: unknown) => {
