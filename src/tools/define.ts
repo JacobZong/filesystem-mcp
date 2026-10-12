@@ -89,12 +89,7 @@ export interface ToolCtx {
   readonly clientCapabilities?: ClientCapabilities | undefined;
   /** The SDK request context this call runs under; `pendingRoundTrip` binds minted state to it. */
   readonly serverCtx: ServerContext;
-  /**
-   * The wire this call is served on. Only `stdio` subjects a tool result to the
-   * SDK client's fixed 10 MiB `ReadBuffer`, so only there does `read` cap its
-   * outbound size (H5). `undefined` on HTTP and the in-memory test pair, which
-   * have no such frame limit.
-   */
+  /** `stdio` alone has a 10 MiB frame limit; unset on HTTP and the in-memory test pair. */
   readonly transport?: 'stdio' | 'http' | undefined;
 }
 

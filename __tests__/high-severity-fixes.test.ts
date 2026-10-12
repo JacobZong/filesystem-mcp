@@ -11,8 +11,7 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { GuardedFileSystem } from '../src/core/fs.ts';
-import { searchContent } from '../src/core/search.ts';
-import { RE2_MAX_INPUT_BYTES } from '../src/core/search.ts';
+import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
   cleanupTestRoot,
@@ -27,19 +26,23 @@ import {
 } from './helpers.ts';
 
 describe('High-severity bug-hunt regressions', () => {
+  let tmpDir: string;
+  let ctx: FilesystemServerContext;
+  let pair: Awaited<ReturnType<typeof createTestClientPair>>;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    ctx = await createTestServer([tmpDir]);
+    pair = await createTestClientPair([tmpDir]);
+  });
+  after(async () => {
+    await pair.close();
+    ctx.disposeRuntimeState();
+    await ctx.mcp.close();
+    await cleanupTestRoot(tmpDir);
+  });
+
   describe('H2: concurrent and aliased writes keep every change', () => {
-    let tmpDir: string;
-    let pair: Awaited<ReturnType<typeof createTestClientPair>>;
-
-    before(async () => {
-      tmpDir = await createTestRoot();
-      pair = await createTestClientPair([tmpDir]);
-    });
-    after(async () => {
-      await pair.close();
-      await cleanupTestRoot(tmpDir);
-    });
-
     it('30 concurrent edit calls on one file all apply (no lost updates)', async () => {
       const file = join(tmpDir, 'counters.txt');
       const n = 30;
@@ -113,18 +116,6 @@ describe('High-severity bug-hunt regressions', () => {
   });
 
   describe('H3: an overlapping move batch is refused with no data loss', () => {
-    let tmpDir: string;
-    let pair: Awaited<ReturnType<typeof createTestClientPair>>;
-
-    before(async () => {
-      tmpDir = await createTestRoot();
-      pair = await createTestClientPair([tmpDir]);
-    });
-    after(async () => {
-      await pair.close();
-      await cleanupTestRoot(tmpDir);
-    });
-
     it('a swap [A->B, B->A] is refused and both files survive', async () => {
       const a = join(tmpDir, 'swapA');
       const b = join(tmpDir, 'swapB');
@@ -186,18 +177,6 @@ describe('High-severity bug-hunt regressions', () => {
   });
 
   describe('H1: edit ignoreWhitespace is bounded on a dense match', () => {
-    let tmpDir: string;
-    let pair: Awaited<ReturnType<typeof createTestClientPair>>;
-
-    before(async () => {
-      tmpDir = await createTestRoot();
-      pair = await createTestClientPair([tmpDir]);
-    });
-    after(async () => {
-      await pair.close();
-      await cleanupTestRoot(tmpDir);
-    });
-
     it(
       'a short oldText matching thousands of times fails ambiguous quickly',
       { timeout: 5000 },
@@ -232,22 +211,6 @@ describe('High-severity bug-hunt regressions', () => {
   });
 
   describe('H1 + H6: core search is interruptible and guards over-long lines', () => {
-    let tmpDir: string;
-    let ctx: FilesystemServerContext;
-    let pair: Awaited<ReturnType<typeof createTestClientPair>>;
-
-    before(async () => {
-      tmpDir = await createTestRoot();
-      ctx = await createTestServer([tmpDir]);
-      pair = await createTestClientPair([tmpDir]);
-    });
-    after(async () => {
-      await pair.close();
-      ctx.disposeRuntimeState();
-      await ctx.mcp.close();
-      await cleanupTestRoot(tmpDir);
-    });
-
     it('H6: a line past the RE2 input bound is reported skippedTooLarge, not a false empty, and later searches still work', async () => {
       const dir = join(tmpDir, 'oversized');
       const bigLine = 'a'.repeat(RE2_MAX_INPUT_BYTES + 1024); // one line over the bound

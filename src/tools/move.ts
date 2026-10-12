@@ -79,13 +79,7 @@ interface TransferPlan {
    * — see {@link validateTransferSource}.
    */
   opSource: string;
-  /**
-   * The symlink-resolved source, used only for cross-entry overlap detection:
-   * one entry's source must not be another entry's destination, or the two race
-   * and a file is destroyed (a swap or a chain). opSource is the link path for a
-   * move, which is the wrong identity to compare, so the resolved source is kept
-   * separately.
-   */
+  /** Symlink-resolved source, for cross-entry overlap detection (opSource may be the link). */
   resolvedSource: string;
   validDest: string;
   /**
@@ -323,35 +317,24 @@ async function runTransfers(
     ready.push(candidate);
   }
 
-  // Cross-entry source/destination overlap: one entry's (resolved) source being
-  // another entry's destination means the two race — the destination write
-  // clobbers or vacates a path a sibling still needs — and a file is lost. A
-  // swap [A->B, B->A] is such a cycle; a chain [B->C, A->B] is a path. Refuse
-  // every entry that participates in an overlap (both sides), so no refused
-  // entry mutates and the survivors are provably independent and run
-  // concurrently. isPathInsideDirectory treats equal and dir-contains as true
-  // and case-folds, so checking both directions covers equality plus either
-  // containment (moving a directory whose subtree holds another entry's path).
-  const overlapping = new Set<number>();
-  for (let i = 0; i < ready.length; i++) {
-    for (let j = i + 1; j < ready.length; j++) {
-      const a = ready[i];
-      const b = ready[j];
-      if (!a || !b) continue;
-      const conflict =
-        isPathInsideDirectory(a.resolvedSource, b.validDest) ||
-        isPathInsideDirectory(b.validDest, a.resolvedSource) ||
-        isPathInsideDirectory(b.resolvedSource, a.validDest) ||
-        isPathInsideDirectory(a.validDest, b.resolvedSource);
-      if (conflict) {
-        overlapping.add(i);
-        overlapping.add(j);
+  // One entry's (resolved) source overlapping another's destination means the
+  // two race and a file is lost: a swap [A->B, B->A] or a chain [B->C, A->B].
+  // Refuse both sides so the survivors are independent and can run concurrently.
+  // isPathInsideDirectory covers equality and containment, case-folded.
+  const touches = (x: string, y: string): boolean =>
+    isPathInsideDirectory(x, y) || isPathInsideDirectory(y, x);
+  const overlapping = new Set<TransferPlan>();
+  for (const [i, a] of ready.entries()) {
+    for (const b of ready.slice(i + 1)) {
+      if (touches(a.resolvedSource, b.validDest) || touches(b.resolvedSource, a.validDest)) {
+        overlapping.add(a);
+        overlapping.add(b);
       }
     }
   }
   const safe: TransferPlan[] = [];
-  for (const [index, plan] of ready.entries()) {
-    if (!overlapping.has(index)) {
+  for (const plan of ready) {
+    if (!overlapping.has(plan)) {
       safe.push(plan);
       continue;
     }

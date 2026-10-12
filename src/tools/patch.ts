@@ -59,8 +59,6 @@ export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
   }),
   accessPaths: (args) => [args.path],
   run: async (args, ctx) =>
-    // Serialize the read→write so a concurrent writer cannot slip between this
-    // patch's read and its atomic rename and have one of the two writes lost.
     // A dry run never writes, so it needs no lock.
     args.dryRun
       ? applyPatchOnce(args, ctx)

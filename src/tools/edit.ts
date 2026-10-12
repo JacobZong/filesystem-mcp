@@ -186,10 +186,15 @@ function newlineRunPattern(token: string, edge: { leading: boolean; trailing: bo
  */
 function findEditMatches(content: string, oldText: string, ignoreWhitespace: boolean): EditMatches {
   const found: EditMatches = { first: undefined, count: 0, starts: [], truncated: false };
-  const add = (startIndex: number, length: number): void => {
+  // Returns true once the match is known ambiguous: applyEdits only needs
+  // 0 / 1 / >1 and a few starts, and counting every occurrence of a short
+  // oldText in a big file is wasted work (seconds under re2-wasm).
+  const add = (startIndex: number, length: number): boolean => {
     found.first ??= { startIndex, length };
     found.count += 1;
     if (found.starts.length < MAX_REPORTED_MATCH_LINES) found.starts.push(startIndex);
+    found.truncated = found.count > MAX_REPORTED_MATCH_LINES;
+    return found.truncated;
   };
 
   if (ignoreWhitespace) {
@@ -226,18 +231,8 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
       const scan = (from: number): void => {
         for (const match of execMatches(regex, from === 0 ? content : content.slice(from))) {
           // A zero-length match names an empty span, which cannot be replaced.
-          if (match.text.length > 0) add(from + match.start, match.text.length);
+          if (match.text.length > 0 && add(from + match.start, match.text.length)) return;
           if (from > 0) return;
-          // Stop once the match is known ambiguous: applyEdits only needs
-          // 0 / 1 / >1 and a few starts for the error, and re2-wasm copies the
-          // whole content into its heap on every exec, so draining every match
-          // of a dense pattern is O(matches x content) — seconds on a big file,
-          // with no timeout on edit to interrupt it. Safe because oldText is
-          // schema-non-blank, so the pattern cannot match empty and spin here.
-          if (found.count > MAX_REPORTED_MATCH_LINES) {
-            found.truncated = true;
-            return;
-          }
         }
       };
       scan(0);
@@ -266,13 +261,7 @@ function findEditMatches(content: string, oldText: string, ignoreWhitespace: boo
     i !== -1;
     i = content.indexOf(oldText, i + oldText.length)
   ) {
-    add(i, oldText.length);
-    // Once ambiguous, the count and first few starts are all applyEdits needs;
-    // counting every occurrence of a short oldText in a huge file is wasted work.
-    if (found.count > MAX_REPORTED_MATCH_LINES) {
-      found.truncated = true;
-      break;
-    }
+    if (add(i, oldText.length)) break;
   }
   if (found.count === 1 && found.first) {
     const overlap = content.indexOf(oldText, afterCodePoint(content, found.first.startIndex));
@@ -392,11 +381,7 @@ async function handleEditFile(
   options: EditFileOptions,
   ctx: ToolCtx,
 ): Promise<{ file: EditFileValue; resourceLink?: ContentBlock }> {
-  // Serialize the read→write against the resolved file: without it, two edits
-  // of one file (two batch entries reaching it through different spellings, or
-  // two concurrent calls) both read the same base and the last atomic rename
-  // wins, silently dropping the other's edits. A dry run reads but never
-  // writes, so it needs no lock.
+  // A dry run never writes, so it needs no lock.
   if (options.dryRun) return editOnce(filePath, edits, options, ctx);
   return ctx.fs.lockForWrite(filePath, () => editOnce(filePath, edits, options, ctx));
 }

@@ -27,11 +27,10 @@ import {
 import type { Regex } from '../core/search.ts';
 import {
   compileRegex,
+  createYielder,
   execMatches,
   freeRegex,
   RE2_MAX_INPUT_BYTES,
-  YIELD_INTERVAL_MS,
-  yieldToEventLoop,
 } from '../core/search.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
@@ -133,13 +132,7 @@ function recordChangedFile(summary: ReplaceSummary, plan: ReplacementPlan, fileP
 }
 
 interface ReplacementMatcher {
-  /**
-   * Async + signal-aware: the regex splice drains re2-wasm one match at a time
-   * (O(matches x content)), so it yields periodically to let the search timeout
-   * fire and throws `signal.reason` on abort — it must never return a
-   * partially-spliced string, which a caller would write to disk and a retry
-   * would double-apply.
-   */
+  /** Yields periodically and throws on abort: a partial splice must never be written. */
   replace(
     content: string,
     replacement: string,
@@ -216,7 +209,7 @@ function createRegexReplacementMatcher(
       let matchCount = 0;
       let updated = '';
       let cursor = 0;
-      let lastYield = Date.now();
+      const tick = createYielder(signal);
       for (const match of execMatches(regex, content)) {
         matchCount++;
         // Only isRegex=true opts into $1/$& substitution. A literal search
@@ -235,14 +228,7 @@ function createRegexReplacementMatcher(
               )
             : replacement);
         cursor = match.end;
-        // Yield so the search timeout can fire; a partially-spliced string must
-        // never escape, so abort THROWS rather than returning what it has.
-        if (Date.now() - lastYield > YIELD_INTERVAL_MS) {
-          await yieldToEventLoop();
-          if (signal?.aborted)
-            throw signal.reason instanceof Error ? signal.reason : new Error('aborted');
-          lastYield = Date.now();
-        }
+        if (await tick()) signal?.throwIfAborted();
       }
       return { content: updated + content.slice(cursor), matchCount };
     },
@@ -259,8 +245,7 @@ function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMa
     testBuffer(buffer: Buffer): boolean {
       return buffer.indexOf(searchBuffer) !== -1;
     },
-    // One native O(n) pass, not the per-match re2-wasm drain, so it needs no
-    // yielding; it satisfies the async interface and ignores the signal.
+    // One native O(n) pass; nothing to yield for.
     replace(content, replacement) {
       let matchCount = 0;
       const updated = content.replaceAll(searchPattern, () => {
@@ -298,10 +283,8 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
   const { options, signal, summary } = ctx;
 
   try {
-    // Serialize the read→write per file so a concurrent writer on the same file
-    // cannot have one of the two writes silently lost (H2). A dry run never
-    // writes, so it reads without the lock (and without the extra realpath the
-    // lock key costs on every scanned file).
+    // Lock the read→write per file so a concurrent writer is not lost; a dry
+    // run never writes and skips the lock.
     const plan = options.dryRun
       ? await readReplacementPlan(entryPath, ctx)
       : await ctx.fs.lockForWrite(entryPath, async () => {

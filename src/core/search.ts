@@ -34,23 +34,23 @@ export type Regex = RE2;
 const MAX_MATCHES_PER_LINE = 100_000;
 
 /**
- * How long a synchronous match drain may run before yielding the event loop.
- * re2-wasm copies the whole input into its heap on every exec, so draining a
- * dense pattern is O(matches x input) and runs entirely synchronously — long
- * enough on a big line to freeze the whole stdio/HTTP server, and long enough
- * that the tool's AbortSignal.timeout (a timer, hence a macrotask) can never
- * fire because the loop never yields. Yielding every ~10ms via setImmediate (a
- * macrotask, so timers run) keeps the server responsive and lets the timeout
- * abort a runaway scan. Negligible for ordinary inputs, which finish between
- * yields.
+ * re2-wasm copies the whole input on every exec, so draining a dense pattern is
+ * O(matches x input) and fully synchronous: the loop pins and the tool's
+ * AbortSignal.timeout (a timer) can never fire. The returned `tick` yields a
+ * macrotask every ~10ms and reports whether `signal` has aborted.
  */
-export const YIELD_INTERVAL_MS = 10;
-
-/** Yield a macrotask turn so pending timers (the search timeout) and other requests run. */
-export const yieldToEventLoop = (): Promise<void> =>
-  new Promise((resolve) => {
-    setImmediate(resolve);
-  });
+export function createYielder(signal: AbortSignal | undefined): () => Promise<boolean> {
+  let last = Date.now();
+  return async () => {
+    if (Date.now() - last > 10) {
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      last = Date.now();
+    }
+    return signal?.aborted ?? false;
+  };
+}
 
 /**
  * Largest input one RE2 call may scan as a single string. The input is copied
@@ -188,27 +188,16 @@ export function* execMatches(regex: Regex, text: string): Generator<RegexMatch, 
 async function findLineMatches(
   regex: Regex,
   line: string,
-  signal: AbortSignal | undefined,
+  tick: () => Promise<boolean>,
 ): Promise<{ count: number; column: number } | undefined> {
   let count = 0;
   let column = -1;
-  let lastYield = Date.now();
-  // Awaiting mid-drain is safe even though the regex is shared across concurrent
-  // file scans: execMatches re-writes lastIndex from its own match before every
-  // exec, with no await inside the generator, so a concurrent drain cannot
-  // corrupt this one's offsets (see execMatches' contract).
+  // Awaiting mid-drain is safe with a shared regex: execMatches re-writes
+  // lastIndex from its own match before every exec, with no await inside.
   for (const match of execMatches(regex, line)) {
     if (column === -1) column = match.start;
     count++;
-    if (count >= MAX_MATCHES_PER_LINE) break;
-    if (Date.now() - lastYield > YIELD_INTERVAL_MS) {
-      await yieldToEventLoop();
-      // Abort (client cancel or the search deadline) stops this line's scan and
-      // returns what it has; the scan is already reported incomplete by the
-      // caller's signal check.
-      if (signal?.aborted) break;
-      lastYield = Date.now();
-    }
+    if (count >= MAX_MATCHES_PER_LINE || (await tick())) break;
   }
   return count > 0 ? { count, column } : undefined;
 }
@@ -316,32 +305,23 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
   // file has, for matching or for context.
   const lineCount =
     content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
-  // RE2 copies the whole line into its fixed 16 MB wasm heap on every exec, so a
-  // single line past RE2_MAX_INPUT_BYTES aborts the module (OOM) and breaks
-  // regex search for the rest of the process. The whole-buffer prefilter is
-  // already guarded (canPrefilter); guard the per-line exec too. Only possible
-  // when the buffer itself exceeds the bound, so the byte measure is skipped for
-  // every ordinary file. The file is reported skippedTooLarge, not silently
-  // empty (H6).
+  // A single line past RE2_MAX_INPUT_BYTES OOMs the wasm module for the rest of
+  // the process; report the file tooLarge instead. Only a buffer over the bound
+  // can hold such a line, so ordinary files skip the per-line measure.
   const checkLineSize = buffer.length > RE2_MAX_INPUT_BYTES;
   const matches: SearchResult[] = [];
-  let lastYield = Date.now();
+  const tick = createYielder(scanCtx.signal);
   for (let i = 0; i < lineCount; i++) {
     const line = lines[i];
     if (line === undefined) continue;
     if (checkLineSize && Buffer.byteLength(line, 'utf8') > RE2_MAX_INPUT_BYTES) {
       return { kind: 'tooLarge' };
     }
-    // Yield between lines too, so a file of millions of short lines (each scan
-    // too quick to yield on its own) cannot block the loop or outrun the abort.
-    if (Date.now() - lastYield > YIELD_INTERVAL_MS) {
-      await yieldToEventLoop();
-      if (scanCtx.signal?.aborted) break;
-      lastYield = Date.now();
-    }
+    // Yield between lines too: millions of short lines never yield per-match.
+    if (await tick()) break;
     // One scan per line: the helper resets lastIndex itself, so it
     // doubles as the "does this line match" test.
-    const found = await findLineMatches(scanCtx.regex, line, scanCtx.signal);
+    const found = await findLineMatches(scanCtx.regex, line, tick);
     if (found) {
       matches.push({
         file: entryPath,
@@ -369,11 +349,8 @@ export async function searchContent(
   pathGuard: PathGuard,
 ): Promise<SearchContentOutcome> {
   const source = options.isRegex ? pattern || '' : escapeRegExp(pattern || '');
-  // Both compiles live INSIDE the try so the finally frees whichever succeeded:
-  // each pattern owns wasm memory re2-wasm never reclaims on its own, so a
-  // second compile that throws (or a pattern too large for the shared heap)
-  // must not leak the first (H6). compileRegex throws SyntaxError on a bad or
-  // over-budget pattern; freeRegex is null-safe and idempotent.
+  // Compiles live inside the try so a failing second compile does not leak the
+  // first's wasm memory; freeRegex is null-safe.
   let regex: Regex | undefined;
   let prefilter: Regex | undefined;
   try {

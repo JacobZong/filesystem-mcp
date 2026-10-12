@@ -14,19 +14,22 @@ import { getMaxTextFileSize } from './util.ts';
 
 const STREAM_CHUNK_SIZE = 64 * 1024;
 
-// O_NOFOLLOW refuses (ELOOP) to open a path whose final component is a symlink,
-// closing the TOCTOU where a validated regular file is swapped for a symlink
-// between validation and this open and the read returns the link's target
-// (e.g. a secret or an out-of-root file). filePath here is always the
-// realpath-resolved target, whose final component is a real file, so a
-// legitimate in-root symlink is unaffected. O_NOFOLLOW is absent on Windows
-// (@types/node types it as always-present), so it is read through a type that
-// admits undefined and falls back to 0, a no-op flag bit.
-const O_NOFOLLOW = (constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
-const READ_ONLY_FILE_FLAG = constants.O_RDONLY | O_NOFOLLOW;
+// O_NOFOLLOW refuses (ELOOP) a final-component symlink, so a regular file
+// swapped for a symlink between validation and open is refused, not followed.
+// Opens receive the realpath-resolved target, so in-root symlinks still work.
+// Absent (undefined at runtime, despite @types/node) on Windows; 0 is a no-op.
+const { O_NOFOLLOW = 0, O_NONBLOCK = 0 } = constants as {
+  O_NOFOLLOW?: number;
+  O_NONBLOCK?: number;
+};
+export const READ_NOFOLLOW = constants.O_RDONLY | O_NOFOLLOW;
+// O_NONBLOCK: an append to a symlink-swapped FIFO fails fast instead of hanging.
+export const APPEND_NOFOLLOW = constants.O_WRONLY | constants.O_APPEND | O_NOFOLLOW | O_NONBLOCK;
+export const APPEND_CREATE_NOFOLLOW =
+  constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW;
 
 async function openReadableFileHandle(filePath: string, signal?: AbortSignal): Promise<FileHandle> {
-  const handlePromise = fsOpen(filePath, READ_ONLY_FILE_FLAG);
+  const handlePromise = fsOpen(filePath, READ_NOFOLLOW);
   if (!signal) return handlePromise;
   try {
     return await withAbort(handlePromise, signal);

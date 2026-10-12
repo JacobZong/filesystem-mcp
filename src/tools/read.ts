@@ -432,21 +432,15 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       return { ...result, value };
     });
 
-    // Refuse a result whose JSON-encoded size would blow the stdio client's
-    // fixed 10 MiB ReadBuffer and drop the connection (H5). Only stdio carries
-    // that frame limit; HTTP streams responses and the in-memory test pair
-    // serializes nothing, so the guard runs on stdio alone — it must not shrink
-    // what a direct HTTP read could return. Measure the assembled payload — the
-    // text block AND the resource/media content blocks AND the structured half
-    // — so JSON escaping and image/audio base64 are counted exactly. One guard
-    // covers single, image/audio, and batched reads.
+    // Only stdio has the SDK's fixed 10 MiB ReadBuffer; a result that overflows
+    // it drops the connection. Measure the encoded payload (text, media blocks,
+    // structured half) so escaping and base64 are counted exactly.
     if (ctx.transport === 'stdio') {
       const encodedBytes =
         Buffer.byteLength(JSON.stringify([{ type: 'text', text }, ...resources]), 'utf8') +
         Buffer.byteLength(JSON.stringify({ results: structuredResults, summary }), 'utf8');
       if (encodedBytes > MAX_OUTBOUND_RESULT_BYTES) {
-        // A binary image/audio result cannot be sliced (a range read rejects
-        // media), so head/tail is not a remedy for it — say so instead.
+        // Media cannot be sliced, so head/tail is no remedy for it.
         const isMedia = resources.some((b) => b.type === 'image' || b.type === 'audio');
         const remedy = isMedia
           ? 'This media file is too large to return over the stdio transport; connect over HTTP, or raise it as a smaller file.'

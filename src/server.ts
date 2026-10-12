@@ -63,12 +63,7 @@ export async function createServer(
     pageStore?: PageSnapshotStore;
     /** The protocol era this instance serves; omitted where the caller does not know. */
     era?: 'legacy' | 'modern';
-    /**
-     * The wire this instance serves on. Only `stdio` carries the SDK client's
-     * fixed 10 MiB `ReadBuffer`, so only there does `read` cap its outbound
-     * result. HTTP streams responses with no frame limit, and the in-memory
-     * test pair serializes nothing, so both leave this unset and uncapped.
-     */
+    /** Only `stdio` has the SDK's fixed 10 MiB ReadBuffer, so only there does `read` cap its result. */
     transport?: 'stdio' | 'http';
     /**
      * The resolved HTTP credential, from `--api-key` or `FS_API_KEY`. Lives here
