@@ -72,6 +72,8 @@ Pass test runner flags after `--`, for example
 `__tests__/dist-smoke.test.ts` starts the built `dist/index.js` and skips when
 `dist/` is missing, so run `npm run build` (or `npm run check`) first.
 
+`__tests__/contract.test.ts` snapshots the advertised MCP surface; when a contract change is intended, regenerate it with `node --test --test-update-snapshots __tests__/contract.test.ts` (no `FS_*` variables set) and review the snapshot diff in your PR.
+
 CI runs `npm run check` on Ubuntu and Windows. Please run it before you open a
 pull request.
 
