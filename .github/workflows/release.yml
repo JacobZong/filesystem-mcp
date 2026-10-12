@@ -36,6 +36,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      # Read the CI check runs of the commit being released.
+      checks: read
     outputs:
       version: ${{ steps.ver.outputs.version }}
     steps:
@@ -54,6 +56,35 @@ jobs:
             exit 1
           fi
 
+      # The release re-runs the checks on Ubuntu only. This reads the CI result for
+      # the exact commit being released, so a red or unfinished Windows leg (or a
+      # commit whose CI never ran) cannot ship.
+      - name: Require green CI for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUIRED: 'Check (ubuntu-latest)|Check (windows-latest)|Release build paths'
+        run: |
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+            --jq '.check_runs | sort_by(.id) | reverse | .[] | [.name, .status, (.conclusion // "none")] | @tsv')
+          fail=0
+          IFS='|' read -ra names <<< "$REQUIRED"
+          for name in "${names[@]}"; do
+            line=$(printf '%s\n' "$runs" | awk -F'\t' -v n="$name" '$1 == n' | head -n1)
+            if [ -z "$line" ]; then
+              echo "::error::No '$name' check run for $GITHUB_SHA — CI has not run on this commit"
+              fail=1
+            elif [ "$(printf '%s' "$line" | cut -f2)" != "completed" ]; then
+              echo "::error::'$name' is still $(printf '%s' "$line" | cut -f2) for $GITHUB_SHA — wait for CI"
+              fail=1
+            elif [ "$(printf '%s' "$line" | cut -f3)" != "success" ]; then
+              echo "::error::'$name' concluded $(printf '%s' "$line" | cut -f3) for $GITHUB_SHA"
+              fail=1
+            else
+              echo "ok: $name"
+            fi
+          done
+          exit "$fail"
+
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
@@ -63,13 +94,14 @@ jobs:
         id: ver
         env:
           CUSTOM_VERSION: ${{ inputs.custom_version }}
+          BUMP: ${{ inputs.bump }}
         run: |
           CURRENT=$(node -p "require('./package.json').version")
           if [ -n "$CUSTOM_VERSION" ]; then
             NEW="$CUSTOM_VERSION"
           else
             IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-            case "${{ inputs.bump }}" in
+            case "$BUMP" in
               major) NEW="$((MAJOR + 1)).0.0" ;;
               minor) NEW="$MAJOR.$((MINOR + 1)).0" ;;
               patch) NEW="$MAJOR.$MINOR.$((PATCH + 1))" ;;
@@ -132,7 +164,7 @@ jobs:
           git add package.json package-lock.json server.json mcpb/manifest.json
           git commit -m "release: v$VERSION"
           git tag -a "v$VERSION" -m "v$VERSION"
-          git push origin main --follow-tags
+          git push --atomic origin main --follow-tags
 
       - name: Create GitHub release
         env:
