@@ -12,6 +12,14 @@ fuzz sweep. No schema-legal tool call changes shape and the declared tool
 surface is unchanged; the fixes are in behaviour under load, concurrency, and
 pathological inputs.
 
+### Changed
+
+- **`replace_text` refuses a file over the text size limit with the shared
+  `createTooLargeError` wording** its streaming reader already returns —
+  `File exceeds size limit (N > M bytes)` with the path in the error
+  envelope — instead of a per-tool hand-rolled message. Refusal-path only;
+  no successful call changes shape.
+
 ### Fixed
 
 - **A regex search or replace over a many-match or very long input no longer

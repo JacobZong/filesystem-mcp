@@ -1,7 +1,7 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import { Buffer, isUtf8 } from 'node:buffer';
-import { basename, dirname } from 'node:path';
+import { dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
@@ -14,7 +14,7 @@ import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../cor
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
 import { toPosixRelative } from '../core/path.ts';
-import { readFileBufferWithLimit } from '../core/read.ts';
+import { createTooLargeError, readFileBufferWithLimit } from '../core/read.ts';
 import {
   defaultFalseBoolean,
   IncludeHidden,
@@ -330,10 +330,7 @@ async function readReplacementPlan(
   await using fileHandle = await ctx.fs.open(validPath);
   const stats = await fileHandle.stat();
   if (stats.size > maxFileSize) {
-    throw new FsError(
-      ErrorCode.TOO_LARGE,
-      `File too large: ${validPath} (${String(stats.size)} bytes > ${String(maxFileSize)} bytes)`,
-    );
+    throw createTooLargeError(stats.size, maxFileSize, validPath);
   }
 
   const buffer = await readFileBufferWithLimit(fileHandle, maxFileSize, validPath, signal);
@@ -660,9 +657,12 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
           })
         : undefined;
     if (hint) lines.push(hint);
-    // A failure's reason lives in `results`, which ships under `_meta`.
+    // A failure's reason lives in `results`, which ships under `_meta`. The
+    // full relative path, not the basename: the error message may not carry
+    // the path, and two same-named files in different directories must not
+    // render as the same row.
     for (const r of structured.results.filter((x) => 'error' in x).slice(0, 3)) {
-      lines.push(`// ${basename(r.path)}: ${r.error.code} ${r.error.message}`);
+      lines.push(`// ${r.path}: ${r.error.code} ${r.error.message}`);
     }
     if (structured.diffTruncated) {
       lines.push(

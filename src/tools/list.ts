@@ -254,7 +254,7 @@ async function handleList(
         maxDepth: args.maxDepth,
         includeHidden: args.includeHidden,
         includeIgnored: args.includeIgnored,
-        signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(DEFAULT_SEARCH_TIMEOUT_MS)]),
+        signal: ctx.signal,
         pathGuard: ctx.fs.pathGuard,
         entryCap: MAX_LIST_ENTRIES,
         onProgress: ctx.onProgress,
