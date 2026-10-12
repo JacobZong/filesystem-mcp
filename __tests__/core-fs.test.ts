@@ -3,6 +3,7 @@ import type { PathLike } from 'node:fs';
 import fsPromises, { chmod, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { basename, dirname, join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { after, before, describe, it, mock } from 'node:test';
 
 import { ErrorCode, isFsError, Problem } from '../src/core/errors.ts';
@@ -161,6 +162,61 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(result.content, 'Line 2\nLine 3\nLine 4');
     });
 
+    it('a range read decodes lines across stream chunks the same from any start line', async () => {
+      const CHUNK = 64 * 1024; // STREAM_CHUNK_SIZE in src/core/read.ts
+      for (const eol of ['\n', '\r\n']) {
+        const raw: Buffer[] = [];
+        const expected: string[] = [];
+        let written = 0;
+        const line = (text: string, bytes = Buffer.from(text)) => {
+          raw.push(bytes, Buffer.from(eol));
+          expected.push(text);
+          written += bytes.length + eol.length;
+        };
+        // ASCII padding puts the next chunk boundary after `head` bytes of `text`.
+        const straddle = (head: number, text: string, bytes = Buffer.from(text)) => {
+          const pad = '.'.repeat(CHUNK - (written % CHUNK) - head);
+          line(pad + text, Buffer.concat([Buffer.from(pad), bytes]));
+        };
+        // Each start line must decode as if the lines before it were never read.
+        straddle(1, 'é');
+        straddle(2, '😀');
+        straddle(4, '日本'); // the boundary falls inside 本
+        straddle(3, 'ab'); // the chunk ends on the LF, or between CR and LF
+        line('cd');
+        // A truncated 日 ends a chunk; the next line's bytes would complete it.
+        straddle(1, '\uFFFD', Buffer.from([0xe6]));
+        line('\uFFFD\uFFFDok', Buffer.from([0x97, 0xa5, 0x6f, 0x6b]));
+        straddle(2, '\uFFFD', Buffer.from([0xf0, 0x9f, 0x98])); // a truncated emoji
+        raw.push(Buffer.from('end'));
+        expected.push('end');
+
+        const filePath = join(tmpDir, 'range-chunks.txt');
+        await writeFile(filePath, Buffer.concat(raw));
+        for (let start = 1; start <= expected.length; start++) {
+          const label = `${JSON.stringify(eol)} from line ${start}`;
+          const result = await fs.readFile(filePath, { kind: 'range', start });
+          assert.strictEqual(result.content, expected.slice(start - 1).join('\n'), label);
+          assert.strictEqual(result.linesRead, expected.length - start + 1, label);
+          assert.strictEqual(result.hasMoreLines, false, label);
+        }
+      }
+    });
+
+    it('a range read does not decode the lines before its start', async (t) => {
+      const filePath = await writeNLineFile(tmpDir, 'read_range_skip.txt', 20_000);
+      const write = t.mock.method(StringDecoder.prototype, 'write');
+
+      const result = await fs.readFile(filePath, { kind: 'range', start: 19_999, end: 20_000 });
+
+      assert.strictEqual(result.content, 'Line 19999\nLine 20000');
+      const decodedBytes = write.mock.calls.reduce(
+        (sum, call) => sum + Buffer.byteLength(call.arguments[0]),
+        0,
+      );
+      assert.strictEqual(decodedBytes, Buffer.byteLength('Line 19999Line 20000'));
+    });
+
     it('TC-FUNC-006: readFile full returns entire content and line count', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_full.txt', 5);
       const result = await fs.readFile(filePath, { kind: 'full' });
@@ -226,6 +282,28 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       await assert.rejects(
         fs.readFile(invalid, { kind: 'full' }),
         (error) => isFsError(error) && error.message === 'Binary file detected.',
+      );
+    });
+
+    it('partial reads never combine UTF-8 bytes across line boundaries', async () => {
+      const filePath = join(tmpDir, 'split-lines.txt');
+      const prefix = 'a'.repeat(512);
+      await writeFile(
+        filePath,
+        Buffer.concat([Buffer.from(prefix), Buffer.from([0xe2, 0x0a, 0x82, 0xac, 0x0a])]),
+      );
+
+      const full = await fs.readFile(filePath, { kind: 'full' });
+      assert.strictEqual(full.content, `${prefix}\uFFFD\n\uFFFD\uFFFD\n`);
+      const head = await fs.readFile(filePath, { kind: 'head', lines: 2 });
+      assert.strictEqual(head.content, `${prefix}\uFFFD\n\uFFFD\uFFFD`);
+      const range = await fs.readFile(filePath, { kind: 'range', start: 2, end: 2 });
+      assert.strictEqual(range.content, '\uFFFD\uFFFD');
+
+      await writeFile(filePath, `${prefix}€\n😀\né`);
+      assert.strictEqual(
+        (await fs.readFile(filePath, { kind: 'head', lines: 3 })).content,
+        `${prefix}€\n😀\né`,
       );
     });
 

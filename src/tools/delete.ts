@@ -19,7 +19,9 @@ import type { FileType, GuardedFileSystem } from '../core/fs.ts';
 import {
   confirmKey,
   describeRefusal,
+  type PendingDeleteIdentity,
   pendingRoundTrip,
+  type PendingState,
   readAcceptedChoice,
 } from '../core/input-required.ts';
 import { resolveEntryType } from '../core/path-utils.ts';
@@ -239,6 +241,7 @@ async function executePlan(
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
   ctx: Pick<ToolCtx, 'fs' | 'inputResponses' | 'droppedInputResponseKeys' | 'log'>,
   pendingSorted: readonly string[],
+  confirmationState: PendingState | undefined,
 ): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
   if (plan.pending) {
     const key = confirmKey(pendingSorted.indexOf(plan.validPath));
@@ -252,6 +255,26 @@ async function executePlan(
           path: plan.validPath,
           error: Problem.cancelled(
             `Delete cancelled: confirmation was ${describeRefusal(ctx, key)}`,
+            { path: plan.validPath },
+          ),
+        },
+      };
+    }
+    const identity = confirmationState?.deleteIdentities?.find(
+      (entry) => entry.path === plan.validPath,
+    );
+    const { stats } = plan.firstStats;
+    if (
+      identity?.itemType !== plan.itemType ||
+      identity.dev !== stats.dev ||
+      identity.ino !== stats.ino ||
+      identity.birthtimeMs !== stats.birthtimeMs
+    ) {
+      return {
+        failure: {
+          path: plan.validPath,
+          error: Problem.invalidInput(
+            'Delete failed: item identity changed or is missing from the confirmation.',
             { path: plan.validPath },
           ),
         },
@@ -279,10 +302,19 @@ async function handleDelete(
 
   const out = new Array<DeletePerPathResult | undefined>(paths.length).fill(undefined);
   const plans: { plan: DeletePlan; index: number }[] = [];
+  const confirmationState = ctx.requestState?.<PendingState>();
+  const previouslyPendingPaths = new Set(
+    confirmationState?.op === 'delete' ? confirmationState.paths : [],
+  );
   for (const { index, value: r } of planned.results) {
     if (r.status === 'fail') out[index] = { path: r.failure.path, error: r.failure.error };
     else if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
-    else plans.push({ plan: r.plan, index });
+    else {
+      // Emptying a directory while its prompt is open must not discard the
+      // answer. Keep that path pending so the verified retry still honors skip.
+      r.plan.pending ||= previouslyPendingPaths.has(r.plan.validPath);
+      plans.push({ plan: r.plan, index });
+    }
   }
   for (const { index, error } of planned.errors) {
     out[index] = {
@@ -300,13 +332,22 @@ async function handleDelete(
     ...new Set(plans.filter((p) => p.plan.pending).map((p) => p.plan.validPath)),
   ].sort();
 
-  if (pendingSorted.length > 0) {
+  // With no actionable plans, preserve per-path NOT_FOUND / ignoreIfNotExists
+  // results. Otherwise even an empty pending set must be checked before an
+  // unrelated non-pending batch entry can mutate.
+  if (pendingSorted.length > 0 || (confirmationState?.op === 'delete' && plans.length > 0)) {
     // Round 1 returns input_required (atomic — R14: nothing deleted yet, not
     // even the non-pending items in the same call); a retry whose verified
     // state does not bind this pending set throws (R9) via `pendingRoundTrip`.
     const round = await pendingRoundTrip(ctx, {
       op: 'delete',
       pending: pendingSorted,
+      deleteIdentities: plans
+        .filter(({ plan }) => plan.pending)
+        .map(({ plan }): PendingDeleteIdentity => {
+          const { dev, ino, birthtimeMs } = plan.firstStats.stats;
+          return { path: plan.validPath, itemType: plan.itemType, dev, ino, birthtimeMs };
+        }),
       buildInputs: (ps) =>
         ps.map((p, i) => ({
           key: confirmKey(i),
@@ -320,7 +361,7 @@ async function handleDelete(
   // Phase 2 (mutation): execute deletions for every planned path.
   const executed = await processInParallel(
     plans,
-    ({ plan }) => executePlan(plan, args, ctx, pendingSorted),
+    ({ plan }) => executePlan(plan, args, ctx, pendingSorted, confirmationState),
     PARALLEL_CONCURRENCY,
     ctx.signal,
   );

@@ -311,6 +311,8 @@ export async function createTestHttpHarness(
           era,
           resourceStore: sharedStore,
           pageStore: sharedPageStore,
+          // As http.ts passes it: a guard that started refusing on HTTP fails here.
+          transport: 'http',
         },
       );
       return serverCtx.mcp;

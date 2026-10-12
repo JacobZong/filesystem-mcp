@@ -290,6 +290,43 @@ describe('MCP Resources', () => {
       assert.strictEqual(notifications, 1, 'insert plus eviction must be coalesced');
       assert.strictEqual(store.keys().length, 64, 'entry limit must still be enforced');
     });
+
+    it("a call view's discard drops its own entries and announces it", () => {
+      let notifications = 0;
+      const store = new ResourceStore(() => {
+        notifications += 1;
+      });
+      const kept = store.putText({ name: 'kept', text: 'kept' });
+      const view = store.forCall();
+      const viewed = view.putText({ name: 'viewed', text: 'viewed' });
+      assert.strictEqual(store.getEntry(viewed.uri).text, 'viewed', 'the view shares the store');
+      assert.strictEqual(notifications, 2);
+
+      view.discard();
+      assert.throws(() => store.getEntry(viewed.uri), fsErrorMatcher(ErrorCode.NOT_FOUND));
+      assert.strictEqual(store.getEntry(kept.uri).text, 'kept');
+      assert.strictEqual(notifications, 3, 'taking the entry back changed the list');
+      view.discard();
+      assert.strictEqual(notifications, 3, 'nothing left to take back, nothing to announce');
+    });
+
+    it('maxReadResultBytes refuses an entry whose resources/read result encodes past it', () => {
+      const text = '"'.repeat(1000);
+      const store = new ResourceStore(undefined, { maxReadResultBytes: 1500 });
+      assert.throws(
+        () => store.putText({ name: 'escaped', text }),
+        fsErrorMatcher(ErrorCode.TOO_LARGE, /once JSON-encoded/),
+      );
+      assert.deepStrictEqual(store.keys(), []);
+      // Measured as read, not as stored: the same bytes unescaped fit.
+      assert.ok(store.putText({ name: 'plain', text: 'x'.repeat(1000) }));
+      assert.ok(store.forCall().putText({ name: 'view', text: 'x'.repeat(1000) }));
+      assert.throws(
+        () => store.forCall().putText({ name: 'escaped', text }),
+        fsErrorMatcher(ErrorCode.TOO_LARGE),
+        'a call view keeps the limit',
+      );
+    });
   });
 
   describe('filesystem-mcp://file/{+path} (TC-FUNC-061–066)', () => {

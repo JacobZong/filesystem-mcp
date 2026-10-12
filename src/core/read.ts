@@ -172,9 +172,10 @@ const LF = 0x0a;
  * `handle.readLines` decodes the whole line first and can OOM on such a file.
  *
  * Yields lines from `startLine` onward, 1-indexed. Lines before `startLine` are
- * counted and discarded without accumulating, so an over-long line the caller
- * skipped past does not fail the read. Line endings match `readLines`: split on
- * `\n`, with a preceding `\r` stripped, so CRLF input decodes identically.
+ * counted and discarded without decoding or accumulating, so an over-long line
+ * the caller skipped past does not fail the read. Line endings match
+ * `readLines`: split on `\n`, with a preceding `\r` stripped, so CRLF input
+ * decodes identically.
  */
 async function* readLinesBounded(
   handle: FileHandle,
@@ -212,15 +213,14 @@ async function* readLinesBounded(
       // than buried in a for "increment" slot that re-runs indexOf.
       let nl = buffer.indexOf(LF, offset);
       while (nl !== -1) {
-        const segment = buffer.subarray(offset, nl);
-        const lineBytes = pendingBytes + segment.length;
         lineNumber++;
-        // Decode even when skipping: the decoder carries multi-byte
-        // continuation state into the first line the caller keeps.
-        const decoded = decoder.write(segment);
         if (lineNumber >= startLine) {
+          const segment = buffer.subarray(offset, nl);
+          const lineBytes = pendingBytes + segment.length;
           if (lineBytes > options.maxSize) throw tooLong(lineBytes);
-          yield (pending + decoded).replace(/\r$/, '');
+          // LF ends a character sequence as well as a line. Flush incomplete
+          // UTF-8 here instead of combining bytes from separate lines.
+          yield (pending + decoder.write(segment) + decoder.end()).replace(/\r$/, '');
         }
         pending = '';
         pendingBytes = 0;
@@ -230,9 +230,9 @@ async function* readLinesBounded(
 
       const rest = buffer.subarray(offset);
       pendingBytes += rest.length;
-      if (lineNumber + 1 < startLine) {
-        decoder.write(rest); // still skipping; drop the text, keep decoder state
-      } else {
+      // Skipped lines never reach the decoder, so it is fresh when the first
+      // kept line starts, whichever chunk that is in.
+      if (lineNumber + 1 >= startLine) {
         if (pendingBytes > options.maxSize) throw tooLong(pendingBytes);
         pending += decoder.write(rest);
       }

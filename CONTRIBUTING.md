@@ -77,6 +77,34 @@ Pass test runner flags after `--`, for example
 
 CI runs the same checks as separate steps on Ubuntu and Windows, and the Ubuntu leg runs `npm run test:coverage` instead of `npm test`. Please run `npm run check` before you open a pull request.
 
+## Isolated capability lab
+
+Run the repeatable bug-hunt scenarios with Node.js 24 or later:
+
+```bash
+npm ci
+node --test --test-timeout=60000 __tests__/sandbox.test.ts
+```
+
+The lab uses synthetic files in disposable temporary directories, an explicit
+`FS_ROOT_BOUNDARY`, a real stdio subprocess, and authenticated HTTP on a loopback
+ephemeral port. Clients, servers, and fixtures are cleaned up after each scenario.
+It checks all 13 tools through a file lifecycle, compares previews and responses
+with actual disk bytes, and exercises bounded concurrency and pagination.
+No personal files or existing project directories need to be shared with the server.
+
+Extend the fixtures and assertions in `__tests__/sandbox.test.ts` to experiment.
+Check both the human-readable `content` and the metadata (`_meta` for text tools,
+`structuredContent` otherwise); a successful batch can still contain failed paths.
+Use the focused `mutation-regressions.test.ts` and `outbound-regressions.test.ts`
+suites for confirmation races and oversized stdio responses.
+
+For manual experiments, point your client at a newly created disposable directory
+and pass that same absolute path as both the allowed directory and
+`--root-boundary`. Start with `--read-only` or mutation tools' `dryRun` options.
+These are application-level guards, not an OS sandbox: use a disposable container
+or VM without host-data mounts when experimenting with untrusted code.
+
 ## Project structure
 
 ```text

@@ -15,7 +15,7 @@ import { formatUnknownErrorMessage } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PathGuard } from '../core/path.ts';
-import { getMaxInboundMessageBytes } from '../core/util.ts';
+import { getMaxInboundMessageBytes, MAX_STDIO_REQUEST_ID_BYTES } from '../core/util.ts';
 import { createWatcherRegistry } from '../core/watcher-registry.ts';
 import type { FilesystemServerContext } from '../server.ts';
 import { createServer } from '../server.ts';
@@ -38,6 +38,28 @@ interface StdioListenState {
 // otherwise make the second read a compile-time constant.
 function isListenCancelled(state: StdioListenState): boolean {
   return state.cancelled;
+}
+
+/**
+ * The client-chosen string a request would have echoed into a frame of its
+ * own, when it encodes past the envelope reserve: the ID into its response, or
+ * `_meta.progressToken` into every progress notification. `undefined` when
+ * both fit, or for anything that is not a request.
+ */
+function oversizedEcho(message: unknown): 'request ID' | 'progress token' | undefined {
+  if (typeof message !== 'object' || message === null) return undefined;
+  const request = message as {
+    method?: unknown;
+    id?: unknown;
+    params?: { _meta?: { progressToken?: unknown } };
+  };
+  if (request.method === undefined || request.id === undefined) return undefined;
+  const tooLong = (value: unknown): boolean =>
+    typeof value === 'string' &&
+    Buffer.byteLength(JSON.stringify(value), 'utf8') > MAX_STDIO_REQUEST_ID_BYTES;
+  if (tooLong(request.id)) return 'request ID';
+  if (tooLong(request.params?._meta?.progressToken)) return 'progress token';
+  return undefined;
 }
 
 function cancelledRequestId(message: unknown): string | number | null {
@@ -277,6 +299,30 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
   }
   let gated = Promise.resolve();
   wire.onmessage = (message) => {
+    const oversized = oversizedEcho(message);
+    if (oversized !== undefined) {
+      // Never echo an oversized ID: it could overflow even a compact error. A
+      // short ID with an oversized progress token is answered under that ID.
+      // Reject before dispatch so no write, subscription or progress frame
+      // can take effect.
+      const shorter = oversized === 'request ID' ? 'ID' : 'token';
+      const id = oversized === 'progress token' && 'id' in message ? message.id : undefined;
+      void wire
+        .send({
+          jsonrpc: '2.0',
+          ...(id !== undefined ? { id } : {}),
+          error: {
+            code: ProtocolErrorCode.InvalidRequest,
+            message: `Stdio ${oversized} exceeds ${String(MAX_STDIO_REQUEST_ID_BYTES)} JSON-encoded bytes. Use a shorter ${shorter}.`,
+          },
+        })
+        .catch((error: unknown) => {
+          wire.onerror?.(
+            error instanceof Error ? error : new Error(formatUnknownErrorMessage(error)),
+          );
+        });
+      return;
+    }
     const cancelId = cancelledRequestId(message);
     if (cancelId !== null) {
       const state = listens.get(cancelId);

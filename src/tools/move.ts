@@ -319,6 +319,8 @@ async function runTransfers(
 
   // One entry's (resolved) source overlapping another's destination means the
   // two race and a file is lost: a swap [A->B, B->A] or a chain [B->C, A->B].
+  // Destination subtrees must also be disjoint: two recursive copies otherwise
+  // race over shared descendants even when their destination paths differ.
   // Refuse both sides so the survivors are independent and can run concurrently.
   // isPathInsideDirectory covers equality and containment, case-folded.
   const touches = (x: string, y: string): boolean =>
@@ -326,7 +328,11 @@ async function runTransfers(
   const overlapping = new Set<TransferPlan>();
   for (const [i, a] of ready.entries()) {
     for (const b of ready.slice(i + 1)) {
-      if (touches(a.resolvedSource, b.validDest) || touches(b.resolvedSource, a.validDest)) {
+      if (
+        touches(a.resolvedSource, b.validDest) ||
+        touches(b.resolvedSource, a.validDest) ||
+        touches(a.validDest, b.validDest)
+      ) {
         overlapping.add(a);
         overlapping.add(b);
       }

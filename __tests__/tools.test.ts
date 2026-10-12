@@ -1640,6 +1640,59 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(!tailText.includes('Continue:'), 'tail offers no continuation args');
   });
 
+  it('read continuations remain usable beyond line 100,000', async () => {
+    const file = await writeTestFile(tmpDir, 'long-lines.txt', `${'x\n'.repeat(100000)}last\n`);
+    const first = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: file, head: 100000 },
+    });
+    assert.notStrictEqual(first.isError, true);
+    const meta = first._meta as {
+      results: {
+        value: { continuation: { args: { path: string; startLine: number; endLine: number } } };
+      }[];
+    };
+    const continuation = meta.results[0]?.value.continuation;
+    assert.ok(continuation);
+    assert.strictEqual(continuation.args.startLine, 100001);
+    const next = await harness.client.callTool({ name: 'read', arguments: continuation.args });
+    assert.notStrictEqual(next.isError, true);
+    assert.strictEqual(firstTextBlock(next).text, 'last');
+  });
+
+  it('a continuation of a range ending at the endLine maximum stays within the schema', async () => {
+    const limit = 1024 * 1024;
+    await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+      // Twice the size limit, so the range read stops early with lines left.
+      const file = await writeTestFile(tmpDir, 'max-end.txt', `${'z'.repeat(99)}\n`.repeat(20000));
+      const first = await harness.client.callTool({
+        name: 'read',
+        arguments: { path: file, startLine: 1, endLine: 2147483647 },
+      });
+      assert.notStrictEqual(first.isError, true);
+      const meta = first._meta as {
+        results: {
+          value: { continuation?: { args: { path: string; startLine: number; endLine: number } } };
+        }[];
+      };
+      const continuation = meta.results[0]?.value.continuation;
+      assert.ok(continuation);
+      assert.strictEqual(continuation.args.endLine, 2147483647);
+      const next = await harness.client.callTool({ name: 'read', arguments: continuation.args });
+      assert.notStrictEqual(next.isError, true, firstTextBlock(next).text?.slice(0, 200));
+    });
+  });
+
+  it('an endLine past the maximum is refused once, not once per bound', async () => {
+    const file = await writeTestFile(tmpDir, 'past-max.txt', 'a\n');
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: file, startLine: 1, endLine: 2147483648 },
+    });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(firstTextBlock(result).text?.match(/endLine: Too big/g)?.length, 1);
+  });
+
   it('TC-FUNC-060: diff two files returns a unified diff', async () => {
     const a = join(tmpDir, 'diff_a.txt');
     const b = join(tmpDir, 'diff_b.txt');
