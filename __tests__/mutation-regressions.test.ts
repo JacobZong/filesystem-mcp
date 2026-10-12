@@ -261,7 +261,10 @@ describe('Mutation regressions', () => {
       assert.strictEqual(prompts, 2);
       assert.notStrictEqual(result.isError, true, JSON.stringify(result));
       assert.deepStrictEqual(meta.summary, { total: 2, succeeded: 1, failed: 1 });
-      assert.deepStrictEqual(meta.results[0], { path: d1, value: { deleted: true } });
+      assert.deepStrictEqual(meta.results[0], {
+        path: normalizePath(d1),
+        value: { deleted: true },
+      });
       assert.strictEqual(meta.results[1]?.error?.code, 'INVALID_INPUT');
       assert.match(meta.results[1]?.error?.message ?? '', /identity/);
       await assert.rejects(access(d1), { code: 'ENOENT' });
