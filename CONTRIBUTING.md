@@ -59,13 +59,13 @@ starting the server.
 
 ## Checks
 
-| Command                 | What it runs                                                      |
-| :---------------------- | :---------------------------------------------------------------- |
-| `npm run check`         | Everything CI runs: build, type checks, lint, format, knip, tests |
-| `npm run fix`           | Formats and lint-fixes, then runs the full check                  |
-| `npm run check:static`  | Static checks only, no tests                                      |
-| `npm test`              | Tests only, on Node's built-in test runner                        |
-| `npm run test:coverage` | Tests plus the src coverage floor CI enforces on Ubuntu           |
+| Command                 | What it runs                                                                                        |
+| :---------------------- | :-------------------------------------------------------------------------------------------------- |
+| `npm run check`         | Build, type checks, lint, format, knip and tests (CI's Ubuntu leg also enforces the coverage floor) |
+| `npm run fix`           | Formats and lint-fixes, then runs the full check                                                    |
+| `npm run check:static`  | Static checks only, no tests                                                                        |
+| `npm test`              | Tests only, on Node's built-in test runner                                                          |
+| `npm run test:coverage` | Tests plus the src coverage floor CI enforces on Ubuntu                                             |
 
 Pass test runner flags after `--`, for example
 `npm test -- --test-name-pattern="resources"`.
@@ -75,8 +75,7 @@ Pass test runner flags after `--`, for example
 
 `__tests__/contract.test.ts` snapshots the advertised MCP surface; when a contract change is intended, regenerate it with `node --test --test-update-snapshots __tests__/contract.test.ts` (no `FS_*` variables set) and review the snapshot diff in your PR.
 
-CI runs `npm run check` on Ubuntu and Windows. Please run it before you open a
-pull request.
+CI runs the same checks as separate steps on Ubuntu and Windows, and the Ubuntu leg runs `npm run test:coverage` instead of `npm test`. Please run `npm run check` before you open a pull request.
 
 ## Project structure
 
