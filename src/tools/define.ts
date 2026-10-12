@@ -89,6 +89,13 @@ export interface ToolCtx {
   readonly clientCapabilities?: ClientCapabilities | undefined;
   /** The SDK request context this call runs under; `pendingRoundTrip` binds minted state to it. */
   readonly serverCtx: ServerContext;
+  /**
+   * The wire this call is served on. Only `stdio` subjects a tool result to the
+   * SDK client's fixed 10 MiB `ReadBuffer`, so only there does `read` cap its
+   * outbound size (H5). `undefined` on HTTP and the in-memory test pair, which
+   * have no such frame limit.
+   */
+  readonly transport?: 'stdio' | 'http' | undefined;
 }
 
 interface ToolDeps {
@@ -97,6 +104,7 @@ interface ToolDeps {
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore;
   readonly era?: 'legacy' | 'modern';
+  readonly transport?: 'stdio' | 'http';
 }
 
 interface RunResult<T> {
@@ -143,7 +151,10 @@ export interface DefinedTool {
 
 function toToolCtx(
   ctx: ServerContext,
-  deps: Pick<ToolDeps, 'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era'>,
+  deps: Pick<
+    ToolDeps,
+    'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era' | 'transport'
+  >,
 ): Omit<ToolCtx, 'log' | 'onProgress'> {
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
@@ -186,6 +197,7 @@ function toToolCtx(
     requestState: ctx.mcpReq.requestState,
     serverCtx: ctx,
     ...(clientCapabilities ? { clientCapabilities } : {}),
+    ...(deps.transport ? { transport: deps.transport } : {}),
   };
 }
 

@@ -17,6 +17,7 @@ import {
   cleanupTestRoot,
   createStdioClient,
   createTestClientPair,
+  createTestHttpHarness,
   createTestRoot,
   createTestServer,
   firstTextBlock,
@@ -266,6 +267,24 @@ describe('High-severity bug-hunt regressions', () => {
       });
       assert.notStrictEqual(head.isError, true, 'connection survived; head still works');
       assert.ok(firstTextBlock(head).text?.includes('line'));
+    });
+
+    it('the same ~9.9 MiB read still succeeds over HTTP, which has no ReadBuffer frame limit', async () => {
+      // The stdio cap must not shrink what a direct HTTP read returns: HTTP
+      // streams the response with no 10 MiB framing. This guards against the
+      // cap being applied transport-blind.
+      const httpTmp = await createTestRoot();
+      const http = await createTestHttpHarness([httpTmp]);
+      try {
+        const big = join(httpTmp, 'big-over-http.txt');
+        await writeFile(big, 'line\n'.repeat(Math.floor((9.9 * 1024 * 1024) / 5)));
+        const result = await http.client.callTool({ name: 'read', arguments: { path: big } });
+        assert.notStrictEqual(result.isError, true, 'HTTP returns the large read, not TOO_LARGE');
+        assert.ok((firstTextBlock(result).text ?? '').startsWith('line\n'));
+      } finally {
+        await http.close();
+        await cleanupTestRoot(httpTmp);
+      }
     });
   });
 });

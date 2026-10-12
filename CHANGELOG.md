@@ -32,11 +32,12 @@ pathological inputs.
   data.** A swap (`A→B`, `B→A`) or a chain (`B→C`, `A→B`) ran its renames
   concurrently and lost a file; such a batch now fails closed per entry with a
   clear message, and independent entries still run in parallel.
-- **A `read` whose result would exceed the transport's message buffer now
-  returns a clear `TOO_LARGE` error** telling you to read a slice, instead of a
-  response that overflowed the client's 10 MiB buffer and dropped the whole
+- **Over stdio, a `read` whose result would exceed the client's 10 MiB message
+  buffer now returns a clear `TOO_LARGE` error** telling you to read a slice,
+  instead of a response that overflowed the buffer and dropped the whole
   connection. This could happen for a file under the size limit once its text
-  was JSON-encoded.
+  was JSON-encoded. The cap applies to stdio only — HTTP streams responses with
+  no such frame limit and keeps returning large reads.
 - **A file containing a single line larger than the regex input bound is now
   reported as skipped** rather than aborting the regex engine and returning a
   misleading "no files were searched" with a wrong reason. A later search in

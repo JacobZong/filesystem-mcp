@@ -64,6 +64,13 @@ export async function createServer(
     /** The protocol era this instance serves; omitted where the caller does not know. */
     era?: 'legacy' | 'modern';
     /**
+     * The wire this instance serves on. Only `stdio` carries the SDK client's
+     * fixed 10 MiB `ReadBuffer`, so only there does `read` cap its outbound
+     * result. HTTP streams responses with no frame limit, and the in-memory
+     * test pair serializes nothing, so both leave this unset and uncapped.
+     */
+    transport?: 'stdio' | 'http';
+    /**
      * The resolved HTTP credential, from `--api-key` or `FS_API_KEY`. Lives here
      * rather than on `ServerOptions` because that object is `PathGuard`'s
      * constructor argument and is exposed on its public `options` field — a
@@ -187,6 +194,7 @@ export async function createServer(
     ...(extraDeps?.watcherRegistry ? { watcherRegistry: extraDeps.watcherRegistry } : {}),
     ...(extraDeps?.notifier ? { notifier: extraDeps.notifier } : {}),
     ...(extraDeps?.era ? { era: extraDeps.era } : {}),
+    ...(extraDeps?.transport ? { transport: extraDeps.transport } : {}),
   };
 
   const resourceDisposable = registerResources(deps);
