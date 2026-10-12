@@ -34,7 +34,8 @@
     "check:static": "npm run build && npm run type-check:test && npm run lint && prettier --check . && knip",
     "fix": "npm run format && npm run lint:fix && npm run check",
     "check": "npm run check:static && npm run test",
-    "test": "node --test"
+    "test": "node --test --test-timeout=60000",
+    "test:coverage": "node --test --test-timeout=60000 --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-lines=92 --test-coverage-branches=85 --test-coverage-functions=91"
   },
   "keywords": [
     "mcp",

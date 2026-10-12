@@ -487,6 +487,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     // so the sample/line-count reads throw: the append is the commit point
     // and a reported failure would invite a retry that appends twice.
     if (process.platform === 'win32') return t.skip('POSIX-only 0222 append target');
+    if (process.getuid?.() === 0) return t.skip('root bypasses the 0222 mode bits');
 
     const file = join(tmpDir, 'append_write_only.txt');
     await writeFile(file, 'seed\n');

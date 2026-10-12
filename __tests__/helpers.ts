@@ -81,12 +81,20 @@ export async function waitForResourceUpdate(
   uri: string,
   timeoutMs = 5000,
 ): Promise<void> {
+  const started = Date.now();
   let arrived = false;
+  const others: string[] = [];
   client.setNotificationHandler('notifications/resources/updated', (n) => {
-    if ((n.params as { uri: string }).uri === uri) arrived = true;
+    const got = (n.params as { uri: string }).uri;
+    if (got === uri) arrived = true;
+    else others.push(got);
   });
   await waitFor(() => arrived, timeoutMs);
-  assert.ok(arrived, `no notifications/resources/updated for ${uri} within ${timeoutMs}ms`);
+  assert.ok(
+    arrived,
+    `no notifications/resources/updated for ${uri} within ${timeoutMs}ms ` +
+      `(waited ${String(Date.now() - started)}ms; other URIs notified: ${others.length ? others.join(', ') : 'none'})`,
+  );
 }
 
 /** An assert.rejects matcher: FsError with `code`; `message` is included (string) or matched (RegExp). */
