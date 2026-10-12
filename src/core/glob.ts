@@ -1,5 +1,5 @@
 import { glob as fsGlob, readFile as fsReadFile, lstat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, matchesGlob, relative, resolve, win32 } from 'node:path';
 
 import type { Ignore } from 'ignore';
 import ignore from 'ignore';
@@ -8,28 +8,132 @@ import { processInParallel } from './concurrency.ts';
 import { formatUnknownErrorMessage } from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
-import { isPathInsideDirectory, isWindowsDriveRelativePath, toPosixPath } from './path-utils.ts';
+import { isPathInsideDirectory, toPosixPath } from './path-utils.ts';
 import { MIB } from './util.ts';
 
-/** `..` bounded on both sides by a separator, a brace delimiter, or the pattern edge. */
-const TRAVERSAL_DOTDOT_RE = /(?:^|[/\\{,])\.\.(?=[/\\},]|$)/u;
+/**
+ * More brace alternatives than this is not a file filter. fs.glob's matcher
+ * dedupes its alternatives pairwise, synchronously: `{1..100000}` pins the
+ * event loop for most of a minute, where 1024 costs tens of milliseconds.
+ */
+const MAX_BRACE_ALTERNATIVES = 1024;
+
+// The range bodies fs.glob's brace expansion recognises, as it writes them.
+const NUMERIC_RANGE_RE = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/u;
+const ALPHA_RANGE_RE = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/u;
+
+/** The values a range body (`x..y`, `x..y..step`) expands to, or `undefined` past the cap. */
+function rangeValues(body: string): string[] | undefined {
+  const alpha = ALPHA_RANGE_RE.test(body);
+  const [from = '', to = '', step = '1'] = body.split('..');
+  const bound = (end: string): number => (alpha ? end.charCodeAt(0) : Number.parseInt(end, 10));
+  const start = bound(from);
+  const stop = bound(to);
+  const stride = Math.max(Math.abs(Number.parseInt(step, 10)), 1);
+  // A bound past Number.MAX_VALUE reads as Infinity, which the engine counts
+  // up from forever (to its own cap): refuse it like any other long range.
+  if (!Number.isFinite(start) || !Number.isFinite(stop)) return undefined;
+  if (Math.floor(Math.abs(stop - start) / stride) >= MAX_BRACE_ALTERNATIVES) return undefined;
+  const values: string[] = [];
+  const direction = stop < start ? -1 : 1;
+  for (let i = start; (stop - i) * direction >= 0; i += stride * direction) {
+    // The engine drops a `\` a letter range passes through (`{Z..a}`), and
+    // digits can never spell a root or a `..`, so their padding is moot.
+    const char = String.fromCharCode(i);
+    values.push(alpha ? (char === '\\' ? '' : char) : String(i));
+  }
+  return values;
+}
+
+interface BraceSet {
+  pre: string;
+  /** `undefined` when the set alone expands past the cap. */
+  alternatives: string[] | undefined;
+  post: string;
+}
+
+/**
+ * The leftmost `{…}` that fs.glob would expand: a comma list or a range.
+ * The expansion is textual, as fs.glob's is: a brace inside `[…]` still
+ * counts (unlike SensitiveMatcher's own glob dialect in sensitive.ts).
+ */
+function firstBraceSet(pattern: string): BraceSet | undefined {
+  const open: { at: number; commas: number[] }[] = [];
+  let first: { at: number; commas: number[]; close: number } | undefined;
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i];
+    if (char === '{') open.push({ at: i, commas: [] });
+    else if (char === ',') open.at(-1)?.commas.push(i);
+    else if (char === '}') {
+      const set = open.pop();
+      if (!set || (first && first.at < set.at)) continue;
+      const body = pattern.slice(set.at + 1, i);
+      if (set.commas.length > 0 || NUMERIC_RANGE_RE.test(body) || ALPHA_RANGE_RE.test(body)) {
+        first = { ...set, close: i };
+      }
+    }
+  }
+  if (!first) return undefined;
+  let alternatives: string[] | undefined;
+  if (first.commas.length > 0) {
+    alternatives = [];
+    let start = first.at + 1;
+    for (const end of [...first.commas, first.close]) {
+      alternatives.push(pattern.slice(start, end));
+      start = end + 1;
+    }
+  } else {
+    alternatives = rangeValues(pattern.slice(first.at + 1, first.close));
+  }
+  return { pre: pattern.slice(0, first.at), alternatives, post: pattern.slice(first.close + 1) };
+}
+
+/** Every brace alternative of `pattern`, or `undefined` past the cap. */
+function expandBraceSets(pattern: string, out: string[] = []): string[] | undefined {
+  const set = firstBraceSet(pattern);
+  if (!set) {
+    out.push(pattern);
+    return out.length > MAX_BRACE_ALTERNATIVES ? undefined : out;
+  }
+  if (!set.alternatives) return undefined;
+  for (const alternative of set.alternatives) {
+    if (!expandBraceSets(`${set.pre}${alternative}${set.post}`, out)) return undefined;
+  }
+  return out;
+}
+
+/**
+ * Whether the glob engine reads this brace-free segment as `..`. Asks the
+ * engine itself, so a single-character class (`[.]`, `[.-.]`) is caught as it
+ * would be walked. A segment with no `.` cannot: readdir never yields `..`, so
+ * only a literal reaches it.
+ */
+const isTraversalSegment = (segment: string): boolean =>
+  segment.includes('.') && matchesGlob('..', segment);
+
+/** An alternative that starts at a root: `/x`, `//host/share`, `C:/x`, `C:x`. */
+const isRooted = (alternative: string): boolean =>
+  win32.parse(alternative).root !== '' || (alternative.split('/')[0] ?? '').endsWith(':');
 
 export function isSafeGlobSyntax(pattern: string): boolean {
   if (!pattern || pattern.trim().length === 0) {
     return false;
   }
-  if (isAbsolute(pattern)) {
-    return false;
+  // The walk sees the pattern with `\` as `/` (normalizePattern), so check
+  // that form: `\etc\x` is `/etc/x` there, an absolute walk on any host.
+  // Brace sets can build a root or a `..` from parts (`{/etc,x}`, `..{,x}`,
+  // `.{Z..a}.`), so check every alternative, not the pattern as written.
+  // globEntries still drops any match outside its cwd: this check is what
+  // turns such a pattern into an error rather than a quietly narrower walk.
+  const alternatives = expandBraceSets(toPosixPath(pattern));
+  if (!alternatives) return false;
+  const segments = new Set<string>();
+  for (const alternative of alternatives) {
+    if (isRooted(alternative)) return false;
+    for (const segment of alternative.split('/')) segments.add(segment);
   }
-  if (isWindowsDriveRelativePath(pattern)) {
-    return false;
-  }
-  // Only a whole `..` — a path segment, or one alternative of a `{a,..}`
-  // brace set — can traverse. `..` inside a segment (`[...slug]`, `v1..2.md`,
-  // `[..]`) is a literal name or a character class, and PathGuard re-checks
-  // containment on every resolved entry regardless.
-  if (TRAVERSAL_DOTDOT_RE.test(pattern)) {
-    return false;
+  for (const segment of segments) {
+    if (isTraversalSegment(segment)) return false;
   }
   return true;
 }
@@ -407,6 +511,10 @@ function* processDirentMatch(
   onlyFiles: boolean,
 ): Generator<GlobEntry> {
   const absolutePath = resolve(cwd, match.parentPath, match.name);
+  // The walk's scope is its cwd, whatever the pattern spells: a `..` or a root
+  // the validator did not foresee must not reach a caller, where it would be
+  // read, rewritten, or counted and named as inaccessible.
+  if (!isPathInsideDirectory(cwd, absolutePath)) return;
 
   if (maxDepth !== undefined) {
     const rel = relative(cwd, absolutePath);
@@ -433,15 +541,14 @@ function createWalkFilter(
   gitignoreMatcher: GitignoreManager | null,
   maxDepth: number | undefined,
   signal: AbortSignal | undefined,
-): WalkFilter | undefined {
-  if (!skipIgnored && maxDepth === undefined && signal === undefined) return undefined;
-
+): WalkFilter {
   // fs.glob can hand the predicate a dirent whose parentPath is "." — the walk
   // root, not the process cwd — when it re-visits a directory under `**` whose
   // name also exists in the process cwd. Resolving against `cwd` names the
   // entry the dirent describes; `join` would resolve it against the process.
+  const absoluteOf = (match: GlobDirentLike): string => resolve(cwd, match.parentPath, match.name);
   const relativeOf = (match: GlobDirentLike): string =>
-    toPosixPath(relative(cwd, resolve(cwd, match.parentPath, match.name)));
+    toPosixPath(relative(cwd, absoluteOf(match)));
   // Every default exclude is a bare name that applies at any depth, so a Set
   // lookup per segment replaces compiling dozens of globs per entry.
   const excluded = (posixRel: string, isDir: boolean): boolean =>
@@ -454,6 +561,11 @@ function createWalkFilter(
       // fs.glob takes no signal and calls this for every entry it visits, so
       // pruning everything is the only way to stop a walk that yields nothing.
       if (signal?.aborted) return true;
+      // fs.glob asks before it queues a directory, so a walk that would
+      // climb to `../` or start at `/` stops at the edge instead of reading
+      // there. Not every climb asks (`**/..` does not): processDirentMatch is
+      // the gate, this only saves the walk.
+      if (!isPathInsideDirectory(cwd, absoluteOf(match))) return true;
       const posixRel = relativeOf(match);
       const isDir = match.isDirectory();
       if (excluded(posixRel, isDir)) return true;
@@ -472,7 +584,7 @@ async function* processGlobPattern(
   plan: NormalizedGlob,
   seen: Set<string>,
   onlyFiles: boolean,
-  filter: WalkFilter | undefined,
+  filter: WalkFilter,
   signal: AbortSignal | undefined,
 ): AsyncGenerator<GlobEntry> {
   const { cwd, maxDepth, suppressErrors } = plan;
@@ -480,7 +592,7 @@ async function* processGlobPattern(
   try {
     iterable = fsGlob(pattern, {
       cwd,
-      ...(filter ? { exclude: filter.prune } : {}),
+      exclude: filter.prune,
       withFileTypes: true,
     }) as AsyncIterable<GlobDirentLike>;
   } catch (error) {
@@ -494,7 +606,7 @@ async function* processGlobPattern(
       // A function `exclude` only prunes descent in fs.glob — it still yields
       // the rejected dirent itself, and any rejected entry below the top level.
       // Re-apply the ignore rules (not the depth bound) to drop those.
-      if (filter?.isExcluded(match)) continue;
+      if (filter.isExcluded(match)) continue;
       yield* processDirentMatch(match, cwd, maxDepth, seen, onlyFiles);
     }
   } catch (error) {

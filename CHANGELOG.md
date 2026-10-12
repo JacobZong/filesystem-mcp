@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **A glob `pattern` can no longer reach outside the `path` it searches
+  ([#68](https://github.com/j0hanz/filesystem-mcp/issues/68)).** `find_files`,
+  `search_text` and `replace_text` rejected `../*.txt` but not a pattern that
+  builds `..` or a root from parts: brace sets (`..{,x}/*.txt`,
+  `.{.,}/*.txt`, `{/etc,x}/*`), one-character classes (`[.][.]/*.txt`), letter
+  ranges (`.{Z..a}./*.txt`), or a leading backslash on Linux and macOS
+  (`\etc\*`). Below an allowed root, `replace_text` rewrote files in the
+  parent folder; at an allowed root, the names of entries above it leaked
+  through skip counts and per-file errors. The pattern check now looks at
+  every brace alternative the way the glob engine reads it, and the walk
+  itself drops any match outside its `path`, so a pattern the check does not
+  foresee narrows the search instead of widening it. A drive-rooted
+  alternative (`C:/x`, `{C:,x}/y`) is now refused on every host, as `C:x`
+  already was.
+- **A glob with a huge brace range no longer freezes the server.** The glob
+  engine expands `{1..100000}` and compares the alternatives pairwise on the
+  event loop, which blocked every other request for most of a minute. A
+  pattern that expands to more than 1024 alternatives is now refused.
+
 ## [2.7.6] - 2026-10-12
 
 A security and reliability release. It closes a symlink-swap sandbox escape
