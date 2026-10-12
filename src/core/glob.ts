@@ -18,6 +18,9 @@ import { MIB } from './util.ts';
  */
 export const MAX_BRACE_ALTERNATIVES = 1024;
 
+/** Bound synchronous glob compilation when checking candidate traversal segments. */
+export const MAX_DOTDOT_CHECK_CHARS = 4096;
+
 // The range bodies fs.glob's brace expansion recognises, as it writes them.
 const NUMERIC_RANGE_RE = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/u;
 const ALPHA_RANGE_RE = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/u;
@@ -150,7 +153,12 @@ export function isSafeGlobSyntax(pattern: string): boolean {
     if (isRooted(alternative)) return false;
     for (const segment of alternative.split('/')) segments.add(segment);
   }
+  let dotdotCheckChars = 0;
   for (const segment of segments) {
+    if (segment.includes('.') && DOTDOT_SPELLING_RE.test(segment)) {
+      dotdotCheckChars += segment.length;
+      if (dotdotCheckChars > MAX_DOTDOT_CHECK_CHARS) return false;
+    }
     if (isTraversalSegment(segment)) return false;
   }
   return true;

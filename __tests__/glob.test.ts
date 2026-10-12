@@ -175,6 +175,11 @@ describe('globEntries', () => {
       assert.ok(performance.now() - started < 1000, 'validation must not pin the event loop');
     });
 
+    it('bounds traversal checks for long dotted segments across brace expansions', () => {
+      const pattern = `${'.'.repeat(900)}${'{.,[.]}'.repeat(10)}`;
+      assert.strictEqual(isSafeGlobSyntax(pattern), false);
+    });
+
     it('refuses a pattern with more brace alternatives than it will expand', () => {
       assert.strictEqual(isSafeGlobSyntax('{1..1024}.txt'), true);
       for (const bad of [
