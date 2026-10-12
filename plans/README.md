@@ -82,7 +82,7 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 | 061  | Suite green as root; stdio lease tests run concurrently         | P3       | S      | 056        | PARTIAL (step 1 only; blocked on 056; branch `advisor/061-suite-root-safe-and-faster-stdio`, tip `6c0ebe6c`)                              |
 | 062  | CI adds a macOS leg and a Node 26 leg (non-blocking)            | P2       | S      | 055, 058   | TODO                                                                                                                                      |
 | 063  | Release refuses a commit without green CI; atomic push          | P1       | S      | 055 (soft) | DONE (branch `advisor/063-release-requires-green-ci`, tip `0d0871c3`; PR #64)                                                             |
-| 064  | `main` ruleset, agent-PR CI without approval, CodeQL (settings) | P1       | S      | 055, 063   | DONE (ruleset `24928791`, deploy-key bypass; release push verified at next release) |
+| 064  | `main` ruleset, agent-PR CI without approval, CodeQL (settings) | P1       | S      | 055, 063   | DONE (ruleset `24928791`, deploy-key bypass; release push verified at next release)                                                       |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
