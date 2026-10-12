@@ -19,7 +19,7 @@ import {
 } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
-import { withAbort } from './concurrency.ts';
+import { withAbort, withPathWriteLock } from './concurrency.ts';
 import {
   ErrorCode,
   formatUnknownErrorMessage,
@@ -109,6 +109,21 @@ export class GuardedFileSystem {
 
   constructor(pathGuard: PathGuard) {
     this.pathGuard = pathGuard;
+  }
+
+  /**
+   * Serialize a read-modify-write against the resolved write target so two
+   * calls (or two batch entries) touching one file cannot both read the same
+   * base and silently clobber each other (the last atomic rename wins). The key
+   * is the resolved target `writeFile` would compute — every spelling of one
+   * file, including through a symlinked parent, collapses to one chain, while
+   * distinct files stay fully parallel. `writeFile`/`appendFile` themselves do
+   * NOT take the lock, so `fn` may call them without re-entering it. A thrown
+   * `fn` (ambiguous edit, no match, too large) still releases the chain.
+   */
+  async lockForWrite<T>(filePath: string, fn: (resolvedTarget: string) => Promise<T>): Promise<T> {
+    const key = await resolveForWrite(this.pathGuard, filePath);
+    return withPathWriteLock(key, () => fn(key));
   }
 
   async stat(

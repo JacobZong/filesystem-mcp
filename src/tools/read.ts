@@ -22,6 +22,7 @@ import {
   DEFAULT_CONTINUATION_CHUNK_SIZE,
   DEFAULT_SEARCH_TIMEOUT_MS,
   getMaxTextFileSize,
+  MAX_OUTBOUND_RESULT_BYTES,
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
 } from '../core/util.ts';
@@ -430,6 +431,23 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       const { content: _content, mediaData: _mediaData, ...value } = result.value;
       return { ...result, value };
     });
+
+    // Refuse a result whose JSON-encoded size would blow the transport's fixed
+    // 10 MiB message buffer and drop the connection (H5). Measure the assembled
+    // payload — the text block AND the resource/media content blocks AND the
+    // structured half — so JSON escaping and image/audio base64 are counted
+    // exactly. One guard covers single, image/audio, and batched reads. The
+    // caller reads a slice instead; head/tail/ranges produce small results and
+    // never trip this.
+    const encodedBytes =
+      Buffer.byteLength(JSON.stringify([{ type: 'text', text }, ...resources]), 'utf8') +
+      Buffer.byteLength(JSON.stringify({ results: structuredResults, summary }), 'utf8');
+    if (encodedBytes > MAX_OUTBOUND_RESULT_BYTES) {
+      throw new FsError(
+        ErrorCode.TOO_LARGE,
+        `Read result too large to return (${String(encodedBytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte transport limit). Read a slice with head, tail, or startLine/endLine.`,
+      );
+    }
 
     return {
       structured: { results: structuredResults, summary },

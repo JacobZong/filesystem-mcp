@@ -79,6 +79,14 @@ interface TransferPlan {
    * — see {@link validateTransferSource}.
    */
   opSource: string;
+  /**
+   * The symlink-resolved source, used only for cross-entry overlap detection:
+   * one entry's source must not be another entry's destination, or the two race
+   * and a file is destroyed (a swap or a chain). opSource is the link path for a
+   * move, which is the wrong identity to compare, so the resolved source is kept
+   * separately.
+   */
+  resolvedSource: string;
   validDest: string;
   /**
    * A rename that only changes the destination's case. Move must perform it —
@@ -165,7 +173,15 @@ async function planTransfer(
 
   return {
     status: 'plan',
-    plan: { pair, opSource, validDest, isCaseOnlyRename, destExistedOriginally, pending },
+    plan: {
+      pair,
+      opSource,
+      resolvedSource,
+      validDest,
+      isCaseOnlyRename,
+      destExistedOriginally,
+      pending,
+    },
   };
 }
 
@@ -307,7 +323,51 @@ async function runTransfers(
     ready.push(candidate);
   }
 
-  const pendingSorted = ready
+  // Cross-entry source/destination overlap: one entry's (resolved) source being
+  // another entry's destination means the two race — the destination write
+  // clobbers or vacates a path a sibling still needs — and a file is lost. A
+  // swap [A->B, B->A] is such a cycle; a chain [B->C, A->B] is a path. Refuse
+  // every entry that participates in an overlap (both sides), so no refused
+  // entry mutates and the survivors are provably independent and run
+  // concurrently. isPathInsideDirectory treats equal and dir-contains as true
+  // and case-folds, so checking both directions covers equality plus either
+  // containment (moving a directory whose subtree holds another entry's path).
+  const overlapping = new Set<number>();
+  for (let i = 0; i < ready.length; i++) {
+    for (let j = i + 1; j < ready.length; j++) {
+      const a = ready[i];
+      const b = ready[j];
+      if (!a || !b) continue;
+      const conflict =
+        isPathInsideDirectory(a.resolvedSource, b.validDest) ||
+        isPathInsideDirectory(b.validDest, a.resolvedSource) ||
+        isPathInsideDirectory(b.resolvedSource, a.validDest) ||
+        isPathInsideDirectory(a.validDest, b.resolvedSource);
+      if (conflict) {
+        overlapping.add(i);
+        overlapping.add(j);
+      }
+    }
+  }
+  const safe: TransferPlan[] = [];
+  for (const [index, plan] of ready.entries()) {
+    if (!overlapping.has(index)) {
+      safe.push(plan);
+      continue;
+    }
+    failures.push(
+      pairFailure(
+        plan.pair,
+        new FsError(
+          ErrorCode.INVALID_INPUT,
+          `${VERB[op]} cancelled: "${plan.pair.source}" or "${plan.pair.destination}" overlaps another entry's source or destination in this batch. Issue dependent moves one at a time.`,
+          plan.pair.source,
+        ),
+      ),
+    );
+  }
+
+  const pendingSorted = safe
     .filter((p) => p.pending)
     .map((p) => p.validDest)
     .sort();
@@ -330,14 +390,14 @@ async function runTransfers(
     if (round !== undefined) return round;
   }
 
-  const total = ready.length;
+  const total = safe.length;
   let completed = 0;
   const tick = (): void => {
     completed += 1;
     ctx.onProgress({ current: completed, total });
   };
   const { results: execResults, errors: execErrors } = await processInParallel(
-    ready,
+    safe,
     async (readyPlan) => {
       try {
         return await executeTransfer(op, readyPlan, ctx, pendingSorted);
@@ -351,7 +411,7 @@ async function runTransfers(
 
   for (const { error, index } of execErrors) {
     rethrowIfAborted(error);
-    const failed = ready[index];
+    const failed = safe[index];
     if (failed) failures.push(pairFailure(failed.pair, error));
   }
 

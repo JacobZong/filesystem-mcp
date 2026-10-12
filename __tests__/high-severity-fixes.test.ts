@@ -1,0 +1,271 @@
+// Regression tests for the six high-severity bugs found in the 2026-10 bug
+// hunt and fixed on this branch:
+//   H1 regex scans are interruptible and bounded (no server hang)
+//   H2 concurrent / aliased writes do not silently lose data
+//   H3 a move batch whose entries overlap is refused, not partially destroyed
+//   H5 a read whose encoded result would blow the stdio buffer errors cleanly
+//   H6 a single over-long line is reported skipped, not a false empty / OOM
+import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { after, before, describe, it } from 'node:test';
+
+import { searchContent } from '../src/core/search.ts';
+import { RE2_MAX_INPUT_BYTES } from '../src/core/search.ts';
+import type { FilesystemServerContext } from '../src/server.ts';
+import {
+  cleanupTestRoot,
+  createStdioClient,
+  createTestClientPair,
+  createTestRoot,
+  createTestServer,
+  firstTextBlock,
+  trySymlink,
+  writeTestFile,
+} from './helpers.ts';
+
+describe('High-severity bug-hunt regressions', () => {
+  describe('H2: concurrent and aliased writes keep every change', () => {
+    let tmpDir: string;
+    let pair: Awaited<ReturnType<typeof createTestClientPair>>;
+
+    before(async () => {
+      tmpDir = await createTestRoot();
+      pair = await createTestClientPair([tmpDir]);
+    });
+    after(async () => {
+      await pair.close();
+      await cleanupTestRoot(tmpDir);
+    });
+
+    it('30 concurrent edit calls on one file all apply (no lost updates)', async () => {
+      const file = join(tmpDir, 'counters.txt');
+      const n = 30;
+      await writeFile(
+        file,
+        Array.from({ length: n }, (_, i) => `slot ${String(i)} = 0`).join('\n') + '\n',
+      );
+      const calls = Array.from({ length: n }, (_, i) =>
+        pair.client.callTool({
+          name: 'edit',
+          arguments: {
+            path: file,
+            edits: [{ oldText: `slot ${String(i)} = 0`, newText: `slot ${String(i)} = 1` }],
+          },
+        }),
+      );
+      const results = await Promise.all(calls);
+      assert.ok(
+        results.every((r) => r.isError !== true),
+        'every concurrent edit should succeed',
+      );
+      const after = await readFile(file, 'utf-8');
+      for (let i = 0; i < n; i++) {
+        assert.ok(after.includes(`slot ${String(i)} = 1`), `slot ${String(i)} must be updated`);
+      }
+      assert.ok(!after.includes('= 0'), 'no slot should keep its original value');
+    });
+
+    it('a batch naming one file through a symlinked parent applies both entries', async (t) => {
+      const file = join(tmpDir, 'aliased.txt');
+      await writeFile(file, 'AAA\nBBB\n');
+      const alias = join(tmpDir, 'aliasdir');
+      if (!(await trySymlink(tmpDir, alias, () => t.skip('symlinks not permitted')))) return;
+
+      const result = await pair.client.callTool({
+        name: 'edit',
+        arguments: {
+          files: [
+            { path: file, edits: [{ oldText: 'AAA', newText: 'XXX' }] },
+            { path: join(alias, 'aliased.txt'), edits: [{ oldText: 'BBB', newText: 'YYY' }] },
+          ],
+        },
+      });
+      assert.notStrictEqual(result.isError, true);
+      const after = await readFile(file, 'utf-8');
+      assert.ok(after.includes('XXX') && after.includes('YYY'), `both edits must land: ${after}`);
+    });
+  });
+
+  describe('H3: an overlapping move batch is refused with no data loss', () => {
+    let tmpDir: string;
+    let pair: Awaited<ReturnType<typeof createTestClientPair>>;
+
+    before(async () => {
+      tmpDir = await createTestRoot();
+      pair = await createTestClientPair([tmpDir]);
+    });
+    after(async () => {
+      await pair.close();
+      await cleanupTestRoot(tmpDir);
+    });
+
+    it('a swap [A->B, B->A] is refused and both files survive', async () => {
+      const a = join(tmpDir, 'swapA');
+      const b = join(tmpDir, 'swapB');
+      await writeFile(a, 'AAA\n');
+      await writeFile(b, 'BBB\n');
+      const result = await pair.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [
+            { source: a, destination: b },
+            { source: b, destination: a },
+          ],
+        },
+      });
+      assert.strictEqual(result.isError, true, 'a doomed swap is a total failure');
+      assert.strictEqual(await readFile(a, 'utf-8'), 'AAA\n');
+      assert.strictEqual(await readFile(b, 'utf-8'), 'BBB\n');
+    });
+
+    it('a chain [B->C, A->B] is refused and no file is destroyed', async () => {
+      const a = join(tmpDir, 'chainA');
+      const b = join(tmpDir, 'chainB');
+      const c = join(tmpDir, 'chainC');
+      await writeFile(a, 'AAA\n');
+      await writeFile(b, 'BBB\n');
+      const result = await pair.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [
+            { source: b, destination: c },
+            { source: a, destination: b },
+          ],
+        },
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(await readFile(a, 'utf-8'), 'AAA\n');
+      assert.strictEqual(await readFile(b, 'utf-8'), 'BBB\n');
+      await assert.rejects(readFile(c, 'utf-8'), 'C must never be created');
+    });
+
+    it('independent moves in one batch still run concurrently', async () => {
+      const x = join(tmpDir, 'indX');
+      const y = join(tmpDir, 'indY');
+      await writeFile(x, 'X\n');
+      await writeFile(y, 'Y\n');
+      const result = await pair.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [
+            { source: x, destination: join(tmpDir, 'indX2') },
+            { source: y, destination: join(tmpDir, 'indY2') },
+          ],
+        },
+      });
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(await readFile(join(tmpDir, 'indX2'), 'utf-8'), 'X\n');
+      assert.strictEqual(await readFile(join(tmpDir, 'indY2'), 'utf-8'), 'Y\n');
+    });
+  });
+
+  describe('H1: edit ignoreWhitespace is bounded on a dense match', () => {
+    let tmpDir: string;
+    let pair: Awaited<ReturnType<typeof createTestClientPair>>;
+
+    before(async () => {
+      tmpDir = await createTestRoot();
+      pair = await createTestClientPair([tmpDir]);
+    });
+    after(async () => {
+      await pair.close();
+      await cleanupTestRoot(tmpDir);
+    });
+
+    it(
+      'a short oldText matching thousands of times fails ambiguous quickly',
+      { timeout: 5000 },
+      async () => {
+        const file = join(tmpDir, 'dense.txt');
+        await writeFile(file, 'a b\n'.repeat(20_000));
+        const result = await pair.client.callTool({
+          name: 'edit',
+          arguments: {
+            path: file,
+            ignoreWhitespace: true,
+            edits: [{ oldText: 'a b', newText: 'X' }],
+          },
+        });
+        assert.strictEqual(result.isError, true, 'an ambiguous match is an error');
+        assert.match(firstTextBlock(result).text ?? '', /matches/i);
+        // Nothing should have been written.
+        assert.strictEqual(await readFile(file, 'utf-8'), 'a b\n'.repeat(20_000));
+      },
+    );
+  });
+
+  describe('H1 + H6: core search is interruptible and guards over-long lines', () => {
+    let tmpDir: string;
+    let ctx: FilesystemServerContext;
+
+    before(async () => {
+      tmpDir = await createTestRoot();
+      ctx = await createTestServer([tmpDir]);
+    });
+    after(async () => {
+      ctx.disposeRuntimeState();
+      await ctx.mcp.close();
+      await cleanupTestRoot(tmpDir);
+    });
+
+    it('H6: a line past the RE2 input bound is reported skippedTooLarge, not a false empty, and later searches still work', async () => {
+      const dir = join(tmpDir, 'oversized');
+      const bigLine = 'a'.repeat(RE2_MAX_INPUT_BYTES + 1024); // one line over the bound
+      await writeTestFile(dir, 'huge.txt', bigLine);
+      await writeTestFile(dir, 'ok.txt', 'hello NEEDLE world\n');
+
+      const outcome = await searchContent(dir, 'NEEDLE', { isRegex: false }, ctx.pathGuard);
+      assert.strictEqual(outcome.summary.skippedTooLarge, 1, 'the huge-line file is skipped');
+      assert.strictEqual(outcome.matches.length, 1, 'the ordinary file is still searched');
+
+      // The wasm module is still alive for a second search in the same process.
+      const again = await searchContent(dir, 'NEEDLE', { isRegex: false }, ctx.pathGuard);
+      assert.strictEqual(again.matches.length, 1);
+    });
+
+    it('H1: an aborted search over a dense-match line resolves as timeout, not a hang', async () => {
+      const dir = join(tmpDir, 'dense-line');
+      await writeTestFile(dir, 'line.txt', 'a'.repeat(200_000) + '\n');
+      const signal = AbortSignal.abort(new Error('deadline'));
+      const outcome = await searchContent(dir, 'a', { isRegex: false, signal }, ctx.pathGuard);
+      assert.strictEqual(outcome.summary.stoppedReason, 'timeout');
+      assert.ok(outcome.summary.truncated, 'an aborted scan is incomplete');
+    });
+  });
+
+  describe('H5: a read whose encoded result exceeds the transport buffer errors cleanly', () => {
+    let tmpDir: string;
+    let harness: Awaited<ReturnType<typeof createStdioClient>>;
+
+    before(async () => {
+      tmpDir = await createTestRoot();
+      harness = await createStdioClient(tmpDir);
+    });
+    after(async () => {
+      await harness.close();
+      await cleanupTestRoot(tmpDir);
+    });
+
+    it('a ~9.9 MiB full read fails TOO_LARGE and the connection survives', async () => {
+      // Under the 10 MiB file-size limit (full read allowed), but every "\n"
+      // doubles under JSON escaping, so the serialized result clears the SDK
+      // client's 10 MiB ReadBuffer. Without the outbound cap this drops the
+      // session; with it, a small TOO_LARGE comes back and head still works.
+      const big = join(tmpDir, 'too-big-to-return.txt');
+      await writeFile(big, 'line\n'.repeat(Math.floor((9.9 * 1024 * 1024) / 5)));
+
+      const full = await harness.client.callTool({ name: 'read', arguments: { path: big } });
+      assert.strictEqual(full.isError, true, JSON.stringify(full.content).slice(0, 200));
+      assert.match(firstTextBlock(full).text ?? '', /TOO_LARGE/);
+      assert.match(firstTextBlock(full).text ?? '', /head|tail|startLine/);
+
+      const head = await harness.client.callTool({
+        name: 'read',
+        arguments: { path: big, head: 10 },
+      });
+      assert.notStrictEqual(head.isError, true, 'connection survived; head still works');
+      assert.ok(firstTextBlock(head).text?.includes('line'));
+    });
+  });
+});

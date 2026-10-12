@@ -3,6 +3,42 @@ import { PARALLEL_CONCURRENCY } from './util.ts';
 
 export type StoppedReason = 'maxResults' | 'maxFiles' | 'timeout';
 
+// ─── Per-path write lock ──────────────────────────────────────────────────────
+
+/**
+ * One promise chain per write-target key, so a read-modify-write on a file
+ * cannot interleave with another on the same file. A tool whose batch names one
+ * file twice (through a symlinked parent, say) or two concurrent tool calls on
+ * one file would otherwise each read the same base, apply their own edit, and
+ * atomically rename over each other — the last writer wins and the rest are
+ * silently lost while every call reports success. Keyed by the RESOLVED write
+ * target (see GuardedFileSystem.lockForWrite), so every spelling of one file
+ * collapses to a single chain; distinct files keep full parallelism.
+ */
+const pathWriteChains = new Map<string, Promise<unknown>>();
+
+/**
+ * Run `fn` as the next link in `key`'s write chain. Mirrors
+ * PathGuard.runExclusive: chain with `.then(fn, fn)` so the next waiter runs
+ * however the previous settled, store a non-rejecting tail in the map so a
+ * rejected `fn` cannot poison the next waiter, and drop the entry once this is
+ * the last link so the map does not grow one entry per file ever written.
+ */
+export async function withPathWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = pathWriteChains.get(key) ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  pathWriteChains.set(key, tail);
+  try {
+    return await run;
+  } finally {
+    if (pathWriteChains.get(key) === tail) pathWriteChains.delete(key);
+  }
+}
+
 /** The one precedence both scans share: the result cap wins over an abort that fired the same iteration. */
 export function resolveStopReason(
   hitCap: boolean,
