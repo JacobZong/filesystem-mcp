@@ -3,7 +3,7 @@ import type { ContentBlock } from '@modelcontextprotocol/server';
 import { randomUUID } from 'node:crypto';
 
 import { ErrorCode, FsError } from './errors.ts';
-import { MIB } from './util.ts';
+import { jsonBytesOver, MIB } from './util.ts';
 
 // ─── TTL + LRU map ───────────────────────────────────────────────────────────
 
@@ -64,11 +64,13 @@ class TtlLru<V> {
     }
   }
 
-  delete(key: string): void {
+  /** True when `key` was present. */
+  delete(key: string): boolean {
     const entry = this.#byKey.get(key);
-    if (!entry) return;
+    if (!entry) return false;
     this.#weight -= entry.weight;
     this.#byKey.delete(key);
+    return true;
   }
 
   /** Live keys, least recently used first. Prunes expired entries first. */
@@ -100,16 +102,62 @@ const MAX_TOTAL_BYTES = 25 * MIB;
 const MAX_ENTRY_BYTES = 10 * MIB;
 const ENTRY_TTL_MS = 60 * 1000;
 
+/** The `resources/read` result that serves `entry`, and what the store measures it by. */
+export function entryReadResult(entry: ResourceEntry): {
+  contents: [{ uri: string; mimeType: string; text: string }];
+} {
+  return { contents: [{ uri: entry.uri, mimeType: entry.mimeType, text: entry.text }] };
+}
+
+interface ResourceStoreOptions {
+  /**
+   * Refuse an entry whose `resources/read` result encodes past this many
+   * bytes. stdio sets it: the entry is re-encoded there as one JSON string,
+   * where escaping can outgrow the bytes stored, and a link the connection
+   * can never carry back is worth no more than an entry over the cap.
+   */
+  readonly maxReadResultBytes?: number;
+}
+
 export class ResourceStore {
-  readonly #entries = new TtlLru<ResourceEntry>({
+  // Not readonly: a call view (`forCall`) shares its store's entries.
+  #entries = new TtlLru<ResourceEntry>({
     maxEntries: MAX_ENTRIES,
     maxWeight: MAX_TOTAL_BYTES,
     ttlMs: ENTRY_TTL_MS,
   });
   readonly #onListChanged: (() => void) | undefined;
+  readonly #options: ResourceStoreOptions;
+  /** A call view's own puts; `undefined` on the store itself. */
+  #putUris: string[] | undefined;
 
-  constructor(onListChanged?: () => void) {
+  constructor(onListChanged?: () => void, options: ResourceStoreOptions = {}) {
     this.#onListChanged = onListChanged;
+    this.#options = options;
+  }
+
+  /**
+   * A view sharing this store's entries that also remembers the URIs put
+   * through it, so {@link discard} can take one tool call's entries back.
+   */
+  forCall(): ResourceStore {
+    const view = new ResourceStore(this.#onListChanged, this.#options);
+    view.#entries = this.#entries;
+    view.#putUris = [];
+    return view;
+  }
+
+  /**
+   * Drop what was put through this view and is still cached. The put already
+   * announced the list change (and may have pruned or evicted other entries),
+   * so taking the entry back is announced too.
+   */
+  discard(): void {
+    let dropped = false;
+    for (const uri of this.#putUris?.splice(0) ?? []) {
+      if (this.#entries.delete(uri)) dropped = true;
+    }
+    if (dropped) this.#onListChanged?.();
   }
 
   getEntry(uri: string): ResourceEntry {
@@ -127,8 +175,7 @@ export class ResourceStore {
   putText(params: { name: string; mimeType?: string; text: string }): ResourceEntry {
     const entryBytes = Buffer.byteLength(params.text, 'utf8');
     if (entryBytes > MAX_ENTRY_BYTES) {
-      if (this.#entries.prune()) this.#onListChanged?.();
-      throw new FsError(ErrorCode.TOO_LARGE, `Resource too large to cache (${entryBytes} bytes).`);
+      throw this.#refuse(`Resource too large to cache (${entryBytes} bytes).`);
     }
     const now = Date.now();
     const entry: ResourceEntry = {
@@ -140,9 +187,23 @@ export class ResourceStore {
       expiresAt: new Date(now + ENTRY_TTL_MS).toISOString(),
       text: params.text,
     };
+    const { maxReadResultBytes } = this.#options;
+    const readBytes =
+      maxReadResultBytes === undefined
+        ? undefined
+        : jsonBytesOver(entryReadResult(entry), maxReadResultBytes);
+    if (readBytes !== undefined) {
+      throw this.#refuse(`Resource too large to read back (${readBytes} bytes once JSON-encoded).`);
+    }
     this.#entries.set(entry.uri, entry, entryBytes);
+    this.#putUris?.push(entry.uri);
     this.#onListChanged?.();
     return entry;
+  }
+
+  #refuse(message: string): FsError {
+    if (this.#entries.prune()) this.#onListChanged?.();
+    return new FsError(ErrorCode.TOO_LARGE, message);
   }
 
   /**
@@ -237,10 +298,29 @@ const MAX_SNAPSHOTS = 32;
  * the way `ResourceStore` does.
  */
 export class PageSnapshotStore {
-  readonly #byId = new TtlLru<PageSnapshot & { queryKey: string }>({
+  // Not readonly: a call view (`forCall`) shares its store's snapshots.
+  #byId = new TtlLru<PageSnapshot & { queryKey: string }>({
     maxEntries: MAX_SNAPSHOTS,
     ttlMs: ENTRY_TTL_MS,
   });
+  /** A call view's own snapshots; `undefined` on the store itself. */
+  #createdIds: string[] | undefined;
+
+  /**
+   * A view sharing this store's snapshots that also remembers the ones
+   * created through it, so {@link discard} can take one tool call's back.
+   */
+  forCall(): PageSnapshotStore {
+    const view = new PageSnapshotStore();
+    view.#byId = this.#byId;
+    view.#createdIds = [];
+    return view;
+  }
+
+  /** Drop the snapshots created through this view. */
+  discard(): void {
+    for (const id of this.#createdIds?.splice(0) ?? []) this.#byId.delete(id);
+  }
 
   create(params: { queryKey: string; items: readonly unknown[]; metadata?: unknown }): string {
     const snapshotId = randomUUID();
@@ -249,6 +329,7 @@ export class PageSnapshotStore {
       items: params.items,
       metadata: params.metadata,
     });
+    this.#createdIds?.push(snapshotId);
     return snapshotId;
   }
 

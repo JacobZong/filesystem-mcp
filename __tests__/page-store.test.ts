@@ -123,6 +123,23 @@ describe('PageSnapshotStore', () => {
     assert.strictEqual(result.nextCursor, undefined);
   });
 
+  it("a call view's discard drops the snapshots created through it, and only those", () => {
+    const store = new PageSnapshotStore();
+    const queryKey = '{"method":"list"}';
+    const kept = store.create({ queryKey, items: ['kept'] });
+    const view = store.forCall();
+    const viewed = view.create({ queryKey, items: ['viewed'] });
+    // The view shares the store's snapshots both ways.
+    assert.deepStrictEqual(store.read(viewed, queryKey).items, ['viewed']);
+    assert.deepStrictEqual(view.read(kept, queryKey).items, ['kept']);
+
+    view.discard();
+    assert.throws(() => store.read(viewed, queryKey), fsErrorMatcher(ErrorCode.INVALID_INPUT));
+    assert.deepStrictEqual(store.read(kept, queryKey).items, ['kept']);
+    store.discard(); // the store itself recorded nothing
+    assert.deepStrictEqual(store.read(kept, queryKey).items, ['kept']);
+  });
+
   it('a TOO_LARGE from externalize drops the resource but keeps the page', async () => {
     const store = new PageSnapshotStore();
     const base = {

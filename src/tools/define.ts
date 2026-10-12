@@ -37,7 +37,7 @@ import { isSamePath } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import { withSplitArgsRecovery } from '../core/schema.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
-import { MAX_OUTBOUND_RESULT_BYTES } from '../core/util.ts';
+import { jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from '../core/util.ts';
 import { ProgressSession } from './progress.ts';
 
 export interface ToolCtx {
@@ -90,7 +90,7 @@ export interface ToolCtx {
   readonly clientCapabilities?: ClientCapabilities | undefined;
   /** The SDK request context this call runs under; `pendingRoundTrip` binds minted state to it. */
   readonly serverCtx: ServerContext;
-  /** `stdio` alone has a 10 MiB frame limit; unset on HTTP and the in-memory test pair. */
+  /** `stdio` alone has a 10 MiB frame limit; `http` on HTTP, unset on the in-memory test pair. */
   readonly transport?: 'stdio' | 'http' | undefined;
 }
 
@@ -136,6 +136,11 @@ export interface ToolDef<I extends z.ZodType, O extends object> {
    */
   readonly accessPaths?: (args: z.infer<I>) => readonly string[];
   readonly run: (args: z.infer<I>, ctx: ToolCtx) => Promise<RunResult<O> | InputRequiredResult>;
+  /**
+   * What the stdio size refusal tells the caller to do instead, for a tool
+   * that knows better than the generic advice (see `refuseOversized`).
+   */
+  readonly oversizeRemedy?: (result: RunResult<O>) => string;
 }
 
 export interface DefinedTool {
@@ -248,6 +253,10 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     this.toolCtx = {
       ...ctx,
       signal: this.signal,
+      // Per-call views, so a response refused after `run` can take back the
+      // cached result and page snapshot behind a link or cursor it never sent.
+      pageStore: ctx.pageStore.forCall(),
+      resourceStore: ctx.resourceStore.forCall(),
       log: (level: LoggingLevel, data: unknown, logger?: string) => {
         const msg = typeof data === 'string' ? data : String(data);
         // `[req <id>]` first so one grep finds every line of one call; the
@@ -368,6 +377,40 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     return undefined;
   }
 
+  /**
+   * stdio's SDK reader drops the connection on a message past 10 MiB, so a
+   * response that would overflow it becomes TOO_LARGE instead. Only a call
+   * that changed nothing can be refused after `run` — a read-only tool, or a
+   * dry run (every tool with `dryRun` writes nothing under it); a mutation may
+   * already have committed. The whole encoded response counts, duplicated
+   * metadata and escaping included; the ceiling leaves room for the envelope.
+   */
+  private refuseOversized(result: RunResult<O>, response: CallToolResult): void {
+    if (this.toolCtx.transport !== 'stdio') return;
+    const dryRun = (this.parsedArgs as { dryRun?: unknown }).dryRun === true;
+    if (!this.def.readOnlyHint && !dryRun) return;
+    const encodedBytes = jsonBytesOver(response, MAX_OUTBOUND_RESULT_BYTES);
+    if (encodedBytes === undefined) return;
+    // The client never receives the link or cursor these back, so they would
+    // only push live entries out of the stores' caps.
+    this.toolCtx.resourceStore.discard();
+    this.toolCtx.pageStore.discard();
+    const remedy =
+      this.def.oversizeRemedy?.(result) ??
+      (dryRun
+        ? 'Nothing was written. Preview fewer files or a smaller file per call, or connect over HTTP.'
+        : 'Reduce the requested output or connect over HTTP.');
+    // The remedy stands in for TOO_LARGE's default head/tail advice, which
+    // fits neither media nor a dry run.
+    throw new FsError(
+      ErrorCode.TOO_LARGE,
+      `${this.def.name} result too large to return (${String(encodedBytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit).`,
+      undefined,
+      undefined,
+      remedy,
+    );
+  }
+
   async execute(): Promise<CallToolResult | InputRequiredResult> {
     try {
       // Access-grant pre-check before any filesystem touch (R7/R8/R9). A
@@ -386,18 +429,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
         return result;
       }
       const response = buildSuccessResponse(result);
-      // A post-run refusal is safe only for reads: a mutation may have already
-      // committed. Count the whole encoded response, including duplicated
-      // metadata and escaping; the ceiling reserves room for the SDK envelope.
-      if (this.def.readOnlyHint && this.toolCtx.transport === 'stdio') {
-        const encodedBytes = Buffer.byteLength(JSON.stringify(response), 'utf8');
-        if (encodedBytes > MAX_OUTBOUND_RESULT_BYTES) {
-          throw new FsError(
-            ErrorCode.TOO_LARGE,
-            `${this.def.name} result too large to return (${String(encodedBytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit). Reduce the requested output or connect over HTTP.`,
-          );
-        }
-      }
+      this.refuseOversized(result, response);
       await this.completeProgress(result.structured);
       return response;
     } catch (error) {

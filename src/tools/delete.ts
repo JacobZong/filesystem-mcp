@@ -161,6 +161,31 @@ async function planPath(
   return { status: 'plan', plan: { inputPath, validPath, itemType, firstStats, pending } };
 }
 
+/**
+ * True when a confirmed path is gone from disk. Asked of the confirmed path
+ * itself rather than matched against the request: a vanished entry validates
+ * to its lexical path, which can differ from the realpath round 1 minted
+ * (symlinked parents, Windows 8.3 short names).
+ */
+async function isGone(path: string, fs: Pick<GuardedFileSystem, 'lstat'>): Promise<boolean> {
+  try {
+    await fs.lstat(path);
+    return false;
+  } catch (error) {
+    return (isFsError(error) && error.code === ErrorCode.NOT_FOUND) || isNotFoundErrno(error);
+  }
+}
+
+function typeChangedFailure(path: string, from: FileType, to: FileType): DeleteFailure {
+  return {
+    path,
+    error: Problem.invalidInput(
+      `Delete failed: item type changed from ${from} to ${to} during confirmation.`,
+      { path },
+    ),
+  };
+}
+
 async function performDeletion(
   validPath: string,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
@@ -208,15 +233,7 @@ async function finalizeDeletion(
     plan.firstStats.stats.ino !== currentStats.stats.ino ||
     plan.firstStats.stats.birthtimeMs !== currentStats.stats.birthtimeMs;
   if (plan.itemType !== 'other' && (currentItemType !== plan.itemType || identityChanged)) {
-    return {
-      failure: {
-        path: plan.validPath,
-        error: Problem.invalidInput(
-          `Delete failed: item type changed from ${plan.itemType} to ${currentItemType} during confirmation.`,
-          { path: plan.validPath },
-        ),
-      },
-    };
+    return { failure: typeChangedFailure(plan.validPath, plan.itemType, currentItemType) };
   }
 
   try {
@@ -234,15 +251,17 @@ async function finalizeDeletion(
  * an accepted `confirm: true`; decline, cancel, or a missing key report
  * `CANCELLED` for that path (R3 proceed, R4/R5 cancelled). A non-pending path
  * deletes directly (R14: non-pending items proceed alongside accepted ones).
+ * `roundPaths` is the list the verified state binds; the confirmation keys
+ * index it.
  */
 async function executePlan(
   plan: DeletePlan,
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
   ctx: Pick<ToolCtx, 'fs' | 'inputResponses' | 'droppedInputResponseKeys' | 'log'>,
-  pendingSorted: readonly string[],
+  roundPaths: readonly string[],
 ): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
   if (plan.pending) {
-    const key = confirmKey(pendingSorted.indexOf(plan.validPath));
+    const key = confirmKey(roundPaths.indexOf(plan.validPath));
     const choice = readAcceptedChoice(ctx.inputResponses, key);
     if (choice === 'skip') {
       return { skipped: true as const, path: plan.validPath };
@@ -280,17 +299,25 @@ async function handleDelete(
 
   const out = new Array<DeletePerPathResult | undefined>(paths.length).fill(undefined);
   const plans: { plan: DeletePlan; index: number }[] = [];
-  const confirmationState = ctx.requestState?.<PendingState>();
-  const previouslyPendingPaths = new Set(
-    confirmationState?.op === 'delete' ? confirmationState.paths : [],
-  );
+  // On a retry of this op, the verified state binds the directories the user
+  // was asked about.
+  const state = ctx.requestState?.<PendingState>();
+  const confirmed = state?.op === 'delete' ? new Set(state.paths) : undefined;
+  // Confirmed paths this retry reports without deleting them.
+  const settled = new Set<string>();
   for (const { index, value: r } of planned.results) {
     if (r.status === 'fail') out[index] = { path: r.failure.path, error: r.failure.error };
     else if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
-    else {
-      // Emptying a directory while its prompt is open must not discard the
-      // answer. Keep that path pending so the verified retry still honors skip.
-      r.plan.pending ||= previouslyPendingPaths.has(r.plan.validPath);
+    else if (confirmed?.has(r.plan.validPath) && r.plan.itemType !== 'directory') {
+      // The answer was for a directory. Whatever replaced it while the prompt
+      // was open was never confirmed: report it, never delete it.
+      const failure = typeChangedFailure(r.plan.validPath, 'directory', r.plan.itemType);
+      out[index] = { path: failure.path, error: failure.error };
+      settled.add(r.plan.validPath);
+    } else {
+      // A confirmed path that is still a directory stays pending, even one
+      // emptied while its prompt was open, so the verified retry honors skip.
+      r.plan.pending ||= confirmed?.has(r.plan.validPath) ?? false;
       plans.push({ plan: r.plan, index });
     }
   }
@@ -301,22 +328,38 @@ async function handleDelete(
     };
   }
 
-  // Pending set: recursive + non-empty directories, sorted and de-duplicated.
-  // `buildInputRequired` seals exactly this set into the requestState, and the
-  // retried round recomputes it from the same args so a swapped retry (accept
-  // for X, retry with Y) is rejected — the codec only proves the state was not
-  // tampered, not that it matches the current request (R9).
-  const pendingSorted = [
-    ...new Set(plans.filter((p) => p.plan.pending).map((p) => p.plan.validPath)),
-  ].sort();
+  // Pending set: recursive + non-empty directories, plus every confirmed path
+  // that is still a directory.
+  const pending = new Set(plans.filter((p) => p.plan.pending).map((p) => p.plan.validPath));
+  // A confirmed path no plan covers and that is gone from disk was removed
+  // while the prompt was open; its request entry already carries the normal
+  // planning result (NOT_FOUND, or a no-op with ignoreIfNotExists).
+  const unmatched = [...(confirmed ?? [])].filter((p) => !pending.has(p) && !settled.has(p));
+  const gone = await processInParallel(
+    unmatched,
+    async (p) => ((await isGone(p, ctx.fs)) ? p : undefined),
+    PARALLEL_CONCURRENCY,
+    ctx.signal,
+  );
+  for (const { value } of gone.results) if (value !== undefined) settled.add(value);
 
-  if (pendingSorted.length > 0) {
+  // `buildInputRequired` seals exactly this sorted list into the requestState;
+  // on round 1 it is the pending set. A retry adds the confirmed paths it
+  // settled, so it matches the bound list unless a directory needs an answer
+  // it never got or a confirmed path still exists but matches no request
+  // entry — the codec only proves the state was not tampered, not that it
+  // matches the current request (R9). Once matched, the confirmation keys
+  // index this list.
+  const roundPaths = [...new Set([...pending, ...settled])].sort();
+
+  if (roundPaths.length > 0 || confirmed !== undefined) {
     // Round 1 returns input_required (atomic — R14: nothing deleted yet, not
     // even the non-pending items in the same call); a retry whose verified
-    // state does not bind this pending set throws (R9) via `pendingRoundTrip`.
+    // state does not bind this list throws (R9) via `pendingRoundTrip`, even
+    // one with nothing left pending.
     const round = await pendingRoundTrip(ctx, {
       op: 'delete',
-      pending: pendingSorted,
+      pending: roundPaths,
       buildInputs: (ps) =>
         ps.map((p, i) => ({
           key: confirmKey(i),
@@ -330,7 +373,7 @@ async function handleDelete(
   // Phase 2 (mutation): execute deletions for every planned path.
   const executed = await processInParallel(
     plans,
-    ({ plan }) => executePlan(plan, args, ctx, pendingSorted),
+    ({ plan }) => executePlan(plan, args, ctx, roundPaths),
     PARALLEL_CONCURRENCY,
     ctx.signal,
   );

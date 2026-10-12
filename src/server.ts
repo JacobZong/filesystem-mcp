@@ -11,7 +11,7 @@ import { Logger } from './core/observability.ts';
 import type { ServerOptions } from './core/path.ts';
 import { PathGuard } from './core/path.ts';
 import { PageSnapshotStore, ResourceStore } from './core/store.ts';
-import { MAX_TOOL_INPUT_ELEMENTS } from './core/util.ts';
+import { MAX_OUTBOUND_RESULT_BYTES, MAX_TOOL_INPUT_ELEMENTS } from './core/util.ts';
 import type { WatcherRegistry } from './core/watcher-registry.ts';
 import { INSTRUCTIONS_SUMMARY, INSTRUCTIONS_URI } from './instructions.ts';
 import { registerPrompts } from './prompts.ts';
@@ -63,7 +63,12 @@ export async function createServer(
     pageStore?: PageSnapshotStore;
     /** The protocol era this instance serves; omitted where the caller does not know. */
     era?: 'legacy' | 'modern';
-    /** Only `stdio` has the SDK's fixed 10 MiB ReadBuffer, so only there does `read` cap its result. */
+    /**
+     * Only `stdio` has the SDK's fixed 10 MiB ReadBuffer, so only there are
+     * results capped: any tool call that changed nothing, any resource read,
+     * and a result-store entry by the size of its read (define.ts,
+     * resources.ts, store.ts).
+     */
     transport?: 'stdio' | 'http';
     /**
      * The resolved HTTP credential, from `--api-key` or `FS_API_KEY`. Lives here
@@ -159,15 +164,19 @@ export async function createServer(
   // A failed send means the connection went away; nothing to recover.
   const resourceStore =
     extraDeps?.resourceStore ??
-    new ResourceStore(() => {
-      if (extraDeps?.notifier) {
-        extraDeps.notifier.resourcesChanged();
-        return;
-      }
-      void server.server.sendResourceListChanged().catch((error: unknown) => {
-        Logger.debug('resource list_changed not delivered', { error: String(error) });
-      });
-    });
+    new ResourceStore(
+      () => {
+        if (extraDeps?.notifier) {
+          extraDeps.notifier.resourcesChanged();
+          return;
+        }
+        void server.server.sendResourceListChanged().catch((error: unknown) => {
+          Logger.debug('resource list_changed not delivered', { error: String(error) });
+        });
+      },
+      // A tool hands out no link that this connection's resources/read refuses.
+      extraDeps?.transport === 'stdio' ? { maxReadResultBytes: MAX_OUTBOUND_RESULT_BYTES } : {},
+    );
   const pageStore = extraDeps?.pageStore ?? new PageSnapshotStore();
 
   const pathGuard = extraDeps?.pathGuard ?? new PathGuard(options);

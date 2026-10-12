@@ -464,6 +464,106 @@ describe('globEntries characterization', () => {
       await cleanupTestRoot(root);
     }
   });
+
+  it('without includeHidden, .gitignore discovery stays out of dot-directories', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of ['.workspace/drop.txt', '.workspace/keep.txt']) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      await writeFile(join(root, '.workspace/.gitignore'), 'drop.txt\n');
+      // Searching every hidden tree (.venv, .terraform, ...) for rules would
+      // dwarf a walk that skips hidden entries. Only a pattern naming the
+      // directory reaches inside, and its rules are not looked for there.
+      const options = { cwd: root, pattern: '.workspace/*.txt', skipIgnored: true };
+      assert.deepStrictEqual(await walk(options), ['.workspace/drop.txt', '.workspace/keep.txt']);
+      assert.deepStrictEqual(await walk({ ...options, includeHidden: true }), [
+        '.workspace/keep.txt',
+      ]);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('includeHidden adds dot-prefixed names only where a leading wildcard can match the dot', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of [
+        'foo1.txt',
+        '.foo2.txt',
+        'sub/foo3.txt',
+        'sub/.foo4.txt',
+        '.dir/foo5.txt',
+        'src/foox/bar.ts',
+        'src/.fooy/bar.ts',
+        '.a.txt',
+        'zoo.txt',
+        '.zoo.txt',
+        '.oo.txt',
+      ]) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      const hidden = (pattern: string): Promise<string[]> =>
+        walk({ cwd: root, pattern, includeHidden: true });
+
+      // A segment that starts with a literal, a brace set or a class gets no
+      // dot-prefixed match, wherever its wildcard sits.
+      assert.deepStrictEqual(await hidden('foo*.txt'), ['foo1.txt']);
+      assert.deepStrictEqual(await hidden('**/foo*.txt'), [
+        '.dir/foo5.txt',
+        'foo1.txt',
+        'sub/foo3.txt',
+      ]);
+      assert.deepStrictEqual(await hidden('src/foo*/bar.ts'), ['src/foox/bar.ts']);
+      assert.deepStrictEqual(await hidden('{foo,zoo}*.txt'), ['foo1.txt', 'zoo.txt']);
+      assert.deepStrictEqual(await hidden('[a-z]oo.txt'), ['zoo.txt']);
+      // Nor does an extglob: `*(z)` repeats `z` and never matches the dot.
+      assert.deepStrictEqual(await hidden('*(z)oo.txt'), ['zoo.txt']);
+
+      // A leading `*` can.
+      assert.deepStrictEqual(await hidden('*.txt'), [
+        '.a.txt',
+        '.foo2.txt',
+        '.oo.txt',
+        '.zoo.txt',
+        'foo1.txt',
+        'zoo.txt',
+      ]);
+      assert.deepStrictEqual(await hidden('**/*.txt'), [
+        '.a.txt',
+        '.dir/foo5.txt',
+        '.foo2.txt',
+        '.oo.txt',
+        '.zoo.txt',
+        'foo1.txt',
+        'sub/.foo4.txt',
+        'sub/foo3.txt',
+        'zoo.txt',
+      ]);
+
+      // A leading `?` is one character, so the dot takes its place.
+      assert.deepStrictEqual(await hidden('?oo.txt'), ['.oo.txt', 'zoo.txt']);
+      assert.deepStrictEqual(await hidden('**/?oo.txt'), ['.oo.txt', 'zoo.txt']);
+      assert.deepStrictEqual(await walk({ cwd: root, pattern: '?oo.txt' }), ['zoo.txt']);
+      // A lone `?` never becomes `.`, the directory itself.
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: 'sub/?', includeHidden: true, onlyFiles: false }),
+        [],
+      );
+      // Nor, through a brace set or a class, `..`, the directory above.
+      for (const pattern of ['?{.,x}/*.txt', '?{,.}/*.txt', '?[.]/*.txt', '?.{,x}/*.txt']) {
+        assert.deepStrictEqual(
+          await walk({ cwd: join(root, 'sub'), pattern, includeHidden: true }),
+          [],
+          pattern,
+        );
+      }
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
 });
 
 describe('ancestor .gitignore', () => {

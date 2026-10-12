@@ -244,9 +244,15 @@ function formatDetailedError(
 export class FsError extends Error {
   readonly problem: Problem;
 
-  constructor(code: ErrorCode, message: string, path?: string, cause?: unknown) {
+  /** `suggestion` replaces the code's default for a thrower that knows the better next step. */
+  constructor(
+    code: ErrorCode,
+    message: string,
+    path?: string,
+    cause?: unknown,
+    suggestion: string | undefined = DEFAULT_SUGGESTIONS[code],
+  ) {
     super(message, cause === undefined ? {} : { cause });
-    const suggestion = DEFAULT_SUGGESTIONS[code];
     this.problem = {
       code,
       message,

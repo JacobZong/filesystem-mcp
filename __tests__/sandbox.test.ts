@@ -7,7 +7,9 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { normalizePath } from '../src/core/path-utils.ts';
+import { ALL_TOOLS } from '../src/tools/index.ts';
 import {
+  ALL_REGISTERED_TOOL_NAMES,
   bootHttpTest,
   cleanupTestRoot,
   createStdioClient,
@@ -48,22 +50,10 @@ interface Searched {
   nextCursor?: string;
 }
 
-const TOOL_NAMES = [
-  'create',
-  'delete',
-  'diff',
-  'edit',
-  'find_files',
-  'list',
-  'list_roots',
-  'move',
-  'patch',
-  'read',
-  'replace_text',
-  'search_text',
-  'stat',
-];
-const READ_ONLY_NAMES = ['diff', 'find_files', 'list', 'list_roots', 'read', 'search_text', 'stat'];
+const TOOL_NAMES = [...ALL_REGISTERED_TOOL_NAMES].sort();
+const READ_ONLY_NAMES = ALL_TOOLS.filter((tool) => tool.readOnlyHint)
+  .map((tool) => tool.name)
+  .sort();
 
 // The wire metadata has no schema type; assertions at each call site validate the selected shape.
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters

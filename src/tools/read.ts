@@ -22,7 +22,6 @@ import {
   DEFAULT_CONTINUATION_CHUNK_SIZE,
   DEFAULT_SEARCH_TIMEOUT_MS,
   getMaxTextFileSize,
-  MAX_OUTBOUND_RESULT_BYTES,
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
 } from '../core/util.ts';
@@ -30,6 +29,12 @@ import type { BatchResult } from './batch.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
+
+/**
+ * `z.int32()`'s own ceiling on startLine/endLine, named so a continuation
+ * never asks for more. Not restated as `.max()`: that reports it twice.
+ */
+const MAX_LINE_NUMBER = 2_147_483_647;
 
 const rangeField = (description: string, count = false) => {
   const field = z.int32().min(1, { message: 'Min: 1' });
@@ -131,6 +136,8 @@ function buildReadContinuation(
   if (!result.hasMoreLines) return undefined;
   const linesRead = result.linesRead ?? 0;
   const nextStart = (result.startLine ?? 1) + linesRead;
+  // Args the schema would reject are no continuation; clamp the end into it.
+  if (nextStart > MAX_LINE_NUMBER) return undefined;
   let chunkSize: number;
   if (result.head !== undefined) {
     chunkSize = result.head;
@@ -139,7 +146,7 @@ function buildReadContinuation(
   } else {
     chunkSize = DEFAULT_CONTINUATION_CHUNK_SIZE;
   }
-  const nextEnd = nextStart + chunkSize - 1;
+  const nextEnd = Math.min(nextStart + chunkSize - 1, MAX_LINE_NUMBER);
   return {
     tool: 'read',
     args: { path: requestedPath, startLine: nextStart, endLine: nextEnd },
@@ -431,26 +438,6 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       return { ...result, value };
     });
 
-    // Only stdio has the SDK's fixed 10 MiB ReadBuffer; a result that overflows
-    // it drops the connection. Measure the encoded payload (text, media blocks,
-    // structured half) so escaping and base64 are counted exactly.
-    if (ctx.transport === 'stdio') {
-      const encodedBytes =
-        Buffer.byteLength(JSON.stringify([{ type: 'text', text }, ...resources]), 'utf8') +
-        Buffer.byteLength(JSON.stringify({ results: structuredResults, summary }), 'utf8');
-      if (encodedBytes > MAX_OUTBOUND_RESULT_BYTES) {
-        // Media cannot be sliced, so head/tail is no remedy for it.
-        const isMedia = resources.some((b) => b.type === 'image' || b.type === 'audio');
-        const remedy = isMedia
-          ? 'This media file is too large to return over the stdio transport; connect over HTTP, or raise it as a smaller file.'
-          : 'Read a slice with head, tail, or startLine/endLine.';
-        throw new FsError(
-          ErrorCode.TOO_LARGE,
-          `Read result too large to return (${String(encodedBytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit). ${remedy}`,
-        );
-      }
-    }
-
     return {
       structured: { results: structuredResults, summary },
       text,
@@ -458,4 +445,9 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       ...(resources.length > 0 ? { resources } : {}),
     };
   },
+  // Media cannot be sliced, so head/tail is no remedy for it.
+  oversizeRemedy: (result) =>
+    result.resources?.some((b) => b.type === 'image' || b.type === 'audio')
+      ? 'This media file is too large to return over the stdio transport; connect over HTTP, or raise it as a smaller file.'
+      : 'Read a slice with head, tail, or startLine/endLine.',
 });

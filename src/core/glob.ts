@@ -125,6 +125,7 @@ class GitignoreManager {
   /** `null` when no `.gitignore` was found, so callers skip the filter entirely. */
   static async load(
     root: string,
+    includeHidden: boolean,
     signal?: AbortSignal,
     maxDepth?: number,
     ignoreCeiling?: string,
@@ -132,7 +133,13 @@ class GitignoreManager {
     const manager = new GitignoreManager();
     try {
       const gitignorePaths: string[] = [];
-      const gitignoreEntries = fsGlob([...buildHiddenPatterns('**/.gitignore')], {
+      // Search dot-directories (.venv, .terraform, ...) for rules only when the
+      // walk includes hidden entries; for any other walk, enumerating every
+      // hidden tree would cost more than the walk itself.
+      const gitignorePatterns = includeHidden
+        ? [...buildHiddenPatterns('**/.gitignore')]
+        : ['**/.gitignore'];
+      const gitignoreEntries = fsGlob(gitignorePatterns, {
         cwd: root,
         // Skip what the walk itself skips, and stop one level past its depth
         // bound: a .gitignore at depth d only affects entries at depth >= d.
@@ -273,7 +280,6 @@ interface NormalizedGlob {
 const GLOB_MAGIC_RE = /[*?[\]{}!]/u;
 const GLOB_BATCH_CONCURRENCY = 64;
 const SEP = '/';
-const DOT_CHAR_CODE = 46;
 function normalizePattern(pattern: string, baseNameMatch: boolean): string {
   const normalized = toPosixPath(pattern);
 
@@ -303,6 +309,24 @@ function splitPatternPrefix(normalizedPattern: string): {
   };
 }
 
+/**
+ * The segment matching the dot-prefixed names `segment` would match if fs.glob
+ * did not skip them, or `undefined` when there are none. Only a leading `*` or
+ * `?` stands for that dot: a literal never does, and a character class or a
+ * brace set is left as written rather than parsed.
+ */
+function dotVariant(segment: string): string | undefined {
+  // `*(…)` and `?(…)` are extglobs, not wildcards.
+  if (segment[1] === '(') return undefined;
+  if (segment.startsWith('*')) return `.${segment}`;
+  if (!segment.startsWith('?')) return undefined;
+  // `?` is exactly one character, so the dot replaces it, unless what follows
+  // could leave just `.` or `..` (`?`, `?.`, `?{.,x}`, `?[.]`): the directory
+  // and its parent, not a dot-prefixed entry.
+  const rest = segment.slice(1);
+  return rest === '' || /^[.[{]/u.test(rest) ? undefined : `.${rest}`;
+}
+
 function addFirstDotSegment(patterns: Set<string>, prefix: string, remainder: string): void {
   if (remainder.length === 0) return;
   const segments = remainder.split(SEP);
@@ -310,9 +334,10 @@ function addFirstDotSegment(patterns: Set<string>, prefix: string, remainder: st
 
   if (idx !== -1) {
     const original = segments[idx];
-    if (original && GLOB_MAGIC_RE.test(original) && original.charCodeAt(0) !== DOT_CHAR_CODE) {
+    const dotted = original ? dotVariant(original) : undefined;
+    if (dotted) {
       const newSegments = [...segments];
-      newSegments[idx] = `.${original}`;
+      newSegments[idx] = dotted;
       patterns.add(`${prefix}${newSegments.join(SEP)}`);
     }
   }
@@ -336,12 +361,11 @@ function expandHiddenGlobstars(patterns: Set<string>, prefix: string, remainder:
   // starts with '.', and its `dot` option is not honored. So `**/*` alone misses
   // hidden files. Two depth-agnostic patterns cover everything the per-depth
   // unroll did: contents of dot-directories anywhere, and dotfiles/dotdirs
-  // anywhere.
+  // anywhere (when the first segment after the globstar can match a dot).
   patterns.add(`${prefix}**/.*/**/${afterGlobstar}`);
-  const firstSegment = afterGlobstar.split(SEP)[0] ?? '';
-  const addDotFile =
-    GLOB_MAGIC_RE.test(firstSegment) && firstSegment.charCodeAt(0) !== DOT_CHAR_CODE;
-  if (addDotFile) patterns.add(`${prefix}**/.${afterGlobstar}`);
+  const [firstSegment = '', ...rest] = afterGlobstar.split(SEP);
+  const dotted = dotVariant(firstSegment);
+  if (dotted) patterns.add(`${prefix}**/${[dotted, ...rest].join(SEP)}`);
 }
 
 function buildHiddenPatterns(normalizedPattern: string): readonly string[] {
@@ -488,6 +512,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
   const gitignoreMatcher = options.skipIgnored
     ? await GitignoreManager.load(
         options.cwd,
+        options.includeHidden ?? false,
         options.signal,
         options.maxDepth,
         options.ignoreCeiling,
