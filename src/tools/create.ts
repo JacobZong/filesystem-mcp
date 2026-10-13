@@ -301,6 +301,7 @@ async function createOne(
         stats?.size,
         false,
         stats?.mtime.toISOString(),
+        ctx.transport,
       ),
     };
     created = (stats?.birthtime ?? EPOCH).toISOString();
@@ -317,6 +318,7 @@ async function createOne(
       validPath: written.validPath,
       content,
       lastModified: modified,
+      transport: ctx.transport,
     });
   }
 

@@ -166,10 +166,57 @@ describe('globEntries', () => {
       }
     });
 
+    it('refuses wildcard shapes whose match backtracks on a long name', () => {
+      for (const bad of [
+        '**/*(?|?)#',
+        '*(a|a)x',
+        '*(*)x',
+        '*(a*)x',
+        '+(?|?)x',
+        '*(@(a|a))x',
+        '*a*a*a*b',
+        '**a**a**a**b',
+        '?(*)?(*)?(*)?(*)x',
+        '+(a)+(b)+(c)+(d)x',
+        `${'?(a|aa)'.repeat(40)}b`,
+        '@(a|aa)@(a|aa)@(a|aa)@(a|aa)b',
+        '?(a)?(b)?(c)?(d)x',
+        '?(*)?(*)?(*)x',
+        'src/{x,*a*a*a*b}/y',
+        '*([)]|?)#',
+        '+([)]*)x',
+        '*([(]|a)x',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(bad), false, bad);
+      }
+    });
+
+    it('accepts wildcard shapes that match in bounded time', () => {
+      for (const ok of [
+        '**/*.ts',
+        '**/**/*.ts',
+        '*foo*bar*',
+        '*.test.*',
+        'a**a**b',
+        '*(z)oo.txt',
+        '*(ab)x',
+        '*(?)x',
+        '+([ab])x',
+        '*([)])x',
+        '+([()])x',
+        '@(a|aa)@(a|aa)@(a|aa)b',
+        '*.@(ts|tsx)',
+        '.!(git|svn|hg)',
+        '@(.|)*',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(ok), true, ok);
+      }
+    });
+
     it('checks a pattern of 1024 long dotted segments without a compile each', () => {
-      // Each alternative's segment holds `*`, so it can never be a literal
+      // Each alternative's segment holds `?`, so it can never be a literal
       // `..` and must not cost a minimatch compile (1.5-9 s for all of them).
-      const pattern = `{0..1023}.${'*.'.repeat(495)}`;
+      const pattern = `{0..1023}.${'?.'.repeat(495)}`;
       const started = performance.now();
       assert.strictEqual(isSafeGlobSyntax(pattern), true);
       assert.ok(performance.now() - started < 1000, 'validation must not pin the event loop');
@@ -282,6 +329,32 @@ describe('globEntries', () => {
     } finally {
       await harness.close();
       await cleanupTestRoot(top);
+    }
+  });
+
+  it('find_files, search_text and replace_text refuse a backtracking glob quickly', async () => {
+    const root = await createTestRoot();
+    await writeFile(join(root, 'a'.repeat(40)), 'x');
+    const harness = await createTestClientPair([root]);
+    try {
+      const started = performance.now();
+      for (const [name, extra] of [
+        ['find_files', {}],
+        ['search_text', { searchPattern: 'x' }],
+        ['replace_text', { searchPattern: 'x', replacement: 'y', dryRun: true }],
+      ] as const) {
+        const result = await harness.client.callTool({
+          name,
+          arguments: { path: root, pattern: '**/*(?|?)#', ...extra },
+        });
+        const text = firstTextBlock(result).text ?? '';
+        assert.strictEqual(result.isError, true, `${name}: ${text}`);
+        assert.match(text, /unsafe path/u, name);
+      }
+      assert.ok(performance.now() - started < 5000, 'refusal must not pin the event loop');
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(root);
     }
   });
 
@@ -737,6 +810,62 @@ describe('globEntries characterization', () => {
           pattern,
         );
       }
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('includeHidden never adds dot names a negated extglob excluded', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of [
+        'a.ts',
+        'a.test.ts',
+        '.eslintrc.ts',
+        'sub/.prettierrc.ts',
+        'sub/b.test.ts',
+        'src/x.ts',
+        '.src',
+        '.gitignore',
+        '.env.local',
+      ]) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      const hidden = (pattern: string): Promise<string[]> =>
+        walk({ cwd: root, pattern, includeHidden: true });
+      assert.ok(!(await hidden('!(.gitignore)')).includes('.gitignore'));
+      assert.ok(!(await hidden('!(.env.local)')).includes('.env.local'));
+      // Hidden names are left out of a negated segment: the documented limit.
+      assert.deepStrictEqual(await hidden('**/!(*.test).ts'), ['a.ts', 'src/x.ts']);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('an includeHidden walk yields each entry once across its pattern variants', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of ['a.txt', '.b.txt', '.d/c.txt', '.d/.e.txt', 'sub/.f.txt']) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      const paths: string[] = [];
+      for await (const entry of globEntries({
+        cwd: root,
+        pattern: '**/*',
+        includeHidden: true,
+      })) {
+        paths.push(relative(root, entry.path).replaceAll('\\', '/'));
+      }
+      assert.strictEqual(new Set(paths).size, paths.length);
+      assert.deepStrictEqual(paths.sort(), [
+        '.b.txt',
+        '.d/.e.txt',
+        '.d/c.txt',
+        'a.txt',
+        'sub/.f.txt',
+      ]);
     } finally {
       await cleanupTestRoot(root);
     }

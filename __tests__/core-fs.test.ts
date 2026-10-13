@@ -20,8 +20,9 @@ import { ErrorCode, isFsError, Problem } from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
+import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent, searchFiles } from '../src/core/search.ts';
-import { getMaxTextFileSize } from '../src/core/util.ts';
+import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES, MIB } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
   cleanupTestRoot,
@@ -34,6 +35,8 @@ import {
   writeNLineFile,
   writeTestFile,
 } from './helpers.ts';
+
+const KIB = 1024;
 
 describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   let tmpDir: string;
@@ -722,6 +725,46 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         resourceLink: undefined,
       });
     });
+
+    it('a binary written file at the base64 edge gets no stdio link', () => {
+      const path = join(tmpDir, 'edge.bin');
+      const link = (size: number) =>
+        writtenFileLinks(path, 'application/octet-stream', size, false, undefined, 'stdio', {
+          content: '',
+          kind: 'binary',
+        });
+      assert.strictEqual(
+        link(3 * Math.floor(MAX_OUTBOUND_RESULT_BYTES / 4)).resourceUri,
+        undefined,
+      );
+      assert.ok(link(3 * Math.floor((MAX_OUTBOUND_RESULT_BYTES - 64 * KIB) / 4) - 3).resourceUri);
+    });
+
+    it('written file links stop at the encoded stdio read size on stdio only', () => {
+      const validPath = join(tmpDir, 'stdio-links.txt');
+      const meta = (content: string, transport?: 'stdio' | 'http') =>
+        buildWrittenFileMeta({ validPath, content, transport });
+      const quotes = '"'.repeat(6 * MIB);
+      // Escapes to about 12 MiB, so the read refuses it.
+      assert.strictEqual(meta(quotes, 'stdio').resourceUri, undefined);
+      // The URI and MIME fields push an exact-ceiling file over.
+      assert.strictEqual(
+        meta('x'.repeat(MAX_OUTBOUND_RESULT_BYTES), 'stdio').resourceUri,
+        undefined,
+      );
+      assert.ok(meta('x'.repeat(MAX_OUTBOUND_RESULT_BYTES - 64 * KIB), 'stdio').resourceUri);
+      assert.ok(meta(quotes, 'http').resourceUri);
+      assert.ok(meta(quotes).resourceUri);
+    });
+
+    it('written file links without content assume the worst escape on stdio', () => {
+      const path = join(tmpDir, 'stdio-links.txt');
+      assert.strictEqual(
+        writtenFileLinks(path, 'text/plain', 2 * MIB, false, undefined, 'stdio').resourceUri,
+        undefined,
+      );
+      assert.ok(writtenFileLinks(path, 'text/plain', MIB, false, undefined, 'stdio').resourceUri);
+    });
   });
 
   describe('Stat metadata (TC-FUNC-031–034)', () => {
@@ -1122,5 +1165,69 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
     assert.strictEqual(content.toString('utf-8'), 'hello\n');
     await fs.appendFile(link, 'more\n');
     assert.strictEqual(await readFile(target, 'utf-8'), 'hello\nmore\n');
+  });
+
+  describe('aborted read streams', () => {
+    let tmpDir: string;
+    before(async () => {
+      tmpDir = await createTestRoot();
+    });
+    after(async () => {
+      await cleanupTestRoot(tmpDir);
+    });
+
+    const isAbort = (err: unknown): boolean =>
+      ['TimeoutError', 'AbortError'].includes((err as { name?: string }).name ?? '');
+
+    // Node double-emits a pre-aborted signal's error; the stray copy is uncaught.
+    async function withUncaughtWatch(body: () => Promise<void>): Promise<void> {
+      const uncaught: unknown[] = [];
+      const onUncaught = (error: unknown): void => {
+        uncaught.push(error);
+      };
+      process.on('uncaughtException', onUncaught);
+      try {
+        await body();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        assert.deepStrictEqual(uncaught, []);
+      } finally {
+        process.off('uncaughtException', onUncaught);
+      }
+    }
+
+    const aborted = (): AbortSignal => {
+      const controller = new AbortController();
+      controller.abort(new DOMException('test timeout', 'TimeoutError'));
+      return controller.signal;
+    };
+
+    it('a pre-aborted signal rejects without an uncaught exception', async () => {
+      const file = await writeTestFile(tmpDir, 'pre-aborted.txt', 'line one\nline two\n');
+      await withUncaughtWatch(async () => {
+        const handle = await fsPromises.open(file, 'r');
+        try {
+          await assert.rejects(readFileBufferWithLimit(handle, 1024, file, aborted()), isAbort);
+        } finally {
+          await handle.close();
+        }
+      });
+    });
+
+    it('a pre-aborted range read rejects without an uncaught exception', async () => {
+      const file = await writeTestFile(tmpDir, 'pre-aborted-range.txt', 'line one\nline two\n');
+      await withUncaughtWatch(async () => {
+        const stats = await fsPromises.stat(file);
+        await assert.rejects(
+          readFileWithStats(
+            file,
+            file,
+            stats,
+            { kind: 'range', start: 1, end: 1, signal: aborted() },
+            () => fsPromises.open(file, 'r'),
+          ),
+          isAbort,
+        );
+      });
+    });
   });
 });

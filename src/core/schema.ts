@@ -1,6 +1,11 @@
 import * as z from 'zod/v4';
 
-import { isSafeGlobSyntax, MAX_BRACE_ALTERNATIVES, MAX_DOTDOT_CHECK_CHARS } from './glob.ts';
+import {
+  isSafeGlobSyntax,
+  MAX_BRACE_ALTERNATIVES,
+  MAX_DOTDOT_CHECK_CHARS,
+  MAX_SEGMENT_WILDCARDS,
+} from './glob.ts';
 import { MAX_SEARCH_DEPTH } from './util.ts';
 
 export const PositiveInt = z
@@ -70,7 +75,7 @@ export const SafeGlobPattern = z
     refineSafeText('Pattern', (val) =>
       isSafeGlobSyntax(val)
         ? undefined
-        : `Invalid glob or unsafe path (absolute/.. forbidden, at most ${String(MAX_BRACE_ALTERNATIVES)} brace alternatives and ${String(MAX_DOTDOT_CHECK_CHARS)} traversal-check characters)`,
+        : `Invalid glob or unsafe path (absolute/.. forbidden, at most ${String(MAX_BRACE_ALTERNATIVES)} brace alternatives, ${String(MAX_DOTDOT_CHECK_CHARS)} traversal-check characters, and ${String(MAX_SEGMENT_WILDCARDS)} * runs and extglob groups together per path segment; no |, * or nested group inside *(…) or +(…))`,
     ),
   )
   .describe('Relative glob pattern under the search root (e.g. "**/*.ts", "src/**/*.js").')

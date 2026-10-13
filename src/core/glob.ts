@@ -21,6 +21,15 @@ export const MAX_BRACE_ALTERNATIVES = 1024;
 /** Bound synchronous glob compilation when checking candidate traversal segments. */
 export const MAX_DOTDOT_CHECK_CHARS = 4096;
 
+/**
+ * fs.glob tests each name against a regex compiled from the segment,
+ * synchronously. Every run of `*` and every extglob group (`?(`, `+(`, `@(`,
+ * `!(`, `*(`) adds a degree of backtracking: on a 255-character name three cost
+ * under 100 ms, four about 1 s, and five do not finish; a chain of `?(a|aa)`
+ * groups grows the same way.
+ */
+export const MAX_SEGMENT_WILDCARDS = 3;
+
 // The range bodies fs.glob's brace expansion recognises, as it writes them.
 const NUMERIC_RANGE_RE = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/u;
 const ALPHA_RANGE_RE = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/u;
@@ -135,6 +144,55 @@ const isRooted = (alternative: string): boolean =>
   win32.parse(alternative).root !== '' ||
   (IS_WINDOWS && (alternative.split('/')[0] ?? '').endsWith(':'));
 
+/**
+ * Index of the `)` that closes the group opened at `open`, or -1. A `[...]`
+ * class is skipped whole: a `)` or `|` inside one is a literal, not syntax.
+ */
+function groupClose(segment: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < segment.length; i++) {
+    const c = segment[i];
+    if (c === '[') {
+      // A `]` first in the class (or after `!`/`^`) is literal, so search past it.
+      const first = segment[i + 1] === '!' || segment[i + 1] === '^' ? i + 2 : i + 1;
+      const end = segment.indexOf(']', first + 1);
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    }
+    if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Whether matching this brace-free segment can backtrack for seconds on one
+ * long name. Two shapes do: a repeated group (`*(…)`, `+(…)`) whose body can
+ * match more than one way (`|`, `*`, or a nested group), and more than
+ * MAX_SEGMENT_WILDCARDS `*` runs and extglob groups together.
+ */
+function canBacktrack(segment: string): boolean {
+  if (segment === '**') return false;
+  let wildcards = (segment.match(/\*+/gu) ?? []).length;
+  for (let i = segment.indexOf('('); i !== -1; i = segment.indexOf('(', i + 1)) {
+    const opener = segment[i - 1];
+    if (opener === undefined || !'*+?@!'.includes(opener)) continue;
+    // Each group can match more than one way, so it adds a degree of
+    // backtracking like a `*` run does (`*(` is already counted as one).
+    if (opener !== '*') wildcards++;
+    if (opener !== '*' && opener !== '+') continue;
+    const close = groupClose(segment, i);
+    // Classes are literals: only `|`, `*` or a group outside one can backtrack.
+    const body = segment
+      .slice(i + 1, close === -1 ? undefined : close)
+      .replace(/\[[!^]?\]?[^\]]*\]/gu, '');
+    if (/[|*(]/u.test(body)) return true;
+  }
+  return wildcards > MAX_SEGMENT_WILDCARDS;
+}
+
 export function isSafeGlobSyntax(pattern: string): boolean {
   if (!pattern || pattern.trim().length === 0) {
     return false;
@@ -154,6 +212,7 @@ export function isSafeGlobSyntax(pattern: string): boolean {
   }
   let dotdotCheckChars = 0;
   for (const segment of segments) {
+    if (canBacktrack(segment)) return false;
     if (!segment.includes('.') || !DOTDOT_SPELLING_RE.test(segment)) continue;
     dotdotCheckChars += segment.length;
     if (dotdotCheckChars > MAX_DOTDOT_CHECK_CHARS || isTraversalSegment(segment)) return false;
@@ -438,12 +497,12 @@ function splitPatternPrefix(normalizedPattern: string): {
 
 /**
  * The segment matching the dot-prefixed names `segment` would match if fs.glob
- * did not skip them, or `undefined` when there are none. Only a leading `*` or
- * `?` stands for that dot: a literal never does, and a character class or a
+ * did not skip them, or `undefined` when there are none. Only a leading `*` or `?`
+ * stands for that dot: a literal never does, and a character class or a
  * brace set is left as written rather than parsed.
  */
 function dotVariant(segment: string): string | undefined {
-  // `*(…)` and `?(…)` are extglobs, not wildcards.
+  // `*(…)`, `?(…)` and `!(…)` are extglobs, not wildcards.
   if (segment[1] === '(') return undefined;
   if (segment.startsWith('*')) return `.${segment}`;
   if (!segment.startsWith('?')) return undefined;
@@ -602,8 +661,8 @@ function createWalkFilter(
   };
 }
 
-async function* processGlobPattern(
-  pattern: string,
+async function* processGlobPatterns(
+  patterns: readonly string[],
   plan: NormalizedGlob,
   seen: Set<string>,
   onlyFiles: boolean,
@@ -613,7 +672,7 @@ async function* processGlobPattern(
   const { cwd, maxDepth, suppressErrors } = plan;
   let iterable: AsyncIterable<GlobDirentLike>;
   try {
-    iterable = fsGlob(pattern, {
+    iterable = fsGlob([...patterns], {
       cwd,
       exclude: filter.prune,
       withFileTypes: true,
@@ -635,7 +694,7 @@ async function* processGlobPattern(
   } catch (error) {
     if (!suppressErrors) throw error;
     Logger.warn(
-      `globEntries: suppressed mid-walk error for pattern "${pattern}": ${formatUnknownErrorMessage(error)}`,
+      `globEntries: suppressed mid-walk error for pattern "${patterns.join(', ')}": ${formatUnknownErrorMessage(error)}`,
     );
   }
   // A pruned walk ends like a finished one. Say it was cut short, so no caller
@@ -665,9 +724,9 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     options.signal,
   );
 
-  for (const pattern of plan.patterns) {
-    yield* processGlobPattern(pattern, plan, seen, onlyFiles, filter, options.signal);
-  }
+  // One walk for every variant: fs.glob reads each directory once and matches
+  // all of them, where a walk per variant re-read the tree for each.
+  yield* processGlobPatterns(plan.patterns, plan, seen, onlyFiles, filter, options.signal);
 }
 
 /** Names a `skipIgnored` walk never enters or yields, at any depth. */

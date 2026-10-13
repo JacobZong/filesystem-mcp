@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **A glob pattern can no longer freeze the server.** `find_files`,
+  `search_text` and `replace_text` refuse a pattern that puts `|`, `*` or a
+  nested group inside `*(…)` or `+(…)`, or that has more than three `*` runs
+  and extglob groups (`?(…)`, `@(…)`, `!(…)`, `+(…)`, `*(…)`) together in one
+  path segment. Node matches globs synchronously, and such
+  patterns backtracked for minutes on one long file name, blocking every
+  client. The refusal is the usual `Invalid glob or unsafe path` error.
+
+### Changed
+
+- **A `replace_text` timeout says what it already wrote.** A live run that
+  hits the 5-second deadline keeps the files it already rewrote. Its text now
+  names them and warns that re-running the same replacement applies it to
+  them again.
+
+### Fixed
+
+- **A cancelled or timed-out read no longer shuts the server down.** A file
+  read that started after its call was cancelled, for example a
+  `replace_text` worker opening its next file after the 5-second deadline,
+  raised an uncaught `AbortError` and the server exited.
+- **Write tools over stdio link only files `resources/read` can return.**
+  A written file whose `resources/read` result would exceed the stdio message
+  limit once JSON-encoded no longer gets a `resource_link` that the read
+  always refuses.
+
 ## [2.8.1] - 2026-10-13
 
 A maintenance release. Internal refactors give the read path, paged

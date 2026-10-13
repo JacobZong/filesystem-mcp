@@ -7,6 +7,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import {
@@ -555,6 +556,77 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const text = firstTextBlock(result).text ?? '';
     assert.match(text, /workspace root/i);
     await access(tmpDir);
+  });
+
+  it('TC-FUNC-010c: deleting an allowed root through an aliasing junction is refused', async (t) => {
+    const top = await createTestRoot();
+    const a = join(top, 'a');
+    const b = join(a, 'b');
+    try {
+      await mkdir(b, { recursive: true });
+      await writeFile(join(b, 'keep.txt'), 'keep');
+      if (!(await trySymlink(a, join(a, 'j'), () => t.skip('symlink creation not permitted')))) {
+        return;
+      }
+      const pair = await createTestClientPair([a, b]);
+      try {
+        const result = await pair.client.callTool({
+          name: 'delete',
+          arguments: { paths: [join(a, 'j', 'b')], recursive: true },
+        });
+        assert.strictEqual(result.isError, true);
+        assert.match(firstTextBlock(result).text ?? '', /workspace root/i);
+        await access(join(b, 'keep.txt'));
+      } finally {
+        await pair.close();
+      }
+    } finally {
+      await cleanupTestRoot(top);
+    }
+  });
+
+  it('a missing path under an out-of-root junction answers ACCESS_DENIED, not NOT_FOUND', async (t) => {
+    const top = await createTestRoot();
+    const root = join(top, 'root');
+    const outside = join(top, 'outside');
+    try {
+      await mkdir(root);
+      await mkdir(outside);
+      if (
+        !(await trySymlink(outside, join(root, 'out'), () =>
+          t.skip('symlink creation not permitted'),
+        ))
+      ) {
+        return;
+      }
+      const pair = await createTestClientPair([root]);
+      try {
+        const escaping = await pair.client.callTool({
+          name: 'stat',
+          arguments: { path: join(root, 'out', 'nope') },
+        });
+        const escapingText = firstTextBlock(escaping).text ?? '';
+        assert.match(escapingText, /ACCESS_DENIED/);
+        assert.doesNotMatch(escapingText, /NOT_FOUND/);
+
+        const inside = await pair.client.callTool({
+          name: 'stat',
+          arguments: { path: join(root, 'nope') },
+        });
+        assert.match(firstTextBlock(inside).text ?? '', /NOT_FOUND/);
+
+        const read = await pair.client.callTool({
+          name: 'read',
+          arguments: { path: join(root, 'out', 'nope') },
+        });
+        assert.strictEqual(read.isError, true);
+        assert.doesNotMatch(firstTextBlock(read).text ?? '', /not found/i);
+      } finally {
+        await pair.close();
+      }
+    } finally {
+      await cleanupTestRoot(top);
+    }
   });
 
   it('TC-FUNC-012: --read-only suppresses mutating tools on client.listTools()', async () => {
@@ -1763,6 +1835,20 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const diff = '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+X\n b\n';
     const result = await harness.client.callTool({ name: 'patch', arguments: { path: f, diff } });
     assert.strictEqual(result.isError, true);
+  });
+
+  it('patch refuses a zero-context hunk past the end of the file and writes nothing', async () => {
+    const f = join(tmpDir, 'patch_past_end.txt');
+    await writeFile(f, 'a\nb\n');
+    for (const diff of [
+      '--- f.txt\n+++ f.txt\n@@ -10,0 +11,1 @@\n+X\n',
+      '--- f.txt\n+++ f.txt\n@@ -3,0 +4,1 @@\n+X\n',
+    ]) {
+      const result = await harness.client.callTool({ name: 'patch', arguments: { path: f, diff } });
+      assert.strictEqual(result.isError, true);
+      assert.match(firstTextBlock(result).text ?? '', /would duplicate or drop lines/u);
+      assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\n');
+    }
   });
 
   it('patch dryRun advertises no resourceUri or resource_link for the unwritten file', async () => {
@@ -3951,5 +4037,58 @@ describe('High-severity bug-hunt regressions (tools)', () => {
         assert.strictEqual(await readFile(file, 'utf-8'), original);
       },
     );
+
+    for (const dryRun of [false, true]) {
+      it(
+        dryRun
+          ? 'a dry replace_text timeout does not claim rewritten files'
+          : 'a live replace_text timeout names the files it already rewrote',
+        { timeout: 10000 },
+        async (t) => {
+          const dir = join(tmpDir, dryRun ? 'rt-timeout-dry' : 'rt-timeout-live');
+          const names = Array.from({ length: 40 }, (_, i) => `f${String(i).padStart(2, '0')}.txt`);
+          for (const n of names) await writeTestFile(dir, n, 'foo\n');
+          const controller = new AbortController();
+          t.mock.method(AbortSignal, 'timeout', () => controller.signal);
+          // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+          const realWrite = GuardedFileSystem.prototype.writeFile;
+          t.mock.method(
+            GuardedFileSystem.prototype,
+            'writeFile',
+            async function (this: GuardedFileSystem, ...a: Parameters<typeof realWrite>) {
+              const out = await realWrite.apply(this, a);
+              controller.abort(new DOMException('test timeout', 'TimeoutError'));
+              return out;
+            },
+          );
+          if (dryRun) controller.abort(new DOMException('test timeout', 'TimeoutError'));
+          const result = await pair.client.callTool({
+            name: 'replace_text',
+            arguments: { path: dir, searchPattern: 'foo', replacement: 'foobar', dryRun },
+          });
+          const text = (result.content as { type: string; text: string }[])
+            .map((c) => c.text)
+            .join('\n');
+          assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
+          let written = 0;
+          for (const n of names) {
+            if ((await readFile(join(dir, n), 'utf-8')) === 'foobar\n') written++;
+          }
+          if (dryRun) {
+            assert.doesNotMatch(text, /already rewritten/u);
+            assert.doesNotMatch(text, /A higher timeout/u);
+            assert.strictEqual(text.match(/scan stopped early/gu)?.length, 1);
+            assert.strictEqual(written, 0);
+            return;
+          }
+          assert.match(text, /file\(s\) were already rewritten and stay changed/u);
+          assert.ok(written >= 1 && written < 40, `written=${String(written)}`);
+          assert.strictEqual(
+            Number(/(\d+) file\(s\) were already rewritten/u.exec(text)?.[1]),
+            written,
+          );
+        },
+      );
+    }
   });
 });

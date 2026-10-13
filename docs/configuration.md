@@ -190,18 +190,18 @@ These variables are for HTTP only:
 
 ## Limits
 
-| Limit                                   | Value                                                      |
-| :-------------------------------------- | :--------------------------------------------------------- |
-| Largest file `read` loads               | 10 MiB by default (`--max-file-size`, up to 100 MiB)       |
-| Total content of one `create` call      | Same as the file size limit                                |
-| Total text of one batched `read`        | 512 KiB; files past the budget are reported as skipped     |
-| Files per `create`, `move` call         | 100                                                        |
-| Paths per `read`, `stat`, `delete` call | 1000                                                       |
-| Files per `edit` call                   | 5, with up to 100 edits per file                           |
-| `find_files` / `search_text` results    | Up to 10,000 per call, paged                               |
-| `list` entries                          | 1000 per page by default, up to 20,000                     |
-| `list`, `stat`, and search tools        | Time out after about 5 seconds; narrow the path or pattern |
-| Cached results and page cursors         | Expire after about 60 seconds                              |
+| Limit                                                   | Value                                                      |
+| :------------------------------------------------------ | :--------------------------------------------------------- |
+| Largest file `read` loads                               | 10 MiB by default (`--max-file-size`, up to 100 MiB)       |
+| Total content of one `create` call                      | Same as the file size limit                                |
+| Total text of one batched `read`                        | 512 KiB; files past the budget are reported as skipped     |
+| Files per `create`, `move` call                         | 100                                                        |
+| Paths per `read`, `stat`, `delete` call                 | 1000                                                       |
+| Files per `edit` call                                   | 5, with up to 100 edits per file                           |
+| `find_files` / `search_text` results                    | Up to 10,000 per call, paged                               |
+| `list` entries                                          | 1000 per page by default, up to 20,000                     |
+| `list`, `stat`, `read`, search tools and `replace_text` | Time out after about 5 seconds; narrow the path or pattern |
+| Cached results and page cursors                         | Expire after about 60 seconds                              |
 
 `read` handles text files and returns images and audio as media. It refuses
 other binary files and UTF-16 text files.

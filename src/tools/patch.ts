@@ -148,6 +148,7 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
     content: patched,
     dryRun: args.dryRun,
     lastModified: fileStats.mtime.toISOString(),
+    transport: ctx.transport,
   });
   const { resourceLink, ...fileMeta } = meta;
   return {

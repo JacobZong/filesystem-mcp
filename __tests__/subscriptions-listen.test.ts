@@ -80,6 +80,25 @@ describe('HTTP watcher fan-out and listen admission', () => {
     });
   });
 
+  it('rejects an out-of-root or sensitive resource before acknowledging the listen', async () => {
+    const other = await createTestRoot();
+    try {
+      const outside = await writeTestFile(other, 'outside.txt', 'x');
+      const sensitive = await writeTestFile(tmpDir, '.env', 'x');
+      for (const p of [outside, sensitive]) {
+        await assert.rejects(
+          client.listen({ resourceSubscriptions: [buildFileResourceUri(p)] }),
+          (err: unknown) => {
+            assert.equal((err as { code?: unknown }).code, ProtocolErrorCode.InvalidParams);
+            return true;
+          },
+        );
+      }
+    } finally {
+      await cleanupTestRoot(other);
+    }
+  });
+
   it('rejects a mixed valid/invalid batch and leaves the valid URI reusable', async () => {
     const filePath = await writeTestFile(tmpDir, 'valid-after-reject.txt', 'initial');
     const validUri = buildFileResourceUri(filePath);
