@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.1] - 2026-10-13
+
+A maintenance release. Internal refactors give the read path, paged
+snapshots, confirmations and shared helpers one owner each; no tool, input
+or output field changed. Read Changed if you match on the text of a `read`
+size refusal.
+
+### Changed
+
+- **`read` size refusals share one wording.** A file, single line or tail
+  that exceeds the size limit now reports
+  `File exceeds size limit (<bytes> > <limit> bytes[, <detail>])` instead of
+  `File too large (...)`, and the remedy ("Use head to preview.", "Use a
+  narrower range or head.", "Use a narrower tail or head.") moves from the
+  message into the error's `suggestion`. The `TOO_LARGE` code is unchanged.
+
 ## [2.8.0] - 2026-10-13
 
 A security and reliability release. It closes four sandbox gaps: glob
