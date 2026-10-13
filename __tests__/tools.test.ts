@@ -203,7 +203,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   });
 
   it('sensitive files never surface through search_text, find_files, list, replace_text or resources/read', async () => {
-    const token = 'SENTINEL_ENV_9f3c1e';
+    const token = 'example-sentinel-9f3c1e';
     const dir = join(tmpDir, 'boundary_walk');
     const envFile = await writeTestFile(tmpDir, 'boundary_walk/.env', `SECRET=${token}\n`);
     const plain = await writeTestFile(tmpDir, 'boundary_walk/plain.txt', `note ${token}\n`);

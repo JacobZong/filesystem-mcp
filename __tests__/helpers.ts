@@ -350,7 +350,7 @@ export async function createTestHttpHarness(
   };
 }
 
-export const TEST_API_KEY = 'x-test-key-0123456789';
+export const TEST_API_KEY = 'example-test-key-0123456789';
 
 export interface HttpTestContext {
   port: number;
