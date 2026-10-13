@@ -136,6 +136,37 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     }
   });
 
+  it('every read path re-checks the opened descriptor against the roots', async (t) => {
+    const filePath = await writeTestFile(tmpDir, 'fd-recheck.txt', 'in-root\n');
+    // Make the descriptor read back as out-of-root on every OS, so the
+    // Linux-only /proc/self/fd re-check is exercised here too.
+    const originalReadlink = fsPromises.readlink.bind(fsPromises);
+    t.mock.method(fsPromises, 'readlink', (path: PathLike) =>
+      String(path).startsWith('/proc/self/fd/')
+        ? Promise.resolve('/outside-roots/secret.txt')
+        : originalReadlink(path),
+    );
+    syncBuiltinESMExports();
+    try {
+      const reads: Record<string, () => Promise<unknown>> = {
+        readFile: () => fs.readFile(filePath, { kind: 'full' }),
+        readEditableText: () => fs.readEditableText(filePath),
+        readRaw: () => fs.readRaw(filePath),
+        open: async () => {
+          await (await fs.open(filePath)).close();
+        },
+        readLeadingSample: () => fs.readLeadingSample(filePath),
+        countFileLines: () => fs.countFileLines(filePath),
+      };
+      for (const [name, read] of Object.entries(reads)) {
+        await assert.rejects(read(), fsErrorMatcher(ErrorCode.ACCESS_DENIED, 'TOCTOU'), name);
+      }
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
   describe('Read slicing & batch (TC-FUNC-002–006)', () => {
     it('TC-FUNC-002: readFile with head slicing returns first N lines', async () => {
       const filePath = await writeNLineFile(tmpDir, 'read_head.txt', 10);

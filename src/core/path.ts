@@ -150,7 +150,7 @@ export async function resolveAllowedDirectoriesState(
 /**
  * TOCTOU note: validation returns a plain string and the fs operation is a
  * later syscall, so a symlink swapped in between could redirect it. Reads and
- * appends in core/fs.ts and core/read.ts open with O_NOFOLLOW (final component)
+ * appends in core/fs.ts open with O_NOFOLLOW (final component)
  * and re-check the fd's real path on Linux (ancestor swap). Residual: write
  * paths that resolve a parent by name (`rename`, `mkdir`, `rm`, `cp`) would
  * need openat()-relative-to-dirfd, which Node lacks; non-Linux skips the fd

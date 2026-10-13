@@ -112,6 +112,39 @@ export class GuardedFileSystem {
     }
   }
 
+  /** The one read open: O_NOFOLLOW, then the descriptor re-check above. */
+  async #openVerified(
+    validPath: string,
+    requestedPath: string,
+    signal?: AbortSignal,
+  ): Promise<FileHandle> {
+    const opening = fsOpen(validPath, READ_NOFOLLOW);
+    let handle: FileHandle;
+    try {
+      handle = await withAbort(opening, signal);
+    } catch (error) {
+      // An open the signal abandoned still lands; close it then.
+      void opening
+        .then(
+          (late) => late.close(),
+          () => undefined,
+        )
+        .catch((closeErr: unknown) => {
+          Logger.warn(
+            `Failed to close file handle for ${validPath} after abort: ${formatUnknownErrorMessage(closeErr)}`,
+          );
+        });
+      throw error;
+    }
+    try {
+      await this.#assertFdWithinRoots(handle, requestedPath);
+      return handle;
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+  }
+
   /**
    * Serialize a read-modify-write on the resolved write target, so two writers
    * of one file (any spelling, including via a symlinked parent) cannot both
@@ -376,8 +409,8 @@ export class GuardedFileSystem {
     spec.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     const stats = await withAbort(fsStat(validPath), spec.signal);
-    return readFileWithStats(filePath, validPath, stats, spec, (handle) =>
-      this.#assertFdWithinRoots(handle, filePath),
+    return readFileWithStats(filePath, validPath, stats, spec, () =>
+      this.#openVerified(validPath, filePath, spec.signal),
     );
   }
 
@@ -405,7 +438,7 @@ export class GuardedFileSystem {
         strictUtf8: true,
         ...(options?.signal ? { signal: options.signal } : {}),
       },
-      (handle) => this.#assertFdWithinRoots(handle, filePath),
+      () => this.#openVerified(validPath, filePath, options?.signal),
     );
     return { validPath, content, stats };
   }
@@ -426,9 +459,8 @@ export class GuardedFileSystem {
       throw createTooLargeError(stats.size, maxTextFileSize, filePath);
     }
     let content: Buffer;
-    const handle = await fsOpen(validPath, READ_NOFOLLOW);
+    await using handle = await this.#openVerified(validPath, filePath);
     try {
-      await this.#assertFdWithinRoots(handle, filePath);
       content = await fsReadFile(handle, options);
     } catch (error) {
       // Node wraps even a TimeoutError signal reason in AbortError.
@@ -436,8 +468,6 @@ export class GuardedFileSystem {
         options?.signal?.throwIfAborted();
       }
       throw error;
-    } finally {
-      await handle.close();
     }
     const mimeInfo = detectMimeFromContent(validPath, content);
     return {
@@ -448,15 +478,7 @@ export class GuardedFileSystem {
   }
 
   async open(filePath: string): Promise<FileHandle> {
-    const validPath = await this.pathGuard.validateExistingPath(filePath);
-    const handle = await fsOpen(validPath, READ_NOFOLLOW);
-    try {
-      await this.#assertFdWithinRoots(handle, filePath);
-    } catch (error) {
-      await handle.close();
-      throw error;
-    }
-    return handle;
+    return this.#openVerified(await this.pathGuard.validateExistingPath(filePath), filePath);
   }
 
   // Single resolution + stat: validateExistingPathDetailed resolves the real
