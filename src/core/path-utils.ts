@@ -1,5 +1,15 @@
 import { homedir, platform } from 'node:os';
-import { basename, delimiter, dirname, join, parse, resolve, sep, win32 } from 'node:path';
+import {
+  basename,
+  delimiter,
+  dirname,
+  join,
+  parse,
+  relative,
+  resolve,
+  sep,
+  win32,
+} from 'node:path';
 
 // ─── Shared primitives (no intra-package imports; every core module may import this) ──
 
@@ -41,21 +51,6 @@ export function warnInvalidSetting(
   );
 }
 
-/**
- * Parse a boolean env flag: `true`/`1` enable, `false`/`0`/empty disable.
- * Any other value warns once per var (when `name` is given) and reads as
- * false, so a typo like `FS_ALLOW_SENSITIVE=yes` is never silent.
- */
-export function parseTrueEnvFlag(value: string | undefined, name?: string): boolean {
-  if (value === undefined) return false;
-  const trimmed = value.trim().toLowerCase();
-  if (trimmed === 'true' || trimmed === '1') return true;
-  if (name && trimmed !== '' && trimmed !== 'false' && trimmed !== '0') {
-    warnInvalidSetting(name, value, '"true" or "1"', false);
-  }
-  return false;
-}
-
 export function splitDirList(val: string | undefined): string[] {
   if (!val) return [];
   return val
@@ -75,9 +70,14 @@ export const isAlpha = (code: number): boolean =>
 
 export const toPosixPath = (value: string): string => value.replaceAll('\\', '/');
 
+/** `path.relative` with forward slashes, so displayed paths match across platforms. */
+export function toPosixRelative(from: string, to: string): string {
+  return toPosixPath(relative(from, to));
+}
+
 // ─── Path normalization and containment ──────────────────────────────────────
 
-const CHAR_COLON = 58;
+export const CHAR_COLON = 58;
 const HOMEDIR = homedir();
 
 const RESERVED_DEVICE_NAMES = new Set<string>([
@@ -105,8 +105,15 @@ const RESERVED_DEVICE_NAMES = new Set<string>([
   'LPT9',
 ]);
 
+/**
+ * Win32 strips trailing dots and spaces at the syscall boundary (a request for
+ * `.env ` creates `.env`), so every name check must trim them first or it is
+ * bypassed on Windows.
+ */
+export const trimTrailingDotsAndSpaces = (segment: string): string => segment.replace(/[. ]+$/, '');
+
 function getReservedDeviceName(segment: string): string | undefined {
-  const trimmed = segment.replace(/[. ]+$/, '');
+  const trimmed = trimTrailingDotsAndSpaces(segment);
   const withoutStream = trimmed.split(':')[0] ?? '';
   const baseName = (withoutStream.split('.')[0] ?? '').toUpperCase();
   return RESERVED_DEVICE_NAMES.has(baseName) ? baseName : undefined;

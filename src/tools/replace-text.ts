@@ -13,7 +13,7 @@ import { buildWrittenFileMeta } from '../core/file-uri.ts';
 import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
-import { toPosixRelative } from '../core/path.ts';
+import { toPosixRelative } from '../core/path-utils.ts';
 import { createTooLargeError, readFileBufferWithLimit } from '../core/read.ts';
 import {
   defaultFalseBoolean,

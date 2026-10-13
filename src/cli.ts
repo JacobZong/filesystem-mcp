@@ -13,11 +13,10 @@ import {
   IS_WINDOWS,
   isWindowsDriveRelativePath,
   normalizePath,
-  parseTrueEnvFlag,
 } from './core/path-utils.ts';
 import { PathGuard } from './core/path.ts';
 import { describeSensitivePolicy } from './core/sensitive.ts';
-import { getMaxInboundMessageBytes, getMaxTextFileSize } from './core/util.ts';
+import { getMaxInboundMessageBytes, getMaxTextFileSize, parseTrueEnvFlag } from './core/util.ts';
 import { registeredTools } from './tools/index.ts';
 
 // ════════════════════════════════════════════════════════════

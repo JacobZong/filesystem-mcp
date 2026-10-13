@@ -6,9 +6,8 @@ import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { ErrorCode, isFsError, isSkippableErrno, SKIPPABLE_FS_CODES } from '../core/errors.ts';
 import { pageTrailer } from '../core/fmt.ts';
 import { globEntries } from '../core/glob.ts';
-import { type EntryType, resolveEntryType } from '../core/path-utils.ts';
+import { type EntryType, resolveEntryType, toPosixRelative } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
-import { toPosixRelative } from '../core/path.ts';
 import {
   CursorSchema,
   IncludeHidden,

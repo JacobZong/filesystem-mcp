@@ -1,16 +1,20 @@
 // Sensitive-file denylist policy: the compiled pattern set, the path
 // normalization that feeds it, and the NTFS alternate-data-stream stripping
 // Windows needs. Split out of path.ts so the denylist has its own home — it
-// shares only isAlpha / toPosixPath / IS_WINDOWS with the primitives in
-// path-utils.ts, not the allowed-directory assembly. path.ts and
-// path-completer.ts reach it through PathGuard.isSensitive, which delegates here.
+// shares only character-level primitives from path-utils.ts, not the
+// allowed-directory assembly. path.ts and path-completer.ts reach it through
+// PathGuard.isSensitive, which delegates here.
 import { normalize, posix, sep } from 'node:path';
 
 import { cli } from './config.ts';
-import { IS_WINDOWS, isAlpha, parseTrueEnvFlag, toPosixPath } from './path-utils.ts';
-import { escapeRegExp } from './util.ts';
-
-const CHAR_COLON = 58;
+import {
+  CHAR_COLON,
+  IS_WINDOWS,
+  isAlpha,
+  toPosixPath,
+  trimTrailingDotsAndSpaces,
+} from './path-utils.ts';
+import { escapeRegExp, parseTrueEnvFlag } from './util.ts';
 
 function normalizeForMatch(input: string): string {
   // Always lowercase for case-insensitive denylist matching on all platforms.
@@ -208,10 +212,8 @@ function matchesAnyGlob(globs: readonly RegExp[], candidate: string): boolean {
 // Strip NTFS alternate-data-stream suffixes (the ":stream" after a segment)
 // before denylist matching, so `.env:secret` is caught as `.env`. Preserves the
 // drive-letter colon in the first segment of an absolute path. Also trims
-// trailing dots/spaces: Win32 strips them at the syscall boundary (a request
-// to create `.env ` actually creates `.env`), so without trimming them here the
-// exact-name patterns (`.env`, `.npmrc`) are bypassed on Windows. Mirrors the
-// precedent in getReservedDeviceName (path.ts) which trims for the same reason.
+// trailing dots/spaces (see trimTrailingDotsAndSpaces in path-utils.ts), the
+// same trim getReservedDeviceName applies.
 function stripAlternateDataStreams(filePath: string): string {
   const parts = filePath.split(/[\\/]/);
   const stripped = parts.map((segment, i) => {
@@ -225,15 +227,10 @@ function stripAlternateDataStreams(filePath: string): string {
     }
     const colonIdx = segment.indexOf(':');
     const withoutStream = colonIdx !== -1 ? segment.slice(0, colonIdx) : segment;
-    // Win32 strips trailing dots and spaces at the syscall boundary, so a
-    // request for ".env " creates ".env". Strip them before denylist matching
-    // or the exact-name patterns (".env", ".npmrc") are bypassed on Windows.
     return trimTrailingDotsAndSpaces(withoutStream);
   });
   return stripped.join(sep);
 }
-
-const trimTrailingDotsAndSpaces = (segment: string): string => segment.replace(/[. ]+$/, '');
 
 const DEFAULT_SENSITIVE_PATTERNS = [
   '.env',
