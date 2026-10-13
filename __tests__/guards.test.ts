@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -179,7 +178,7 @@ describe('Data-loss guards', () => {
       const guard = new PathGuard({ cliAllowedDirs: [root] });
       await guard.recomputeAllowedDirectories();
       const before = guard.getAllowedDirectories();
-      const outside = await mkdtemp(join(tmpdir(), 'fsmcp-guard005-'));
+      const outside = await createTestRoot();
       try {
         const original = guard.recomputeAllowedDirectories.bind(guard);
         guard.recomputeAllowedDirectories = () => Promise.reject(new Error('recompute failed'));

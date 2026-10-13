@@ -11,6 +11,7 @@ import { access, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import { ErrorCode } from '../src/core/errors.ts';
 import {
   buildInputRequired,
@@ -108,7 +109,7 @@ describe('input_required multi-round-trip infrastructure', () => {
       { name: 'url-only-test', version: '1.0.0' },
       {
         capabilities: { elicitation: { url: {} } },
-        versionNegotiation: { mode: { pin: '2026-07-28' } },
+        versionNegotiation: { mode: { pin: MODERN_PROTOCOL_REVISION } },
       },
     );
     let elicitations = 0;
@@ -595,7 +596,7 @@ describe('wrapped inputResponses over the modern wire', () => {
           // 2026-07-28 request missing any of them before dispatch
           // (`validateStandardRequestHeaders` in the SDK). `Mcp-Name` must
           // equal `params.name` for tools/call.
-          'mcp-protocol-version': '2026-07-28',
+          'mcp-protocol-version': MODERN_PROTOCOL_REVISION,
           'mcp-method': 'tools/call',
           'mcp-name': String(params['name']),
         },
