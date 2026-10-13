@@ -5,7 +5,7 @@ import { basename } from 'node:path';
 import { detectMimeFromContent } from './mime.ts';
 import type { FileKind } from './mime.ts';
 import { countLines } from './read.ts';
-import { getMaxTextFileSize } from './util.ts';
+import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES } from './util.ts';
 
 // Single owner of the `filesystem-mcp://file/` URI scheme — the template string,
 // the path→URI encoder, the URI→path decoder, the link blocks built from them,
@@ -105,7 +105,9 @@ export interface WrittenFileMeta {
  * the store serves the URI via readRaw, which would reject it with TOO_LARGE.
  * File resources are read directly from disk, not from the result store.
  * `lastModified` is the post-write mtime when the caller stat'd the file; a
- * link without it is still valid.
+ * link without it is still valid. None over stdio past
+ * `MAX_OUTBOUND_RESULT_BYTES` — stdio's `resources/read` refuses such a
+ * file before reading it.
  */
 export function writtenFileLinks(
   validPath: string,
@@ -113,8 +115,14 @@ export function writtenFileLinks(
   size: number | undefined,
   dryRun = false,
   lastModified?: string,
+  transport?: 'stdio' | 'http',
 ): Pick<WrittenFileMeta, 'resourceUri' | 'resourceLink'> {
-  if (dryRun || size === undefined || size > getMaxTextFileSize()) {
+  if (
+    dryRun ||
+    size === undefined ||
+    size > getMaxTextFileSize() ||
+    (transport === 'stdio' && size > MAX_OUTBOUND_RESULT_BYTES)
+  ) {
     return { resourceUri: undefined, resourceLink: undefined };
   }
   return {
@@ -134,6 +142,7 @@ export function buildWrittenFileMeta(options: {
   content: string;
   dryRun?: boolean | undefined;
   lastModified?: string | undefined;
+  transport?: 'stdio' | 'http' | undefined;
 }): WrittenFileMeta {
   const { validPath, content } = options;
   const size = Buffer.byteLength(content, 'utf-8');
@@ -143,6 +152,13 @@ export function buildWrittenFileMeta(options: {
     lineCount: countLines(content),
     mimeType,
     kind,
-    ...writtenFileLinks(validPath, mimeType, size, options.dryRun, options.lastModified),
+    ...writtenFileLinks(
+      validPath,
+      mimeType,
+      size,
+      options.dryRun,
+      options.lastModified,
+      options.transport,
+    ),
   };
 }

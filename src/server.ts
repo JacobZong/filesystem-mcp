@@ -169,7 +169,7 @@ export async function createServer(
         }
         voidSend(server.server.sendResourceListChanged(), 'resource list_changed');
       },
-      // A tool hands out no link that this connection's resources/read refuses.
+      // A tool hands out no result-store link that this connection's resources/read refuses; file links are gated in writtenFileLinks.
       extraDeps?.transport === 'stdio' ? { maxReadResultBytes: MAX_OUTBOUND_RESULT_BYTES } : {},
     );
   const pageStore = extraDeps?.pageStore ?? new PageSnapshotStore();

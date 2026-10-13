@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Write tools over stdio link only files `resources/read` can return.**
+  A file written past about 9.75 MiB no longer gets a `resource_link` that
+  the stdio connection's `resources/read` always refuses.
 - **A cancelled or timed-out read no longer shuts the server down.** A file
   read that started after its call was cancelled, for example a
   `replace_text` worker opening its next file after the 5-second deadline,

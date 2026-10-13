@@ -360,6 +360,24 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     await assertRecovery();
   });
 
+  it('an edit over stdio links the file only when resources/read can serve it', async () => {
+    const big = join(root, 'link-big.txt');
+    const small = join(root, 'link-small.txt');
+    await writeFile(big, 'HEAD\n' + 'line\n'.repeat(Math.floor((9.9 * MIB) / 5)));
+    await writeFile(small, 'HEAD\nline\n');
+    const edit = (path: string) =>
+      harness.client.callTool(
+        { name: 'edit', arguments: { path, edits: [{ oldText: 'HEAD', newText: 'HEAD2' }] } },
+        { timeout: 5000 },
+      );
+    const bigResult = await edit(big);
+    assert.ok(!bigResult.isError, firstTextBlock(bigResult).text);
+    assert.ok(!bigResult.content.some((b) => b.type === 'resource_link'));
+    const smallResult = await edit(small);
+    assert.ok(!smallResult.isError);
+    assert.ok(smallResult.content.some((b) => b.type === 'resource_link'));
+  });
+
   it('read keeps its own remedies through the shared guard', async () => {
     const image = await harness.client.callTool(
       { name: 'read', arguments: { path: imageFile } },

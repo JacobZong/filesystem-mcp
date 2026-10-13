@@ -394,6 +394,7 @@ async function editOnce(
     content: editResult.content,
     dryRun: options.dryRun,
     lastModified: modified,
+    transport: ctx.transport,
   });
   const { resourceLink, ...fileMeta } = meta;
   return {

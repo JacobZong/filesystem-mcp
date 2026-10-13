@@ -22,7 +22,7 @@ import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent, searchFiles } from '../src/core/search.ts';
-import { getMaxTextFileSize } from '../src/core/util.ts';
+import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
   cleanupTestRoot,
@@ -722,6 +722,24 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         resourceUri: undefined,
         resourceLink: undefined,
       });
+    });
+
+    it('written file links stop at the stdio ceiling on stdio only', () => {
+      const path = join(tmpDir, 'stdio-links.txt');
+      const over = MAX_OUTBOUND_RESULT_BYTES + 1;
+      assert.deepStrictEqual(
+        writtenFileLinks(path, 'text/plain', over, false, undefined, 'stdio'),
+        {
+          resourceUri: undefined,
+          resourceLink: undefined,
+        },
+      );
+      assert.ok(
+        writtenFileLinks(path, 'text/plain', MAX_OUTBOUND_RESULT_BYTES, false, undefined, 'stdio')
+          .resourceUri,
+      );
+      assert.ok(writtenFileLinks(path, 'text/plain', over, false, undefined, 'http').resourceUri);
+      assert.ok(writtenFileLinks(path, 'text/plain', over).resourceUri);
     });
   });
 

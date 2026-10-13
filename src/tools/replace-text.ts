@@ -587,6 +587,7 @@ async function handleSearchAndReplace(
         content: summary.primary.content,
         dryRun: args.dryRun,
         lastModified: primaryModified,
+        transport: ctx.transport,
       }).resourceLink
     : undefined;
   return link ? { structured, link } : { structured };
