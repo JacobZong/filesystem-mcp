@@ -47,6 +47,7 @@ graphify-out
 !.github/workflows/
 !.github/ISSUE_TEMPLATE/
 !.github/pull_request_template.md
+!.github/dependabot.yml
 .vscode/*
 !.vscode/extensions.json
 !.vscode/tasks.json
