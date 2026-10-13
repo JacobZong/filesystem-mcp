@@ -59,6 +59,7 @@ states, refined by this map's decision tickets, in batch PRs merged with
 - [How are the 15 findings batched into PRs alongside M-01?](tickets/T-05-batching.md) — Four file-disjoint PRs: singles {2,6,13}, tool code {3,7,8,9,14}, guard {4,12,15}, transport {5,10,11}; the old map's finding 5 is not folded in.
 - [In what order do the batches merge relative to M-01?](tickets/T-06-merge-order.md) — One chain over both maps: singles, old core singles, tool code, guard, old resources.ts, transport, old test cluster last.
 - [Which delivery process does each batch follow?](tickets/T-07-delivery-process.md) — Mixed: singles and tool code go direct (pin, refactor, bug-hunt, qc); guard and transport are planned (write-plan, plan-hunt, run-plan, bug-hunt, qc).
+- [Deliver the singles batch (findings 2, 6, 13)](tickets/T-11-deliver-singles-batch.md) — Delivered: PR #73 merged as f6b890cc (slot 1); check green, src net -31 lines.
 
 ## Not yet specified
 

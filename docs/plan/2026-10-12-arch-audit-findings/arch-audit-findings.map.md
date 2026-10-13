@@ -50,6 +50,7 @@ shared file, each merged with `npm run check` green.
 - [Which delivery process does each batch follow?](tickets/T-02-delivery-process.md) — Direct edit for all four: test pin first where a visible behaviour changes, refactor otherwise, then bug-hunt and qc before each merge; audit-findings.md is the plan.
 - [Are the two visible behaviour changes acceptable?](tickets/T-03-behaviour-acceptance.md) — Both accepted: the near-cap too-large-to-cache refusal at externalization, and replace_text adopting the owner's TOO_LARGE wording.
 - [In what order do the batch PRs merge?](tickets/T-04-merge-order.md) — Fixed risk-ascending chain: tool singles, core singles, resources.ts, test cluster last; batches are file-disjoint, only CHANGELOG text rebases.
+- [Deliver the tool singles batch (findings 7 and 8)](tickets/T-08-tool-singles-batch.md) — Delivered: PR #63 merged as b1d96f99 on 2026-10-12; closed at the 2026-10-13 recovery.
 
 ## Not yet specified
 

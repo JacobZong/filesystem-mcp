@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `errors.ts`, including `FsError`'s, goes through the one builder that
   drops unset keys. ADR-002 records that its legacy-harness migration
   covers 15 test files, not six.
+- **`find_files` walks its entries inline.** The one-caller generator that
+  validated each walked path is folded into its caller, with the same
+  abort, refusal and cap order (net -10 lines, no behavior change).
 
 ## [2.7.6] - 2026-10-12
 

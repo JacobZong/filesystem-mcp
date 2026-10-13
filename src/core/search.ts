@@ -5,7 +5,7 @@ import { RE2 } from '@adguard/re2-wasm';
 
 import { processEntriesConcurrently, resolveStopReason } from './concurrency.ts';
 import { GuardedFileSystem } from './fs.ts';
-import { globEntries, type GlobEntry } from './glob.ts';
+import { globEntries } from './glob.ts';
 import type { PathGuard } from './path.ts';
 import { escapeRegExp, getMaxTextFileSize, MIB, PARALLEL_CONCURRENCY } from './util.ts';
 
@@ -476,36 +476,6 @@ function canPrefilter(source: string, buffer: Buffer): boolean {
   return true;
 }
 
-async function* guardedEntries(
-  entries: AsyncIterable<GlobEntry>,
-  pathGuard: PathGuard,
-  signal: AbortSignal | undefined,
-  counters: { skippedInaccessible: number; stoppedByAbort: boolean },
-): AsyncGenerator<GlobEntry> {
-  // The signal carries both client cancellation and the tool's search timeout,
-  // so an abort means "return what we have, marked incomplete" rather than
-  // throw — but it must never be reported as a finished scan. The walk itself
-  // throws when the signal stops it before a single entry is yielded.
-  try {
-    for await (const entry of entries) {
-      if (signal?.aborted) {
-        counters.stoppedByAbort = true;
-        return;
-      }
-      try {
-        await pathGuard.validateExistingPath(entry.path);
-      } catch {
-        counters.skippedInaccessible++;
-        continue;
-      }
-      yield entry;
-    }
-  } catch (error) {
-    if (!signal?.aborted) throw error;
-    counters.stoppedByAbort = true;
-  }
-}
-
 export async function searchFiles(
   directory: string,
   pattern: string,
@@ -545,12 +515,32 @@ export async function searchFiles(
   });
   const results: { path: string }[] = [];
   let filesScanned = 0;
-  const counters = { skippedInaccessible: 0, stoppedByAbort: false };
+  let skippedInaccessible = 0;
+  let stoppedByAbort = false;
 
-  for await (const entry of guardedEntries(entries, pathGuard, options.signal, counters)) {
-    if (results.length >= maxResults) break;
-    filesScanned++;
-    results.push({ path: entry.path });
+  // The signal carries both client cancellation and the tool's search timeout,
+  // so an abort means "return what we have, marked incomplete" rather than
+  // throw — but it must never be reported as a finished scan. The walk itself
+  // throws when the signal stops it before a single entry is yielded.
+  try {
+    for await (const entry of entries) {
+      if (options.signal?.aborted) {
+        stoppedByAbort = true;
+        break;
+      }
+      try {
+        await pathGuard.validateExistingPath(entry.path);
+      } catch {
+        skippedInaccessible++;
+        continue;
+      }
+      if (results.length >= maxResults) break;
+      filesScanned++;
+      results.push({ path: entry.path });
+    }
+  } catch (error) {
+    if (!options.signal?.aborted) throw error;
+    stoppedByAbort = true;
   }
 
   // Sorting — only name / path are supported; size / modified were removed
@@ -562,7 +552,7 @@ export async function searchFiles(
   }
 
   // Same precedence as above: the result cap wins over a same-iteration abort.
-  const stoppedReason = resolveStopReason(results.length >= maxResults, counters.stoppedByAbort);
+  const stoppedReason = resolveStopReason(results.length >= maxResults, stoppedByAbort);
 
   return {
     basePath: directory,
@@ -571,7 +561,7 @@ export async function searchFiles(
       matched: results.length,
       filesScanned,
       truncated: stoppedReason !== undefined,
-      skippedInaccessible: counters.skippedInaccessible,
+      skippedInaccessible,
       ...(stoppedReason ? { stoppedReason } : {}),
     },
   };
