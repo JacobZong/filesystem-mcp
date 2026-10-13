@@ -9,7 +9,7 @@ import type { ReadResourceResult, ServerContext } from '@modelcontextprotocol/se
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../src/core/config.ts';
@@ -884,6 +884,38 @@ describe('filesystem resource path completion', () => {
       // SDK slices.
       assert.ok(result.completion.values[0]?.endsWith('f000.txt'));
       assert.ok(result.completion.values[99]?.endsWith('f099.txt'));
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('does not list inside a directory whose own name is sensitive', async () => {
+    const vault = join(root, 'vault.key');
+    await mkdir(vault);
+    await writeFile(join(vault, 'inner.txt'), 'x');
+    const harness = await createTestClientPair([root]);
+    try {
+      const result = await harness.client.complete({
+        ref: { type: 'ref/resource', uri: FILESYSTEM_FILE_URI_TEMPLATE },
+        argument: { name: 'path', value: encodeFileUriPath(`${vault}${sep}`) },
+      });
+      assert.deepStrictEqual(result.completion.values, []);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('still suggests roots when the guard refuses the searched directory', async () => {
+    const harness = await createTestClientPair([root]);
+    try {
+      const result = await harness.client.complete({
+        ref: { type: 'ref/resource', uri: FILESYSTEM_FILE_URI_TEMPLATE },
+        argument: { name: 'path', value: encodeFileUriPath(`${dirname(root)}${sep}`) },
+      });
+      assert.ok(
+        result.completion.values.some((v) => v.includes(basename(root))),
+        `root missing from ${JSON.stringify(result.completion.values)}`,
+      );
     } finally {
       await harness.close();
     }

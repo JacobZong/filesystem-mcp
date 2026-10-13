@@ -64,6 +64,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copying it field by field, and `list`, `find_files`, `search_text`,
   `edit` and `replace_text` drop one-caller wrappers (net -111 lines
   across 8 files).
+- **Path completion no longer lists inside a directory the guard refuses,
+  and an access grant follows the startup boundary rule.** Completion used
+  its own copy of the directory check, so it listed the contents of a
+  directory whose own name is sensitive (such as `vault.key`). It now asks
+  the guard, and a refusal still returns the matching roots. A client root
+  that does not exist yet, spelled through a symlinked `FS_ROOT_BOUNDARY`,
+  was refused as a grant although the same spelling is kept as a startup
+  root; grants now project it the same way. The same rule refuses two grants
+  the old lexical fallback accepted: a missing folder under an in-boundary
+  symlink that points outside the boundary, and one whose parent cannot be
+  resolved. The sensitive-file check moves into the one access check that
+  runs it.
 
 ## [2.7.6] - 2026-10-12
 

@@ -318,6 +318,23 @@ describe('PathGuard grant round-trip', () => {
       );
     });
   });
+
+  it('TC-PG-018: applyGrant admits a missing directory spelled through a symlinked FS_ROOT_BOUNDARY', async (t) => {
+    // Grants follow the startup-root rule (TC-PG-017): a missing target is
+    // projected through its nearest existing ancestor, not compared lexically.
+    const target = await mkDir(createdDirs, 'fsmcp-pg018-target-');
+    const link = join(root, 'boundary-link');
+    const made = await trySymlink(target, link, () => t.skip('symlinks not permitted here'));
+    if (!made) return;
+    process.env['FS_ROOT_BOUNDARY'] = link;
+    const missing = join(link, 'not-yet');
+    await withEnv({ FS_ALLOW_MISSING_ROOTS: '1' }, async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [target] });
+      await guard.recomputeAllowedDirectories();
+      assert.strictEqual(await guard.applyGrant(missing), true);
+      assert.ok(containsPath(guard.getRoots(), missing), 'the granted directory is a root');
+    });
+  });
 });
 
 describe('Write/Delete PathGuard', () => {

@@ -114,10 +114,7 @@ export function normalizeAllowedDirectories(dirs: readonly string[]): string[] {
   return [...new Set(dirs.map(normalizeAllowedDirectory).filter((entry) => entry.length > 0))];
 }
 
-export async function resolveRealPath(
-  normalized: string,
-  signal?: AbortSignal,
-): Promise<string | null> {
+async function resolveRealPath(normalized: string, signal?: AbortSignal): Promise<string | null> {
   try {
     signal?.throwIfAborted();
     const realPath = await withAbort(realpath(normalized), signal);
@@ -149,10 +146,6 @@ export async function resolveAllowedDirectoriesState(
     ),
   ];
 }
-
-// ---------------------------------------------------------------------------
-// Windows helpers
-// ---------------------------------------------------------------------------
 
 /**
  * TOCTOU note: validation returns a plain string and the fs operation is a
@@ -408,38 +401,18 @@ export class PathGuard {
     });
   }
 
-  // The guard already realpath-resolved FS_ROOT_BOUNDARY into rootBoundaries
-  // during recomputeAllowedDirectories. Reuse that single source of truth so
-  // grant paths check the same boundary the rest of the guard enforces,
-  // instead of re-reading the env and re-resolving each entry.
+  // One boundary rule for startup roots and grants: a missing target is
+  // projected through its nearest existing ancestor, an unresolvable one is
+  // refused. No boundary configured means no constraint; partitionRootsWithin
+  // with no bounds would drop everything, so that case returns first.
   private async isWithinBoundary(targetDir: string): Promise<boolean> {
     if (this.rootBoundaries.length === 0) {
       return true;
     }
-    let resolved: string;
-    try {
-      resolved = normalizePath(await realpath(targetDir));
-    } catch {
-      resolved = normalizePath(targetDir);
-    }
-    return isPathWithinDirectories(resolved, this.rootBoundaries);
+    const { kept } = await partitionRootsWithin([targetDir], this.rootBoundaries);
+    return kept.length > 0;
   }
 
-  private validateAccessAndSensitivity(requestedPath: string): {
-    normalizedRequested: string;
-    allowedDirs: string[];
-    accessDeniedHint: string;
-  } {
-    const result = this.validateAccess(requestedPath);
-    this.assertNotSensitiveFile(requestedPath, requestedPath);
-    this.assertNotSensitiveFile(result.normalizedRequested, requestedPath);
-    return result;
-  }
-
-  // Synchronous since the access-grant round-trip moved to the executor's
-  // pre-check: validateAccess only does lexical containment math and throws,
-  // no async I/O remains. Callers still `await` it for uniform control-flow;
-  // awaiting a non-thenable returns it unchanged.
   private validateAccess(requestedPath: string): {
     normalizedRequested: string;
     allowedDirs: string[];
@@ -486,6 +459,8 @@ export class PathGuard {
       // never pre-checked — fail closed.
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
+    this.assertNotSensitiveFile(requestedPath, requestedPath);
+    this.assertNotSensitiveFile(normalizedRequested, requestedPath);
 
     return {
       normalizedRequested,
@@ -538,7 +513,7 @@ export class PathGuard {
 
   async validateExistingPathDetailed(requestedPath: string): Promise<ValidatedPathDetails> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
-      this.validateAccessAndSensitivity(requestedPath);
+      this.validateAccess(requestedPath);
 
     let realPath: string;
     try {
@@ -703,7 +678,7 @@ export class PathGuard {
 
   async validatePathForWrite(requestedPath: string): Promise<string> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
-      this.validateAccessAndSensitivity(requestedPath);
+      this.validateAccess(requestedPath);
 
     const { realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
       requestedPath,
@@ -723,7 +698,7 @@ export class PathGuard {
 
   async validatePathForDelete(requestedPath: string): Promise<string> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
-      this.validateAccessAndSensitivity(requestedPath);
+      this.validateAccess(requestedPath);
 
     // A workspace root is refused here, before the parent-containment check
     // below reaches for a parent that is out-of-root by construction and
