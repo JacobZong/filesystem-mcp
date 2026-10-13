@@ -1,0 +1,82 @@
+---
+kind: frontier-map
+id: M-01
+title: Fix the 2026-10-13 architecture audit findings
+status: open
+created: 2026-10-13T00:00:00Z
+---
+
+## Destination
+
+All 15 findings from the 2026-10-13 architecture audit are on `main`.
+Each one lands as the move [audit findings](assets/audit-findings.md)
+states, refined by this map's decision tickets, in batch PRs merged with
+`npm run check` green.
+
+## Notes
+
+- Scope source: [audit findings](assets/audit-findings.md), audited at
+  `1bc6b791`. Line numbers drift, so re-grep before every edit.
+- Sibling effort:
+  [Fix the 2026-10-12 architecture audit findings](../2026-10-12-arch-audit-findings/arch-audit-findings.map.md)
+  is still open (its findings 1-6 and 9). Shared ground with it:
+  - `src/core/fs.ts` `readLeadingSample`: this map's finding 1 and its
+    finding 9.
+  - That map's finding 9 moved into this map's finding 1 PR (T-03). Its
+    core singles batch ticket (T-05 there) still names finding 9 in its
+    title; its next session narrows the delivery to findings 1 and 6.
+  - `src/server.ts` and `src/transport/stdio.ts`: this map's findings 10
+    and 11 and its finding 5.
+- Skills every session consults: `grilling` for decision tickets. For
+  delivery, use the process the delivery-process ticket settles: `tdd` or
+  `refactor`, then `bug-hunt` and `qc`; or `write-plan`, `plan-hunt` and
+  `run-plan`.
+- Standing preferences:
+  - Never hand-edit versions (`AGENTS.md`).
+  - The release type is the user's call.
+  - Grep every caller of a touched function before dispatch.
+  - Commits, pushes and merges need the user's go-ahead.
+
+### Execution contract
+
+- Scope: the move each finding states in
+  [audit findings](assets/audit-findings.md), as refined by this map's
+  decision tickets, and nothing beyond it.
+- Completion: the stated move is present in the diff, `npm run check` exits
+  0, and the batch PR carrying it is merged to `main` with the user's
+  confirmation.
+- Evidence: the task ticket's Resolution records the `npm run check` result
+  (test counts), the net line delta, and the PR link.
+
+## Decisions so far
+
+- [Is the H4 bypass real on all three read paths, and what test pins it?](tickets/T-01-h4-bypass-facts.md) — Real: scanFile leaks content on every OS; the read known branch and readLeadingSample leak via ancestor swap on Linux; countFileLines is a fourth path; local attacker only.
+- [What exactly changes in behavior for findings 3, 10, 12 and 15?](tickets/T-02-behaviour-deltas.md) — 3 breaks nothing; 10 changes only modern stdio with FS_API_KEY; 12 hides sensitive-named dirs and must catch guard throws; 15 grants a missing seeded root via a symlinked boundary and must keep the empty-boundary return.
+- [Does finding 1 ship as a security fix, separately and first?](tickets/T-03-security-fix-first.md) — Yes: own PR, merged before every other batch of both maps, CHANGELOG Security entry and no advisory. Scope adds countFileLines and the old map's finding 9. Tests: flipper plus a Linux-only ancestor swap.
+- [Which delivery process does the finding 1 security PR follow?](tickets/T-09-security-pr-process.md) — Planned: write-plan, plan-hunt, run-plan, then bug-hunt and qc before merge.
+
+## Not yet specified
+
+- QC follow-up from the finding 1 PR: open every read through
+  `GuardedFileSystem.open` (pass `readFileWithStats` the handle, delete
+  `openReadableFileHandle`, the `verifyHandle` lambdas and `readRaw`'s
+  duplicate open; `readEditableText` becomes a size check plus
+  `readFile`). Open question: it sits outside the execution contract's
+  scope, so does the destination widen to take it, or does it leave as
+  its own refactor? See [`read-path-h4.run.md`](read-path-h4.run.md).
+- One delivery task per batch PR for findings 2-15. Waits on the batching
+  decision; each batch's task graduates once its batch, process and merge
+  slot are known.
+
+## Out of scope
+
+- Reopening ADR-001 so `globEntries` resolves `ignoreCeiling` itself. The
+  2026-09-28 amendment blesses per-caller ceilings; that needs a
+  `write-adr` effort of its own.
+- The below-the-bar cut list and the unverified Windows segment-order
+  claim in [audit findings](assets/audit-findings.md). These are ponytail
+  and bug-hunt hand-offs.
+- Releasing. A version bump runs through the Release workflow, on the
+  user's call.
+
+## Superseded

@@ -28,7 +28,7 @@ import {
   isNodeError,
   isNotFoundErrno,
 } from './errors.ts';
-import { detectMimeFromContent } from './mime.ts';
+import { detectMimeFromContent, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
 import { normalizePath, respellCaseOnlyTarget } from './path-utils.ts';
@@ -76,40 +76,6 @@ async function resolveForWrite(pathGuard: PathGuard, filePath: string): Promise<
 const CHAR_LF = 10;
 
 const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
-
-/**
- * Line count for a file on disk, counting newline bytes in fixed 64 KiB
- * chunks so an arbitrarily large file (one append's result metadata) costs
- * bounded memory. NOT FileHandle.readLines: it decodes each physical line
- * whole, so a multi-GB single-line log OOMs the server after the append has
- * already landed — a reported failure invites a retry that appends twice.
- * Matches read.ts's countLines semantics: a trailing newline does not open
- * a new line, an unterminated final line counts, an empty file is 0.
- */
-export async function countFileLines(filePath: string): Promise<number> {
-  const handle = await fsOpen(filePath, READ_NOFOLLOW);
-  try {
-    let newlines = 0;
-    let lastByte = 0;
-    let totalBytes = 0;
-    const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
-    for (;;) {
-      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
-      if (bytesRead === 0) break;
-      totalBytes += bytesRead;
-      for (let i = 0; i < bytesRead; i++) {
-        const byte = chunk[i] ?? 0;
-        if (byte === CHAR_LF) newlines++;
-        lastByte = byte;
-      }
-    }
-    // totalBytes is the empty-file sentinel: a NUL (0x00) final byte is real
-    // content and must count as an unterminated final line, not "empty".
-    return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
-  } finally {
-    await handle.close();
-  }
-}
 
 export class GuardedFileSystem {
   readonly pathGuard: PathGuard;
@@ -347,16 +313,41 @@ export class GuardedFileSystem {
    * file — an append's result must describe the resulting file (which may be
    * a multi-GB log), not the chunk that was appended.
    */
-  async readLeadingSample(filePath: string, size: number): Promise<Buffer> {
-    const { validPath } = await this.stat(filePath);
-    const handle = await fsOpen(validPath, READ_NOFOLLOW);
-    try {
-      const buffer = Buffer.alloc(size);
-      const { bytesRead } = await handle.read(buffer, 0, size, 0);
-      return buffer.subarray(0, bytesRead);
-    } finally {
-      await handle.close();
+  async readLeadingSample(filePath: string): Promise<Buffer> {
+    await using handle = await this.open(filePath);
+    const buffer = Buffer.alloc(MIME_SAMPLE_SIZE);
+    const { bytesRead } = await handle.read(buffer, 0, MIME_SAMPLE_SIZE, 0);
+    return buffer.subarray(0, bytesRead);
+  }
+
+  /**
+   * Line count for a file on disk, counting newline bytes in fixed 64 KiB
+   * chunks so an arbitrarily large file (one append's result metadata) costs
+   * bounded memory. NOT FileHandle.readLines: it decodes each physical line
+   * whole, so a multi-GB single-line log OOMs the server after the append has
+   * already landed — a reported failure invites a retry that appends twice.
+   * Matches read.ts's countLines semantics: a trailing newline does not open
+   * a new line, an unterminated final line counts, an empty file is 0.
+   */
+  async countFileLines(filePath: string): Promise<number> {
+    await using handle = await this.open(filePath);
+    let newlines = 0;
+    let lastByte = 0;
+    let totalBytes = 0;
+    const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
+    for (;;) {
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      totalBytes += bytesRead;
+      for (let i = 0; i < bytesRead; i++) {
+        const byte = chunk[i] ?? 0;
+        if (byte === CHAR_LF) newlines++;
+        lastByte = byte;
+      }
     }
+    // totalBytes is the empty-file sentinel: a NUL (0x00) final byte is real
+    // content and must count as an unterminated final line, not "empty".
+    return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
   }
 
   async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<void> {
