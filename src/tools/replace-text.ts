@@ -19,8 +19,8 @@ import {
   defaultFalseBoolean,
   IncludeHidden,
   IncludeIgnored,
-  isBlank,
   MaxDepth,
+  nonBlankString,
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
@@ -51,13 +51,8 @@ const SearchAndReplaceInputSchema = z.strictObject({
   pattern: SafeGlobPattern.optional().describe(
     'Glob to restrict replacements to specific file types (e.g. **/*.ts); default: all text files',
   ),
-  searchPattern: z
-    .string()
-    .min(1)
+  searchPattern: nonBlankString('searchPattern')
     .max(10000)
-    .refine((val) => !isBlank(val), {
-      message: 'searchPattern cannot be empty or whitespace-only',
-    })
     .describe(
       'Exact literal text or RE2 regex pattern to search for. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only.',
     ),
@@ -114,9 +109,14 @@ interface Failure {
   error: Problem;
 }
 
-function recordFailure(failures: Failure[], failure: Failure): void {
-  if (failures.length >= MAX_FAILURES) return;
-  failures.push(failure);
+/** Counts every failure; keeps the first MAX_FAILURES of them for the result. */
+function recordFailure(summary: ReplaceSummary, entryPath: string, error: unknown): void {
+  summary.failedFiles++;
+  if (summary.failures.length >= MAX_FAILURES) return;
+  summary.failures.push({
+    path: toPosixRelative(summary.root, entryPath),
+    error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, entryPath),
+  });
 }
 
 function recordChangedFile(summary: ReplaceSummary, plan: ReplacementPlan, filePath: string): void {
@@ -263,7 +263,8 @@ function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMa
 type SearchAndReplaceArgs = z.infer<typeof SearchAndReplaceInputSchema>;
 
 interface ReplaceContext {
-  options: { dryRun: boolean; returnDiff: boolean };
+  dryRun: boolean;
+  returnDiff: boolean;
   replacement: string;
   matcher: ReplacementMatcher;
   maxFileSize: number;
@@ -280,12 +281,12 @@ interface ReplacementPlan {
 }
 
 async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<void> {
-  const { options, signal, summary } = ctx;
+  const { dryRun, returnDiff, signal, summary } = ctx;
 
   try {
     // Lock the read→write per file so a concurrent writer is not lost; a dry
     // run never writes and skips the lock.
-    const plan = options.dryRun
+    const plan = dryRun
       ? await readReplacementPlan(entryPath, ctx)
       : await ctx.fs.lockForWrite(entryPath, async () => {
           const planned = await readReplacementPlan(entryPath, ctx);
@@ -307,18 +308,14 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
       filePath: entryPath,
       originalContent: plan.originalContent,
       updatedContent: plan.updatedContent,
-      includeDiff: options.dryRun || options.returnDiff,
+      includeDiff: dryRun || returnDiff,
     });
   } catch (error) {
     // A timeout/cancel aborts the whole scan, not just this file: don't record
     // it as a per-file failure. processEntriesConcurrently reports the run as
     // stoppedReason 'timeout' instead.
     if (signal?.aborted) return;
-    summary.failedFiles++;
-    recordFailure(summary.failures, {
-      path: toPosixRelative(summary.root, entryPath),
-      error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, entryPath),
-    });
+    recordFailure(summary, entryPath, error);
   }
 }
 
@@ -526,10 +523,8 @@ async function handleSearchAndReplace(
   let stoppedReason: StoppedReason | undefined;
   try {
     const context: ReplaceContext = {
-      options: {
-        dryRun: args.dryRun,
-        returnDiff: args.returnDiff,
-      },
+      dryRun: args.dryRun,
+      returnDiff: args.returnDiff,
       replacement: args.replacement,
       matcher,
       maxFileSize,
@@ -549,11 +544,7 @@ async function handleSearchAndReplace(
         ctx.onProgress({ current: summary.processedFiles });
       },
       onError: (entryPath, err) => {
-        summary.failedFiles++;
-        recordFailure(summary.failures, {
-          path: toPosixRelative(summary.root, entryPath),
-          error: Problem.fromUnknown(err, ErrorCode.UNKNOWN, entryPath),
-        });
+        recordFailure(summary, entryPath, err);
       },
       runEntry: (entryPath) => processEntry(entryPath, context),
     });

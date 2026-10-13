@@ -19,7 +19,7 @@ import {
   DEFAULT_SEARCH_TIMEOUT_MS,
   MAX_SEARCH_RESULTS,
 } from '../core/util.ts';
-import { defineTool, type ToolCtx } from './define.ts';
+import { defineTool } from './define.ts';
 
 // ---------------------------------------------------------------------------
 
@@ -63,81 +63,6 @@ type SearchFilesPageMetadata = Awaited<ReturnType<typeof searchFiles>>['summary'
   readonly root: string;
 };
 
-function searchFilesOutput(
-  results: readonly SearchFileResult[],
-  metadata: SearchFilesPageMetadata,
-  nextCursor: string | undefined,
-  resourceUri: string | undefined,
-): SearchFilesOutput {
-  return {
-    root: metadata.root,
-    results: [...results],
-    totalMatches: metadata.matched,
-    filesScanned: metadata.filesScanned,
-    ...(metadata.skippedInaccessible ? { skippedInaccessible: metadata.skippedInaccessible } : {}),
-    ...(metadata.stoppedReason !== undefined ? { stoppedReason: metadata.stoppedReason } : {}),
-    ...(resourceUri !== undefined ? { resourceUri } : {}),
-    ...(nextCursor !== undefined ? { nextCursor } : {}),
-  };
-}
-
-async function handleSearchFiles(
-  args: z.infer<typeof SearchFilesInputSchema>,
-  ctx: ToolCtx,
-): Promise<{
-  structured: SearchFilesOutput;
-  offset: number;
-  total: number;
-  link?: ReturnType<typeof putJsonResource>['link'];
-}> {
-  const requestedBasePath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-  const queryKey = JSON.stringify({
-    method: 'find_files',
-    path: requestedBasePath,
-    pattern: args.pattern,
-    includeIgnored: args.includeIgnored,
-    includeHidden: args.includeHidden,
-    sortBy: args.sortBy,
-    maxDepth: args.maxDepth,
-  });
-  const paged = await paginate<SearchFileResult, SearchFilesPageMetadata, JsonResourceResult>({
-    store: ctx.pageStore,
-    queryKey,
-    cursor: args.cursor,
-    pageSize: args.maxResults,
-    produce: async () => {
-      const basePath = await ctx.fs.pathGuard.validateExistingDirectory(requestedBasePath);
-      const searchOptions: Parameters<typeof searchFiles>[2] = {
-        maxResults: MAX_SEARCH_RESULTS,
-        includeHidden: args.includeHidden,
-        sortBy: args.sortBy,
-        skipIgnored: !args.includeIgnored,
-        ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
-        signal: ctx.signal,
-      };
-      const result = await searchFiles(basePath, args.pattern, searchOptions, ctx.fs.pathGuard);
-      return {
-        items: result.results.map((r) => ({ path: toPosixRelative(result.basePath, r.path) })),
-        metadata: { root: result.basePath, ...result.summary },
-        truncated: result.summary.truncated,
-      };
-    },
-    externalize: (results) => putJsonResource(ctx.resourceStore, `${args.pattern} files`, results),
-  });
-
-  return {
-    structured: searchFilesOutput(
-      paged.page,
-      paged.metadata,
-      paged.nextCursor,
-      paged.resource?.entry.uri,
-    ),
-    offset: paged.offset,
-    total: paged.metadata.matched,
-    ...(paged.resource ? { link: paged.resource.link } : {}),
-  };
-}
-
 export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesOutput>({
   name: 'find_files',
   title: 'Find Files',
@@ -156,7 +81,55 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
   }),
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
-    const { structured, offset, total, link } = await handleSearchFiles(args, ctx);
+    const requestedBasePath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
+    const queryKey = JSON.stringify({
+      method: 'find_files',
+      path: requestedBasePath,
+      pattern: args.pattern,
+      includeIgnored: args.includeIgnored,
+      includeHidden: args.includeHidden,
+      sortBy: args.sortBy,
+      maxDepth: args.maxDepth,
+    });
+    const paged = await paginate<SearchFileResult, SearchFilesPageMetadata, JsonResourceResult>({
+      store: ctx.pageStore,
+      queryKey,
+      cursor: args.cursor,
+      pageSize: args.maxResults,
+      produce: async () => {
+        const basePath = await ctx.fs.pathGuard.validateExistingDirectory(requestedBasePath);
+        const searchOptions: Parameters<typeof searchFiles>[2] = {
+          maxResults: MAX_SEARCH_RESULTS,
+          includeHidden: args.includeHidden,
+          sortBy: args.sortBy,
+          skipIgnored: !args.includeIgnored,
+          ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
+          signal: ctx.signal,
+        };
+        const result = await searchFiles(basePath, args.pattern, searchOptions, ctx.fs.pathGuard);
+        return {
+          items: result.results.map((r) => ({ path: toPosixRelative(result.basePath, r.path) })),
+          metadata: { root: result.basePath, ...result.summary },
+          truncated: result.summary.truncated,
+        };
+      },
+      externalize: (results) =>
+        putJsonResource(ctx.resourceStore, `${args.pattern} files`, results),
+    });
+
+    const { metadata, offset } = paged;
+    const structured: SearchFilesOutput = {
+      root: metadata.root,
+      results: [...paged.page],
+      totalMatches: metadata.matched,
+      filesScanned: metadata.filesScanned,
+      ...(metadata.skippedInaccessible
+        ? { skippedInaccessible: metadata.skippedInaccessible }
+        : {}),
+      ...(metadata.stoppedReason !== undefined ? { stoppedReason: metadata.stoppedReason } : {}),
+      ...(paged.resource ? { resourceUri: paged.resource.entry.uri } : {}),
+      ...(paged.nextCursor !== undefined ? { nextCursor: paged.nextCursor } : {}),
+    };
     const body =
       structured.results.length > 0
         ? structured.results.map((r) => r.path).join('\n')
@@ -166,7 +139,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
       pageTrailer({
         offset,
         shown: structured.results.length,
-        total,
+        total: metadata.matched,
         noun: 'files',
         tool: 'find_files',
         nextCursor: structured.nextCursor,
@@ -174,6 +147,6 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
         stoppedReason: structured.stoppedReason,
         skippedInaccessible: structured.skippedInaccessible,
       });
-    return { structured, text, resources: link ? [link] : [] };
+    return { structured, text, resources: paged.resource ? [paged.resource.link] : [] };
   },
 });

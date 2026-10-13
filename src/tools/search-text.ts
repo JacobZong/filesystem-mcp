@@ -12,8 +12,8 @@ import {
   defaultFalseBoolean,
   IncludeHidden,
   IncludeIgnored,
-  isBlank,
   MaxDepth,
+  nonBlankString,
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
@@ -28,7 +28,6 @@ import {
 import { defineTool, type ToolCtx } from './define.ts';
 
 // Type Definitions
-type SearchInput = z.infer<typeof GrepInputSchema>;
 type SearchResultValue = Awaited<ReturnType<typeof searchContent>>;
 type SearchMatchPayload = SearchResultValue['matches'][number];
 /** The engine's own summary is the page metadata; nothing is copied out of it. */
@@ -41,13 +40,8 @@ const GrepInputSchema = z.strictObject({
   pattern: SafeGlobPattern.optional().describe(
     'Glob to restrict search to specific file types (e.g. **/*.ts); default: all text files',
   ),
-  searchPattern: z
-    .string()
-    .min(1)
+  searchPattern: nonBlankString('searchPattern')
     .max(10000)
-    .refine((val) => !isBlank(val), {
-      message: 'searchPattern cannot be empty or whitespace-only',
-    })
     .describe(
       'Exact literal text or RE2 regex pattern to search for in file contents. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences). Cannot be empty or whitespace-only.',
     ),
@@ -208,79 +202,6 @@ async function resolveSearchScope(
   };
 }
 
-async function handleSearchContent(
-  args: SearchInput,
-  ctx: ToolCtx,
-): Promise<{
-  structured: SearchOutput;
-  offset: number;
-  total: number;
-  link?: ReturnType<typeof putJsonResource>['link'];
-}> {
-  const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-  const queryKey = JSON.stringify({
-    method: 'search_text',
-    path: requestedPath,
-    pattern: args.pattern,
-    searchPattern: args.searchPattern,
-    isRegex: args.isRegex,
-    includeHidden: args.includeHidden,
-    includeIgnored: args.includeIgnored,
-    caseSensitive: args.caseSensitive,
-    maxDepth: args.maxDepth,
-    context: args.context,
-  });
-  const paged = await paginate<SearchMatchPayload, SearchContentPageMetadata, JsonResourceResult>({
-    store: ctx.pageStore,
-    queryKey,
-    cursor: args.cursor,
-    pageSize: args.maxResults,
-    produce: async () => {
-      const { basePath, explicitFile } = await resolveSearchScope(args.path, ctx);
-
-      const result = await searchContent(
-        basePath,
-        args.searchPattern,
-        {
-          includeHidden: args.includeHidden,
-          filePattern: args.pattern ?? '**/*',
-          caseSensitive: args.caseSensitive,
-          isRegex: args.isRegex,
-          maxResults: MAX_SEARCH_RESULTS,
-          skipIgnored: !args.includeIgnored,
-          context: args.context,
-          ...(explicitFile !== undefined ? { explicitFile } : {}),
-          ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
-          signal: ctx.signal,
-        },
-        ctx.fs.pathGuard,
-      );
-
-      return {
-        items: buildSortedPayloads(result),
-        metadata: result.summary,
-        truncated: result.summary.truncated,
-      };
-    },
-    externalize: (matches, metadata) =>
-      putJsonResource(ctx.resourceStore, `'${args.searchPattern}' matches`, {
-        ...searchContentOutput(matches, metadata, undefined, undefined),
-      }),
-  });
-
-  return {
-    structured: searchContentOutput(
-      paged.page,
-      paged.metadata,
-      paged.nextCursor,
-      paged.resource?.entry.uri,
-    ),
-    offset: paged.offset,
-    total: paged.metadata.matchingLines,
-    ...(paged.resource ? { link: paged.resource.link } : {}),
-  };
-}
-
 export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   name: 'search_text',
   title: 'Search Content',
@@ -299,7 +220,65 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   }),
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
-    const { structured, offset, total, link } = await handleSearchContent(args, ctx);
+    const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
+    const queryKey = JSON.stringify({
+      method: 'search_text',
+      path: requestedPath,
+      pattern: args.pattern,
+      searchPattern: args.searchPattern,
+      isRegex: args.isRegex,
+      includeHidden: args.includeHidden,
+      includeIgnored: args.includeIgnored,
+      caseSensitive: args.caseSensitive,
+      maxDepth: args.maxDepth,
+      context: args.context,
+    });
+    const paged = await paginate<SearchMatchPayload, SearchContentPageMetadata, JsonResourceResult>(
+      {
+        store: ctx.pageStore,
+        queryKey,
+        cursor: args.cursor,
+        pageSize: args.maxResults,
+        produce: async () => {
+          const { basePath, explicitFile } = await resolveSearchScope(args.path, ctx);
+
+          const result = await searchContent(
+            basePath,
+            args.searchPattern,
+            {
+              includeHidden: args.includeHidden,
+              filePattern: args.pattern ?? '**/*',
+              caseSensitive: args.caseSensitive,
+              isRegex: args.isRegex,
+              maxResults: MAX_SEARCH_RESULTS,
+              skipIgnored: !args.includeIgnored,
+              context: args.context,
+              ...(explicitFile !== undefined ? { explicitFile } : {}),
+              ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
+              signal: ctx.signal,
+            },
+            ctx.fs.pathGuard,
+          );
+
+          return {
+            items: buildSortedPayloads(result),
+            metadata: result.summary,
+            truncated: result.summary.truncated,
+          };
+        },
+        externalize: (matches, metadata) =>
+          putJsonResource(ctx.resourceStore, `'${args.searchPattern}' matches`, {
+            ...searchContentOutput(matches, metadata, undefined, undefined),
+          }),
+      },
+    );
+
+    const structured = searchContentOutput(
+      paged.page,
+      paged.metadata,
+      paged.nextCursor,
+      paged.resource?.entry.uri,
+    );
     const rows = renderRows(structured.matches, args.context > 0);
     const body =
       rows.length > 0
@@ -321,9 +300,9 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
     const text =
       body +
       pageTrailer({
-        offset,
+        offset: paged.offset,
         shown: structured.matches.length,
-        total,
+        total: paged.metadata.matchingLines,
         noun: 'matches',
         tool: 'search_text',
         nextCursor: structured.nextCursor,
@@ -332,6 +311,6 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
         skippedTooLarge: structured.skippedTooLarge,
         skippedInaccessible: structured.skippedInaccessible,
       });
-    return { structured, text, resources: link ? [link] : [] };
+    return { structured, text, resources: paged.resource ? [paged.resource.link] : [] };
   },
 });

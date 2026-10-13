@@ -18,9 +18,8 @@ const PatchInputSchema = z.strictObject({
   dryRun: defaultFalseBoolean('Preview the result without writing (default: false)'),
 });
 
-type PatchOutput = Omit<WrittenFileMeta, 'resourceUri' | 'resourceLink'> & {
+type PatchOutput = Omit<WrittenFileMeta, 'resourceLink'> & {
   path: string;
-  resourceUri?: string;
   modified: string;
   linesAdded: number;
   linesRemoved: number;
@@ -150,22 +149,19 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
     dryRun: args.dryRun,
     lastModified: fileStats.mtime.toISOString(),
   });
+  const { resourceLink, ...fileMeta } = meta;
   return {
     structured: {
       path: validPath,
-      size: meta.size,
-      lineCount: meta.lineCount,
-      mimeType: meta.mimeType,
-      kind: meta.kind,
+      ...fileMeta,
       modified: fileStats.mtime.toISOString(),
       linesAdded,
       linesRemoved,
-      ...(meta.resourceUri !== undefined ? { resourceUri: meta.resourceUri } : {}),
       ...(args.dryRun ? { diff: args.diff } : {}),
     },
     // A dry run exists to be previewed, so it keeps returning the patched
     // text; only the write path summarizes, where the bytes are on disk.
     text: args.dryRun ? patched : summaryText,
-    ...(meta.resourceLink !== undefined ? { resources: [meta.resourceLink] } : {}),
+    ...(resourceLink !== undefined ? { resources: [resourceLink] } : {}),
   };
 }

@@ -51,6 +51,7 @@ shared file, each merged with `npm run check` green.
 - [Are the two visible behaviour changes acceptable?](tickets/T-03-behaviour-acceptance.md) — Both accepted: the near-cap too-large-to-cache refusal at externalization, and replace_text adopting the owner's TOO_LARGE wording.
 - [In what order do the batch PRs merge?](tickets/T-04-merge-order.md) — Fixed risk-ascending chain: tool singles, core singles, resources.ts, test cluster last; batches are file-disjoint, only CHANGELOG text rebases.
 - [Deliver the tool singles batch (findings 7 and 8)](tickets/T-08-tool-singles-batch.md) — Delivered: PR #63 merged as b1d96f99 on 2026-10-12; closed at the 2026-10-13 recovery.
+- [Deliver the core singles batch (findings 1, 6, 9)](tickets/T-05-core-singles-batch.md) — Delivered: PR #74 ships finding 6; finding 1 refuted at delivery (stdio store already capped); finding 9 shipped in PR #72.
 
 ## Not yet specified
 

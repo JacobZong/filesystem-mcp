@@ -11,7 +11,7 @@ import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
 import { isSamePath } from '../core/path-utils.ts';
 import {
   defaultFalseBoolean,
-  isBlank,
+  nonBlankString,
   RequiredPath,
   singleOrBatchAccessPaths,
 } from '../core/schema.ts';
@@ -21,12 +21,7 @@ import { type BatchResult, isTotalFailure, type PerPathResult, runOverPaths } fr
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EditSpecSchema = z.strictObject({
-  oldText: z
-    .string()
-    .min(1, 'oldText required')
-    .refine((val) => !isBlank(val), {
-      message: 'oldText cannot be empty or whitespace-only',
-    })
+  oldText: nonBlankString('oldText')
     .describe(
       'Exact literal text to locate in the file; it must match exactly once. Include 3-5 lines of context so it does — an oldText found in several places fails with their line numbers.',
     )
@@ -124,9 +119,8 @@ const EditFileInputSchema = z
   // runtime — the model had no way to see that coming.
   .meta({ oneOf: [{ required: ['path', 'edits'] }, { required: ['files'] }] });
 
-type EditFileValue = Omit<WrittenFileMeta, 'resourceUri' | 'resourceLink'> & {
+type EditFileValue = Omit<WrittenFileMeta, 'resourceLink'> & {
   path: string;
-  resourceUri?: string;
   modified: string;
   appliedEdits: number;
   linesAdded?: number;
@@ -297,31 +291,6 @@ function ambiguousEditError(
   );
 }
 
-function buildEditFileValue(
-  validPath: string,
-  meta: WrittenFileMeta,
-  modified: string,
-  result: EditResult,
-): EditFileValue {
-  return {
-    path: validPath,
-    size: meta.size,
-    lineCount: meta.lineCount,
-    mimeType: meta.mimeType,
-    kind: meta.kind,
-    ...(meta.resourceUri !== undefined ? { resourceUri: meta.resourceUri } : {}),
-    modified,
-    appliedEdits: result.appliedEdits,
-    ...(result.appliedEdits > 0 &&
-    result.linesAdded !== undefined &&
-    result.linesRemoved !== undefined
-      ? { linesAdded: result.linesAdded, linesRemoved: result.linesRemoved }
-      : {}),
-    ...(result.unmatchedEdits.length > 0 ? { unmatchedEdits: result.unmatchedEdits } : {}),
-    ...(result.diff ? { diff: result.diff } : {}),
-  };
-}
-
 // A file whose every newline is CRLF gets LF-only edit text converted to match
 // — the rule jsdiff's autoConvertLineEndings applies for `patch`. Range, head
 // and tail reads strip `\r`, so the oldText a model sends is LF-only; text that
@@ -370,26 +339,10 @@ function applyEdits(
   return { content: newContent, appliedEdits, unmatchedEdits };
 }
 
-interface EditFileOptions {
-  dryRun: boolean;
-  ignoreWhitespace: boolean;
-}
-
-async function handleEditFile(
-  filePath: string,
-  edits: z.infer<typeof EditSpecSchema>[],
-  options: EditFileOptions,
-  ctx: ToolCtx,
-): Promise<{ file: EditFileValue; resourceLink?: ContentBlock }> {
-  // A dry run never writes, so it needs no lock.
-  if (options.dryRun) return editOnce(filePath, edits, options, ctx);
-  return ctx.fs.lockForWrite(filePath, () => editOnce(filePath, edits, options, ctx));
-}
-
 async function editOnce(
   filePath: string,
   edits: z.infer<typeof EditSpecSchema>[],
-  options: EditFileOptions,
+  options: { dryRun: boolean; ignoreWhitespace: boolean },
   ctx: ToolCtx,
 ): Promise<{ file: EditFileValue; resourceLink?: ContentBlock }> {
   const { validPath, content } = await ctx.fs.readEditableText(filePath, {
@@ -442,9 +395,24 @@ async function editOnce(
     dryRun: options.dryRun,
     lastModified: modified,
   });
+  const { resourceLink, ...fileMeta } = meta;
   return {
-    file: buildEditFileValue(validPath, meta, modified, editResult),
-    ...(meta.resourceLink ? { resourceLink: meta.resourceLink } : {}),
+    file: {
+      path: validPath,
+      ...fileMeta,
+      modified,
+      appliedEdits: editResult.appliedEdits,
+      ...(editResult.appliedEdits > 0 &&
+      editResult.linesAdded !== undefined &&
+      editResult.linesRemoved !== undefined
+        ? { linesAdded: editResult.linesAdded, linesRemoved: editResult.linesRemoved }
+        : {}),
+      ...(editResult.unmatchedEdits.length > 0
+        ? { unmatchedEdits: editResult.unmatchedEdits }
+        : {}),
+      ...(editResult.diff ? { diff: editResult.diff } : {}),
+    },
+    ...(resourceLink ? { resourceLink } : {}),
   };
 }
 
@@ -511,13 +479,11 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
     const items =
       args.path !== undefined ? [{ path: args.path, edits: args.edits ?? [] }] : (args.files ?? []);
 
-    const options: EditFileOptions = {
-      dryRun: args.dryRun,
-      ignoreWhitespace: args.ignoreWhitespace,
-    };
-
     const batch = await runOverPaths(items, ctx, ErrorCode.UNKNOWN, ({ path, edits }) =>
-      handleEditFile(path, edits, options, ctx),
+      // A dry run never writes, so it needs no lock.
+      args.dryRun
+        ? editOnce(path, edits, args, ctx)
+        : ctx.fs.lockForWrite(path, () => editOnce(path, edits, args, ctx)),
     );
 
     const perPathResults: PerPathResult<EditFileValue>[] = [];

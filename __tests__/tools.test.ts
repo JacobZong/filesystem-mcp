@@ -697,6 +697,22 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('edit refuses an empty or blank oldText with one message', async () => {
+    const file = join(tmpDir, 'edit-blank-old.txt');
+    await writeFile(file, 'original content');
+    for (const oldText of ['', '   ']) {
+      const result = await harness.client.callTool({
+        name: 'edit',
+        arguments: { path: file, edits: [{ oldText, newText: 'x' }] },
+      });
+      assert.strictEqual(result.isError, true, JSON.stringify(oldText));
+      const text = firstTextBlock(result).text ?? '';
+      assert.match(text, /oldText cannot be empty or whitespace-only/u);
+      assert.doesNotMatch(text, /oldText required/u);
+    }
+    assert.strictEqual(await readFile(file, 'utf-8'), 'original content');
+  });
+
   it('recovers arguments a client serialized and spread into indexed keys (issue #51)', async () => {
     const file = join(tmpDir, 'edit-split-args.txt');
     await writeFile(file, 'original content');

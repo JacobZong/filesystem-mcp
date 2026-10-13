@@ -56,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`find_files` walks its entries inline.** The one-caller generator that
   validated each walked path is folded into its caller, with the same
   abort, refusal and cap order (net -10 lines, no behavior change).
+- **An empty `edit` `oldText` or `search_text`/`replace_text` `searchPattern`
+  is refused with the same message as a blank one**, "… cannot be empty or
+  whitespace-only", instead of "oldText required" or the validator's
+  generic too-short text. The three fields now share one non-blank text
+  schema. The write tools spread the shared file metadata instead of
+  copying it field by field, and `list`, `find_files`, `search_text`,
+  `edit` and `replace_text` drop one-caller wrappers (net -111 lines
+  across 8 files).
 
 ## [2.7.6] - 2026-10-12
 

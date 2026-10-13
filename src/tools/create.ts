@@ -326,16 +326,8 @@ async function createOne(
     });
   }
 
-  const file: CreateFileResult = {
-    path: validPath,
-    size: meta.size,
-    lineCount: meta.lineCount,
-    mimeType: meta.mimeType,
-    kind: meta.kind,
-    resourceUri: meta.resourceUri,
-    created,
-    modified,
-  };
+  const { resourceLink, ...fileMeta } = meta;
+  const file: CreateFileResult = { path: validPath, ...fileMeta, created, modified };
 
-  return meta.resourceLink ? { file, resourceLink: meta.resourceLink } : { file };
+  return resourceLink ? { file, resourceLink } : { file };
 }
