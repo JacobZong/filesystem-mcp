@@ -93,6 +93,7 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 | 070  | An `includeHidden` walk reads the tree once                       | P3       | S      | 065, 069      | DONE (branch `advisor/070-include-hidden-one-walk`, tip `7e5020b8`, stacked on 069; ~1.35x measured)                                                          |
 | 071  | A read cancelled before its stream opens never crashes the server | P1       | S      | —             | DONE (branch `advisor/071-aborted-read-stream`, tip `e8cdd68a`)                                                                                               |
 | 072  | Close the three gaps the PR #85 review found                      | P1       | S      | 065, 067, 069 | DONE (branch `advisor/072-pr85-review-fixes`, tip `e5ebf481`; on PR #85)                                                                                      |
+| 073  | Count every extglob group toward the glob wildcard cap            | P1       | S      | 065, 072      | DONE (branch `advisor/073-pr85-second-review`, tip `84bc0ea0`; on PR #85)                                                                                     |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
