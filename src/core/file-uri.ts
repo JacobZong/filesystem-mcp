@@ -5,7 +5,9 @@ import { basename } from 'node:path';
 import { detectMimeFromContent } from './mime.ts';
 import type { FileKind } from './mime.ts';
 import { countLines } from './read.ts';
-import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES } from './util.ts';
+import { getMaxTextFileSize, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from './util.ts';
+
+const KIB = 1024;
 
 // Single owner of the `filesystem-mcp://file/` URI scheme — the template string,
 // the path→URI encoder, the URI→path decoder, the link blocks built from them,
@@ -99,15 +101,37 @@ export interface WrittenFileMeta {
 }
 
 /**
+ * Whether stdio's resources/read would refuse this file: it measures the
+ * JSON-encoded result, so escaping counts, and a file it reads as binary
+ * comes back base64. Without the content, assume the worst escape (6 bytes
+ * per byte) so a link is never one the read refuses.
+ */
+function overStdioRead(
+  validPath: string,
+  mimeType: string,
+  size: number,
+  written: { content: string; kind: FileKind } | undefined,
+): boolean {
+  if (written === undefined) return 6 * size > MAX_OUTBOUND_RESULT_BYTES - 64 * KIB;
+  // readRaw returns any non-text kind as base64 (`isBinary: kind !== 'text'`).
+  if (written.kind !== 'text') return 4 * Math.ceil(size / 3) > MAX_OUTBOUND_RESULT_BYTES;
+  const result = {
+    contents: [{ uri: buildFileResourceUri(validPath), mimeType, text: written.content }],
+  };
+  return jsonBytesOver(result, MAX_OUTBOUND_RESULT_BYTES) !== undefined;
+}
+
+/**
  * The URI and link a write tool may advertise for the file it wrote. None on a
  * dry run — nothing was written, so the file on disk is still the one the
  * caller already has. None when the size is unknown or over the text-size cap —
  * the store serves the URI via readRaw, which would reject it with TOO_LARGE.
  * File resources are read directly from disk, not from the result store.
  * `lastModified` is the post-write mtime when the caller stat'd the file; a
- * link without it is still valid. None over stdio past
- * `MAX_OUTBOUND_RESULT_BYTES` — stdio's `resources/read` refuses such a
- * file before reading it.
+ * link without it is still valid. None over stdio when the read would refuse
+ * it: the JSON-encoded result past `MAX_OUTBOUND_RESULT_BYTES` (escaping
+ * counts, binary is base64), or, with no content to measure, any file whose
+ * worst-case escape could be.
  */
 export function writtenFileLinks(
   validPath: string,
@@ -116,12 +140,13 @@ export function writtenFileLinks(
   dryRun = false,
   lastModified?: string,
   transport?: 'stdio' | 'http',
+  written?: { content: string; kind: FileKind },
 ): Pick<WrittenFileMeta, 'resourceUri' | 'resourceLink'> {
   if (
     dryRun ||
     size === undefined ||
     size > getMaxTextFileSize() ||
-    (transport === 'stdio' && size > MAX_OUTBOUND_RESULT_BYTES)
+    (transport === 'stdio' && overStdioRead(validPath, mimeType, size, written))
   ) {
     return { resourceUri: undefined, resourceLink: undefined };
   }
@@ -159,6 +184,7 @@ export function buildWrittenFileMeta(options: {
       options.dryRun,
       options.lastModified,
       options.transport,
+      { content, kind },
     ),
   };
 }

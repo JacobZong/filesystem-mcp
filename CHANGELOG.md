@@ -30,8 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `replace_text` worker opening its next file after the 5-second deadline,
   raised an uncaught `AbortError` and the server exited.
 - **Write tools over stdio link only files `resources/read` can return.**
-  A file written past about 9.75 MiB no longer gets a `resource_link` that
-  the stdio connection's `resources/read` always refuses.
+  A written file whose `resources/read` result would exceed the stdio message
+  limit once JSON-encoded no longer gets a `resource_link` that the read
+  always refuses.
 
 ## [2.8.1] - 2026-10-13
 

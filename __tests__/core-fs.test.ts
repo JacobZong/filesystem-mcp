@@ -22,7 +22,9 @@ import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent, searchFiles } from '../src/core/search.ts';
-import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES } from '../src/core/util.ts';
+import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES, MIB } from '../src/core/util.ts';
+
+const KIB = 1024;
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
   cleanupTestRoot,
@@ -724,22 +726,27 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       });
     });
 
-    it('written file links stop at the stdio ceiling on stdio only', () => {
+    it('written file links stop at the encoded stdio read size on stdio only', () => {
+      const validPath = join(tmpDir, 'stdio-links.txt');
+      const meta = (content: string, transport?: 'stdio' | 'http') =>
+        buildWrittenFileMeta({ validPath, content, transport });
+      const quotes = '"'.repeat(6 * MIB);
+      // Escapes to about 12 MiB, so the read refuses it.
+      assert.strictEqual(meta(quotes, 'stdio').resourceUri, undefined);
+      // The URI and MIME fields push an exact-ceiling file over.
+      assert.strictEqual(meta('x'.repeat(MAX_OUTBOUND_RESULT_BYTES), 'stdio').resourceUri, undefined);
+      assert.ok(meta('x'.repeat(MAX_OUTBOUND_RESULT_BYTES - 64 * KIB), 'stdio').resourceUri);
+      assert.ok(meta(quotes, 'http').resourceUri);
+      assert.ok(meta(quotes).resourceUri);
+    });
+
+    it('written file links without content assume the worst escape on stdio', () => {
       const path = join(tmpDir, 'stdio-links.txt');
-      const over = MAX_OUTBOUND_RESULT_BYTES + 1;
-      assert.deepStrictEqual(
-        writtenFileLinks(path, 'text/plain', over, false, undefined, 'stdio'),
-        {
-          resourceUri: undefined,
-          resourceLink: undefined,
-        },
+      assert.strictEqual(
+        writtenFileLinks(path, 'text/plain', 2 * MIB, false, undefined, 'stdio').resourceUri,
+        undefined,
       );
-      assert.ok(
-        writtenFileLinks(path, 'text/plain', MAX_OUTBOUND_RESULT_BYTES, false, undefined, 'stdio')
-          .resourceUri,
-      );
-      assert.ok(writtenFileLinks(path, 'text/plain', over, false, undefined, 'http').resourceUri);
-      assert.ok(writtenFileLinks(path, 'text/plain', over).resourceUri);
+      assert.ok(writtenFileLinks(path, 'text/plain', MIB, false, undefined, 'stdio').resourceUri);
     });
   });
 
