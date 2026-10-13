@@ -834,6 +834,34 @@ describe('globEntries characterization', () => {
       await cleanupTestRoot(root);
     }
   });
+
+  it('an includeHidden walk yields each entry once across its pattern variants', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of ['a.txt', '.b.txt', '.d/c.txt', '.d/.e.txt', 'sub/.f.txt']) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      const paths: string[] = [];
+      for await (const entry of globEntries({
+        cwd: root,
+        pattern: '**/*',
+        includeHidden: true,
+      })) {
+        paths.push(relative(root, entry.path).replaceAll('\\', '/'));
+      }
+      assert.strictEqual(new Set(paths).size, paths.length);
+      assert.deepStrictEqual(paths.sort(), [
+        '.b.txt',
+        '.d/.e.txt',
+        '.d/c.txt',
+        'a.txt',
+        'sub/.f.txt',
+      ]);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
 });
 
 describe('ancestor .gitignore', () => {

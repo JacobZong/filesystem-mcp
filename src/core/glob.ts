@@ -635,8 +635,8 @@ function createWalkFilter(
   };
 }
 
-async function* processGlobPattern(
-  pattern: string,
+async function* processGlobPatterns(
+  patterns: readonly string[],
   plan: NormalizedGlob,
   seen: Set<string>,
   onlyFiles: boolean,
@@ -646,7 +646,7 @@ async function* processGlobPattern(
   const { cwd, maxDepth, suppressErrors } = plan;
   let iterable: AsyncIterable<GlobDirentLike>;
   try {
-    iterable = fsGlob(pattern, {
+    iterable = fsGlob([...patterns], {
       cwd,
       exclude: filter.prune,
       withFileTypes: true,
@@ -668,7 +668,7 @@ async function* processGlobPattern(
   } catch (error) {
     if (!suppressErrors) throw error;
     Logger.warn(
-      `globEntries: suppressed mid-walk error for pattern "${pattern}": ${formatUnknownErrorMessage(error)}`,
+      `globEntries: suppressed mid-walk error for pattern "${patterns.join(', ')}":${formatUnknownErrorMessage(error)}`,
     );
   }
   // A pruned walk ends like a finished one. Say it was cut short, so no caller
@@ -698,9 +698,9 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     options.signal,
   );
 
-  for (const pattern of plan.patterns) {
-    yield* processGlobPattern(pattern, plan, seen, onlyFiles, filter, options.signal);
-  }
+  // One walk for every variant: fs.glob reads each directory once and matches
+  // all of them, where a walk per variant re-read the tree for each.
+  yield* processGlobPatterns(plan.patterns, plan, seen, onlyFiles, filter, options.signal);
 }
 
 /** Names a `skipIgnored` walk never enters or yields, at any depth. */
