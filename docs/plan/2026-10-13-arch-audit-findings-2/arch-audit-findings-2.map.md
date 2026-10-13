@@ -2,7 +2,7 @@
 kind: frontier-map
 id: M-01
 title: Fix the sixth architecture audit's 11 findings
-status: open
+status: closed
 created: 2026-10-13T10:47:07Z
 ---
 
@@ -56,6 +56,8 @@ decision tickets, in batch PRs merged with `npm run check` green.
   — delivered in PR #82 (`cd242a8c`); `npm run check` 693/0/5; `src/` net -8.
 - [Deliver batch B3: F6 and the sensitive.ts anchor](tickets/T-06-deliver-b3-primitives.md)
   — delivered in PR #83 (`7df3f33e`) via plan, hunt, run; 693/0/5; `src/` +9 (imports).
+- [Deliver batch B4: F8, F9, F10 remainder](tickets/T-07-deliver-b4-records.md)
+  — delivered in PR #84 (`232bf19f`); 693/0/5; `src/` net -2; one ubuntu re-run.
 
 ## Not yet specified
 
@@ -71,3 +73,36 @@ decision tickets, in batch PRs merged with `npm run check` green.
   own below-bar list in the asset hands off the same way.
 
 ## Superseded
+
+## Closure record
+
+Closed 2026-10-13. All 7 tickets are closed, none is left `initializing`,
+and **Not yet specified** is empty. All 11 findings from the sixth audit are
+on `main`, in four merged batch PRs:
+
+| Batch | Findings | PR | Merge | `npm run check` | `src/` net |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| B1 | F5, F7, F11 | [#81](https://github.com/j0hanz/filesystem-mcp/pull/81) | `f4124ef2` | 676/0/5 | -3 (tests +40) |
+| B2 | F1-F4 | [#82](https://github.com/j0hanz/filesystem-mcp/pull/82) | `cd242a8c` | 693/0/5 | -8 (tests +175) |
+| B3 | F6, F10 (sensitive.ts) | [#83](https://github.com/j0hanz/filesystem-mcp/pull/83) | `7df3f33e` | 693/0/5 | +9 (16 import-wrap) |
+| B4 | F8, F9, F10 rest | [#84](https://github.com/j0hanz/filesystem-mcp/pull/84) | `232bf19f` | 693/0/5 | -2 |
+
+Execution-contract evidence lives in each task ticket's Resolution (T-04 to
+T-07).
+
+Deviations from the asset's stated moves are recorded in those Resolutions:
+- F11 imports the revision constant directly, not through a re-export.
+- F2 uses a key helper rather than a `paginate` signature change, and sorts
+  its entries.
+- F1 in `move.ts` folds the guarded stat into `validateTransferSource`.
+- F5 forwards each site's remedy as `suggestion` (T-01).
+
+Next handoff: none required. Nothing is left to decide or plan. The two
+calls left are both the user's:
+- Releasing goes through the Release workflow, on the user's call.
+- A recurrence of the ubuntu `resources-subscribe` timeout (T-07) would go to
+  the testing audit's flake work.
+
+No `write-adr` handoff: the one record this map touched (ADR-003) was
+amended in place.
+
