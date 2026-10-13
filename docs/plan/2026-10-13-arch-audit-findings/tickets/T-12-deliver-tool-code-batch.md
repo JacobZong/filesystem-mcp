@@ -3,12 +3,12 @@ kind: frontier-ticket
 id: T-12
 title: Deliver the tool-code batch (findings 3, 7, 8, 9, 14)
 map: M-01
-status: open
+status: in-progress
 type: task
 mode: afk
 priority: 30
 blocked_by: ["T-06", "T-07"]
-claimed:
+claimed: 2026-10-13T19:00:00Z
 ---
 
 ## Question
