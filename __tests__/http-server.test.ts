@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { json } from 'node:stream/consumers';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 
+import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import { getMaxInboundMessageBytes, MIB } from '../src/core/util.ts';
 import { MAX_WATCHERS } from '../src/core/watcher-registry.ts';
 import { startHttpServer } from '../src/transport.ts';
@@ -162,7 +163,7 @@ describe('Real HTTP Server integration', () => {
           authorization: ['Bearer', TEST_API_KEY].join(' '),
           'content-type': contentType,
           'mcp-method': 'server/discover',
-          'mcp-protocol-version': '2026-07-28',
+          'mcp-protocol-version': MODERN_PROTOCOL_REVISION,
           accept: 'application/json, text/event-stream',
         },
         body: JSON.stringify({

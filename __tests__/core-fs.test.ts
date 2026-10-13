@@ -270,6 +270,48 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
     });
   });
 
+  describe('Oversize read refusal', () => {
+    const limit = 1024 * 1024;
+    const cases = [
+      {
+        name: 'full read past the limit',
+        spec: { kind: 'full' },
+        message: new RegExp(`^File exceeds size limit \\(${limit + 1} > ${limit} bytes\\)$`),
+        suggestion: 'Use head to preview.',
+      },
+      {
+        name: 'range read hitting one over-long line',
+        spec: { kind: 'range', start: 1 },
+        message: new RegExp(`^File exceeds size limit \\(\\d+ > ${limit} bytes, single line\\)$`),
+        suggestion: 'Use a narrower range or head.',
+      },
+      {
+        name: 'tail read that cannot collect its lines',
+        spec: { kind: 'tail', lines: 2 },
+        message: new RegExp(
+          `^File exceeds size limit \\(\\d+ > ${limit} bytes, could not collect 2 lines\\)$`,
+        ),
+        suggestion: 'Use a narrower tail or head.',
+      },
+    ] as const;
+
+    for (const { name, spec, message, suggestion } of cases) {
+      it(`${name} names the limit and forwards its own remedy`, async () => {
+        await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+          const filePath = join(tmpDir, 'oversize-read.txt');
+          await writeFile(filePath, Buffer.alloc(limit + 1, 0x61));
+
+          await assert.rejects(fs.readFile(filePath, spec), (error: unknown) => {
+            fsErrorMatcher(ErrorCode.TOO_LARGE, message)(error);
+            assert(isFsError(error));
+            assert.strictEqual(error.problem.suggestion, suggestion);
+            return true;
+          });
+        });
+      });
+    }
+  });
+
   describe('Editable text loading', () => {
     it('readEditableText returns validated path, content, and stats', async () => {
       const filePath = await writeTestFile(tmpDir, 'editable.txt', 'editable content');

@@ -3,7 +3,6 @@ import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
 import { access, chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -122,8 +121,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   });
 
   it('TC-FUNC-007: Read path outside allowed root returns isError: true with ACCESS_DENIED', async () => {
-    const outsideFile = join(tmpdir(), 'outside_test.txt');
-    await writeFile(outsideFile, 'secret');
+    const outsideDir = await createTestRoot();
+    const outsideFile = await writeTestFile(outsideDir, 'outside_test.txt', 'secret');
     try {
       const result = await harness.client.callTool({
         name: 'read',
@@ -133,7 +132,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       const firstBlock = firstTextBlock(result);
       assert.ok(firstBlock.text);
     } finally {
-      await rm(outsideFile, { force: true });
+      await cleanupTestRoot(outsideDir);
     }
   });
 
@@ -1353,8 +1352,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   });
 
   it('TC-FUNC-056: Copy out-of-root source returns isError: true with ACCESS_DENIED', async () => {
-    const outsideFile = join(tmpdir(), 'outside_copy.txt');
-    await writeFile(outsideFile, 'secret');
+    const outsideDir = await createTestRoot();
+    const outsideFile = await writeTestFile(outsideDir, 'outside_copy.txt', 'secret');
     try {
       const result = await harness.client.callTool({
         name: 'move',
@@ -1365,7 +1364,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       });
       assert.strictEqual(result.isError, true);
     } finally {
-      await rm(outsideFile, { force: true });
+      await cleanupTestRoot(outsideDir);
     }
   });
 

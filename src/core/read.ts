@@ -68,15 +68,19 @@ export interface ReadFileResult {
   hasMoreLines?: boolean;
 }
 
+/** `label` qualifies the size parenthetical; `suggestion` overrides the TOO_LARGE default remedy. */
 export function createTooLargeError(
   bytesRead: number,
   maxSize: number,
   requestedPath: string,
+  { label, suggestion }: { label?: string; suggestion?: string } = {},
 ): FsError {
   return new FsError(
     ErrorCode.TOO_LARGE,
-    `File exceeds size limit (${bytesRead} > ${maxSize} bytes)`,
+    `File exceeds size limit (${bytesRead} > ${maxSize} bytes${label ? `, ${label}` : ''})`,
     requestedPath,
+    undefined,
+    suggestion,
   );
 }
 
@@ -174,11 +178,10 @@ async function* readLinesBounded(
   let lineNumber = 0;
 
   const tooLong = (bytes: number): FsError =>
-    new FsError(
-      ErrorCode.TOO_LARGE,
-      `File too large (single line ${bytes} > ${options.maxSize} bytes). Use a narrower range or head.`,
-      filePath,
-    );
+    createTooLargeError(bytes, options.maxSize, filePath, {
+      label: 'single line',
+      suggestion: 'Use a narrower range or head.',
+    });
 
   try {
     for await (const chunk of stream) {
@@ -369,11 +372,10 @@ async function readTailContent(
   }
 
   if (stoppedByLimit && lines.length < tail) {
-    throw new FsError(
-      ErrorCode.TOO_LARGE,
-      `File too large (${totalLen} > ${options.maxSize} bytes, could not collect ${tail} lines). Use a narrower tail or head.`,
-      filePath,
-    );
+    throw createTooLargeError(totalLen, options.maxSize, filePath, {
+      label: `could not collect ${tail} lines`,
+      suggestion: 'Use a narrower tail or head.',
+    });
   }
 
   let hasMoreLines = stoppedByLimit || position > 0;
@@ -433,15 +435,6 @@ async function assertNotBinary(
   }
 }
 
-function assertSizeWithinLimit(size: number, maxSize: number, filePath: string): void {
-  if (size <= maxSize) return;
-  throw new FsError(
-    ErrorCode.TOO_LARGE,
-    `File too large (${size} > ${maxSize} bytes). Use head to preview.`,
-    filePath,
-  );
-}
-
 async function readByMode(
   handle: FileHandle,
   validPath: string,
@@ -452,7 +445,11 @@ async function readByMode(
 ): Promise<ReadFileResult> {
   switch (spec.kind) {
     case 'full': {
-      assertSizeWithinLimit(stats.size, options.maxSize, filePath);
+      if (stats.size > options.maxSize) {
+        throw createTooLargeError(stats.size, options.maxSize, filePath, {
+          suggestion: 'Use head to preview.',
+        });
+      }
       const { content, totalLines } = await readFullContent(
         handle,
         options.maxSize,
