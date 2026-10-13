@@ -2,14 +2,12 @@
 import { isUtf8 } from 'node:buffer';
 import { constants } from 'node:fs';
 import type { Stats } from 'node:fs';
-import { open as fsOpen } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
 
 import { withAbort } from './concurrency.ts';
-import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError } from './errors.ts';
+import { ErrorCode, FsError, isFsError } from './errors.ts';
 import { hasUtf16Bom, isBinarySample, isKnownBinaryExtension, MIME_SAMPLE_SIZE } from './mime.ts';
-import { Logger } from './observability.ts';
 import { getMaxTextFileSize } from './util.ts';
 
 const STREAM_CHUNK_SIZE = 64 * 1024;
@@ -27,27 +25,6 @@ export const READ_NOFOLLOW = constants.O_RDONLY | O_NOFOLLOW;
 export const APPEND_NOFOLLOW = constants.O_WRONLY | constants.O_APPEND | O_NOFOLLOW | O_NONBLOCK;
 export const APPEND_CREATE_NOFOLLOW =
   constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW;
-
-async function openReadableFileHandle(filePath: string, signal?: AbortSignal): Promise<FileHandle> {
-  const handlePromise = fsOpen(filePath, READ_NOFOLLOW);
-  if (!signal) return handlePromise;
-  try {
-    return await withAbort(handlePromise, signal);
-  } catch (error) {
-    void handlePromise
-      .then((handle) => {
-        void handle.close().catch((closeErr: unknown) => {
-          Logger.warn(
-            `Failed to close file handle for ${filePath} after abort: ${formatUnknownErrorMessage(closeErr)}`,
-          );
-        });
-      })
-      .catch(() => {
-        /* ignore open error */
-      });
-    throw error;
-  }
-}
 
 async function readProbe(handle: FileHandle, signal?: AbortSignal): Promise<Buffer> {
   const buffer = Buffer.allocUnsafe(MIME_SAMPLE_SIZE);
@@ -527,13 +504,13 @@ export function assertFileStats(filePath: string, stats: Stats): void {
   }
 }
 
-/** Read an already-validated, already-stat'd file per `spec`. */
+/** Read an already-validated, already-stat'd file per `spec`, opened via `openVerified`. */
 export async function readFileWithStats(
   filePath: string,
   validPath: string,
   stats: Stats,
   spec: ReadSpec,
-  verifyHandle: (handle: FileHandle) => Promise<void>,
+  openVerified: () => Promise<FileHandle>,
 ): Promise<ReadFileResult> {
   const options: ReadOptions = {
     maxSize: getMaxTextFileSize(),
@@ -542,8 +519,7 @@ export async function readFileWithStats(
   spec.signal?.throwIfAborted();
   assertFileStats(filePath, stats);
 
-  await using handle = await openReadableFileHandle(validPath, spec.signal);
-  await verifyHandle(handle);
+  await using handle = await openVerified();
 
   await assertNotBinary(validPath, filePath, handle, options);
   spec.signal?.throwIfAborted();
