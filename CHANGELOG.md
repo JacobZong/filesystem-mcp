@@ -5,7 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.8.0] - 2026-10-13
+
+A security and reliability release. It closes four sandbox gaps: glob
+patterns that reached above the searched folder, reads that followed a
+symlink swapped in mid-read, a recursive-delete confirmation that could be
+spent on a different directory, and completion and grant checks that drifted
+from the path guard. Over stdio, a response or request that would overflow
+the transport is now refused instead of dropping the connection. No tool or
+input field was removed; `read` `startLine` and `endLine` now accept values
+above 100,000. Some calls that used to succeed are now refused. Before
+upgrading, read Security if you pass glob patterns with brace sets, ranges or
+drive prefixes, grant client roots through a symlinked `FS_ROOT_BOUNDARY`, or
+have a recursive `delete` prompt open across the upgrade. Read Changed if you
+use stdio with request IDs or progress tokens over 1 KiB or results near
+10 MiB, batch `move` or `copy` entries whose destinations nest, match on the
+empty `oldText` or `searchPattern` error text, or start stdio with
+`FS_API_KEY`. Read Fixed if you rely on `includeHidden` matching dotfiles
+through a literal pattern.
 
 ### Security
 
@@ -39,8 +56,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there the swap window stays as narrow as for every other read; creating
   a symlink on Windows needs privilege. Exploiting this took a local
   process able to write inside an allowed folder.
+- **A recursive `delete` confirmation now authorizes only the directory it
+  asked about.** The confirmation sealed only the path, so a directory
+  replaced at that path while the prompt was open was deleted on the retry.
+  It now also seals each directory's identity (type, device, inode and birth
+  time), and a retry whose target no longer matches is refused for that path
+  with `INVALID_INPUT`. A confirmed directory swapped for a file or symlink
+  is reported per path and never deleted. One removed during the prompt gets
+  its own `NOT_FOUND` (or a no-op with `ignoreIfNotExists`) instead of
+  failing the whole batch. A confirmation minted by 2.7.6 carries no
+  identities and cannot authorize a recursive delete; repeat the call.
+- **Path completion no longer lists inside a directory the guard refuses,
+  and an access grant follows the startup boundary rule.** Completion used
+  its own copy of the directory check, so it listed the contents of a
+  directory whose own name is sensitive (such as `vault.key`). It now asks
+  the guard, and a refusal still returns the matching roots. A client root
+  that does not exist yet, spelled through a symlinked `FS_ROOT_BOUNDARY`,
+  was refused as a grant although the same spelling is kept as a startup
+  root; grants now project it the same way. The same rule refuses two grants
+  the old lexical fallback accepted: a missing folder under an in-boundary
+  symlink that points outside the boundary, and one whose parent cannot be
+  resolved. The sensitive-file check moves into the one access check that
+  runs it.
 
 ### Changed
+
+- **Over stdio, a response that would overflow the client's 10 MiB message
+  reader returns `TOO_LARGE` instead of dropping the connection.** This
+  covers read-only tools, any tool called with `dryRun: true`, and
+  `resources/read`, at 10 MiB less 256 KiB of JSON-encoded result. The
+  refusal says what to do instead (smaller slices, fewer files per preview,
+  or HTTP), and the call keeps none of the links or cursors it cached. A
+  file resource over the limit is refused from its size before it is read,
+  and a cached result too large to read back over stdio is no longer handed
+  out as a link. HTTP is unchanged, and a mutating call is never measured
+  after it commits.
+- **Over stdio, a request ID or `_meta.progressToken` over 1024
+  JSON-encoded bytes is refused with `InvalidRequest` before dispatch**, so
+  the call never runs. Every response echoes the ID and every progress frame
+  the token, so a multi-megabyte value could push a frame past the client's
+  reader. The progress-token refusal carries the request ID.
 
 - **Leaner internals from the fourth over-engineering audit.** Net -39 lines
   across 8 files: `ToolCtx` drops three fields only the executor read,
@@ -64,18 +119,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copying it field by field, and `list`, `find_files`, `search_text`,
   `edit` and `replace_text` drop one-caller wrappers (net -111 lines
   across 8 files).
-- **Path completion no longer lists inside a directory the guard refuses,
-  and an access grant follows the startup boundary rule.** Completion used
-  its own copy of the directory check, so it listed the contents of a
-  directory whose own name is sensitive (such as `vault.key`). It now asks
-  the guard, and a refusal still returns the matching roots. A client root
-  that does not exist yet, spelled through a symlinked `FS_ROOT_BOUNDARY`,
-  was refused as a grant although the same spelling is kept as a startup
-  root; grants now project it the same way. The same rule refuses two grants
-  the old lexical fallback accepted: a missing folder under an in-boundary
-  symlink that points outside the boundary, and one whose parent cannot be
-  resolved. The sensitive-file check moves into the one access check that
-  runs it.
 - **One helper for a notification that can fail only because the client
   left.** The resource-updated and list-changed sends in stdio, the
   resource registrar and the server each wrote their own catch-and-log;
@@ -90,6 +133,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clients. The CLI result is passed through instead of being rebuilt
   twice, and stdio's oversized-ID refusal uses the shared JSON-RPC error
   builder.
+
+### Fixed
+
+- **`read` continues past line 100,000.** `startLine` and `endLine` now
+  accept any positive 32-bit integer (the declared maximum is 2147483647);
+  `head` and `tail` stay capped at 100,000. Lines before `startLine` are
+  counted without being decoded.
+- **A line ending inside an incomplete UTF-8 sequence no longer corrupts
+  the next line.** The decoder carried the leftover bytes across the
+  newline; each line now decodes on its own.
+- **`move` and `copy` refuse batch entries whose destinations nest.** Two
+  recursive copies into `out` and `out/sub` raced over shared files. Both
+  entries are now refused, as overlapping source and destination pairs
+  already were.
+- **A "skip" answer for a directory survives the directory being emptied
+  while the prompt is open.** The retry treated the emptied directory as no
+  longer needing confirmation and deleted it.
+- **`includeHidden` no longer widens literal pattern segments.** Every
+  segment got a dot variant, so `foo.txt` also matched `.foo.txt` and
+  `foo*.txt` matched `.foo1.txt`. Only a segment that starts with `*` or `?`
+  gets one now. With `includeHidden`, a `.gitignore` inside a hidden
+  directory now applies to the walk.
 
 ## [2.7.6] - 2026-10-12
 
