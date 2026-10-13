@@ -52,6 +52,7 @@ shared file, each merged with `npm run check` green.
 - [In what order do the batch PRs merge?](tickets/T-04-merge-order.md) — Fixed risk-ascending chain: tool singles, core singles, resources.ts, test cluster last; batches are file-disjoint, only CHANGELOG text rebases.
 - [Deliver the tool singles batch (findings 7 and 8)](tickets/T-08-tool-singles-batch.md) — Delivered: PR #63 merged as b1d96f99 on 2026-10-12; closed at the 2026-10-13 recovery.
 - [Deliver the core singles batch (findings 1, 6, 9)](tickets/T-05-core-singles-batch.md) — Delivered: PR #74 ships finding 6; finding 1 refuted at delivery (stdio store already capped); finding 9 shipped in PR #72.
+- [Deliver the resources.ts batch (findings 4 and 5)](tickets/T-06-resources-batch.md) — Delivered: PR #77 merged (slot 5); voidSend owns best-effort notifies, the registrar uses getResourceContracts; src net -6.
 
 ## Not yet specified
 
