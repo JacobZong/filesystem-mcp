@@ -13,14 +13,14 @@ import {
   rethrowIfAborted,
 } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
-import { countFileLines, destExists, type Stats } from '../core/fs.ts';
+import { destExists, type Stats } from '../core/fs.ts';
 import {
   confirmKey,
   describeRefusal,
   pendingRoundTrip,
   readAcceptedChoice,
 } from '../core/input-required.ts';
-import { detectMimeFromContent, type FileKind, MIME_SAMPLE_SIZE } from '../core/mime.ts';
+import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isSamePath } from '../core/path-utils.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
@@ -277,11 +277,11 @@ async function createOne(
       stats = (await ctx.fs.stat(appended.validPath)).stats;
       // Sniff the resulting file's leading bytes, not the appended
       // chunk: text appended to a binary file is still a binary file.
-      const sample = await ctx.fs.readLeadingSample(appended.validPath, MIME_SAMPLE_SIZE);
+      const sample = await ctx.fs.readLeadingSample(appended.validPath);
       const mimeInfo = detectMimeFromContent(appended.validPath, sample);
       mimeType = mimeInfo.mimeType;
       kind = mimeInfo.kind;
-      lineCount = await countFileLines(appended.validPath);
+      lineCount = await ctx.fs.countFileLines(appended.validPath);
     } catch (error) {
       ctx.log(
         'warning',

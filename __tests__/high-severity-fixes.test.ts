@@ -330,6 +330,7 @@ describe('High-severity bug-hunt regressions', () => {
     let secret: string;
     let ctx: FilesystemServerContext;
     let fs: GuardedFileSystem;
+    let pair: Awaited<ReturnType<typeof createTestClientPair>>;
 
     before(async () => {
       base = await createTestRoot();
@@ -339,8 +340,10 @@ describe('High-severity bug-hunt regressions', () => {
       await writeFile(secret, 'TOP_SECRET\n');
       ctx = await createTestServer([root]);
       fs = new GuardedFileSystem(ctx.pathGuard);
+      pair = await createTestClientPair([root]);
     });
     after(async () => {
+      await pair.close();
       ctx.disposeRuntimeState();
       await ctx.mcp.close();
       await cleanupTestRoot(base);
@@ -393,6 +396,20 @@ describe('High-severity bug-hunt regressions', () => {
               'a text read must never return the secret',
             );
           }
+          let searched: Awaited<ReturnType<typeof searchContent>> | undefined;
+          try {
+            searched = await searchContent(
+              root,
+              'TOP_SECRET',
+              { explicitFile: victim },
+              ctx.pathGuard,
+            );
+          } catch {
+            /* refusals are fine */
+          }
+          if (searched !== undefined) {
+            assert.strictEqual(searched.matches.length, 0, 'a search must never match the secret');
+          }
           try {
             await fs.appendFile(victim, 'x\n');
           } catch {
@@ -406,6 +423,93 @@ describe('High-severity bug-hunt regressions', () => {
 
       // The decisive assertion: no append escaped into the out-of-root secret.
       assert.strictEqual(await readFile(secret, 'utf-8'), 'TOP_SECRET\n');
+    });
+
+    it('an ancestor directory swapped for a symlink never leaks through any read path', async (t) => {
+      // #assertFdWithinRoots reads /proc/self/fd, so only Linux re-checks an
+      // ancestor; elsewhere this swap is the residual path.ts's TOCTOU note names.
+      if (process.platform !== 'linux') return t.skip('fd re-check is Linux-only');
+      const outsideDir = join(base, 'outside-dir');
+      await mkdir(outsideDir, { recursive: true });
+      await writeFile(join(outsideDir, 'victim.txt'), 'TOP_SECRET\n'.repeat(5));
+      const dir = join(root, 'swapdir');
+      const parked = join(root, 'swapdir.real');
+      await mkdir(dir, { recursive: true });
+      const victim = join(dir, 'victim.txt');
+      await writeFile(victim, 'in-root\n');
+
+      // Each op in its own try, so a lost race heals on the next lap instead
+      // of wedging the flip: dir is the real directory, then a symlink to
+      // outsideDir, then the real directory again.
+      const step = async (op: () => Promise<unknown>): Promise<void> => {
+        try {
+          await op();
+        } catch {
+          /* races are expected */
+        }
+      };
+      let stop = false;
+      const flipper = (async () => {
+        while (!stop) {
+          await step(() => rename(dir, parked));
+          await step(() => symlink(outsideDir, dir));
+          await step(() => rm(dir));
+          await step(() => rename(parked, dir));
+        }
+      })();
+
+      try {
+        for (let i = 0; i < 400; i++) {
+          let searched: Awaited<ReturnType<typeof searchContent>> | undefined;
+          try {
+            searched = await searchContent(
+              root,
+              'TOP_SECRET',
+              { explicitFile: victim },
+              ctx.pathGuard,
+            );
+          } catch {
+            /* refusals are fine */
+          }
+          if (searched !== undefined) {
+            assert.strictEqual(searched.matches.length, 0, 'a search must never match the secret');
+          }
+          const batch = await pair.client.callTool({
+            name: 'read',
+            arguments: { paths: [victim] },
+          });
+          assert.ok(
+            !JSON.stringify(batch).includes('TOP_SECRET'),
+            'a batch read must never return the secret',
+          );
+          let sample: Buffer | undefined;
+          try {
+            sample = await fs.readLeadingSample(victim);
+          } catch {
+            /* refusals are fine */
+          }
+          if (sample !== undefined) {
+            assert.ok(
+              !sample.toString('utf-8').includes('TOP_SECRET'),
+              'a MIME sample must never come from the secret',
+            );
+          }
+          // The secret has 5 lines and the in-root victim 1, so 5 can only
+          // come from the outside file.
+          let lines: number | undefined;
+          try {
+            lines = await fs.countFileLines(victim);
+          } catch {
+            /* refusals are fine */
+          }
+          if (lines !== undefined) {
+            assert.notStrictEqual(lines, 5, 'a line count must never describe the secret');
+          }
+        }
+      } finally {
+        stop = true;
+        await flipper;
+      }
     });
 
     it('a legitimate in-root symlink still reads and appends to its target', async (t) => {

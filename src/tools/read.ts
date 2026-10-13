@@ -1,7 +1,6 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import { createHash } from 'node:crypto';
-import type { Stats } from 'node:fs';
 import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
@@ -11,7 +10,6 @@ import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
 import { detectMimeFromContent, detectMimeType, type FileKind } from '../core/mime.ts';
 import type { ReadFileResult, ReadSpec } from '../core/read.ts';
-import { readFileWithStats } from '../core/read.ts';
 import {
   defaultFalseBoolean,
   singleOrBatchAccessPaths,
@@ -168,13 +166,10 @@ type PerPathReadValue = ReadPerPathValue & {
 interface BatchFileInfo {
   index: number;
   size: number;
-  validPath: string;
-  stats: Stats;
 }
 
 interface BudgetItem {
   path: string;
-  known?: { validPath: string; stats: Stats };
   skip?: FsError;
 }
 
@@ -190,12 +185,7 @@ async function collectFileBudget(
     async ({ path, index }): Promise<BatchFileInfo | undefined> => {
       try {
         const out = await ctx.fs.stat(path);
-        return {
-          index,
-          size: Math.min(out.stats.size, maxSize),
-          validPath: out.validPath,
-          stats: out.stats,
-        };
+        return { index, size: Math.min(out.stats.size, maxSize) };
       } catch (err: unknown) {
         ctx.log('debug', `collectFileBudget: stat failed for "${path}": ${String(err)}`, 'read');
         return undefined;
@@ -213,7 +203,7 @@ async function collectFileBudget(
   let total = 0;
   return filePaths.map((path, i): BudgetItem => {
     const info = byIndex.get(i);
-    // A failed stat is neither known nor skipped, so its read surfaces the
+    // A failed stat is not skipped, so its read surfaces the
     // real error, not a misleading TOO_LARGE.
     if (info === undefined) return { path };
     // Skip this file only; a later, smaller file that still fits is read.
@@ -228,7 +218,7 @@ async function collectFileBudget(
       };
     }
     total += info.size;
-    return { path, known: { validPath: info.validPath, stats: info.stats } };
+    return { path };
   });
 }
 
@@ -289,7 +279,6 @@ async function readOnePath(
   filePath: string,
   args: ReadFileInput,
   ctx: ToolCtx,
-  known?: { validPath: string; stats: Stats },
 ): Promise<PerPathReadValue> {
   // Image/audio full read: return a media content block instead of throwing
   // INVALID_INPUT ("Binary file detected."). Line-range reads are
@@ -318,9 +307,9 @@ async function readOnePath(
   }
 
   const spec = buildReadSpec(args, ctx.signal);
-  const result = known
-    ? await readFileWithStats(filePath, known.validPath, known.stats, spec)
-    : await ctx.fs.readFile(filePath, spec);
+  // The read re-validates and re-stats: the budget pass's stat is only a
+  // size estimate, never a substitute for the guarded open.
+  const result = await ctx.fs.readFile(filePath, spec);
 
   return buildPerPathReadValue(result, {
     includeHash: args.includeHash,
@@ -368,9 +357,9 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       items,
       ctx,
       ErrorCode.NOT_FILE,
-      ({ path, known, skip }) => {
+      ({ path, skip }) => {
         if (skip) throw skip;
-        return readOnePath(path, args, ctx, known);
+        return readOnePath(path, args, ctx);
       },
     );
 

@@ -1,10 +1,10 @@
-import { stat as fsStat, readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { processEntriesConcurrently, resolveStopReason } from './concurrency.ts';
+import { GuardedFileSystem } from './fs.ts';
 import { globEntries, type GlobEntry } from './glob.ts';
 import type { PathGuard } from './path.ts';
 import { escapeRegExp, getMaxTextFileSize, MIB, PARALLEL_CONCURRENCY } from './util.ts';
@@ -256,7 +256,7 @@ type FileScan =
   | { kind: 'scanned'; matches: SearchResult[] };
 
 interface ScanContext {
-  pathGuard: PathGuard;
+  fs: GuardedFileSystem;
   signal: AbortSignal | undefined;
   maxFileSize: number;
   maxResults: number;
@@ -267,22 +267,15 @@ interface ScanContext {
 }
 
 async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileScan> {
-  try {
-    await scanCtx.pathGuard.validateExistingPath(entryPath);
-  } catch {
-    return { kind: 'inaccessible' };
-  }
-
-  try {
-    const stats = await fsStat(entryPath);
-    if (stats.size > scanCtx.maxFileSize) return { kind: 'tooLarge' };
-  } catch {
-    return { kind: 'inaccessible' };
-  }
-
   let buffer: Buffer;
   try {
-    buffer = await readFile(entryPath, { signal: scanCtx.signal });
+    // open() validates, refuses a swapped final symlink (O_NOFOLLOW) and
+    // re-checks the descriptor's real path (H4), so these bytes are the
+    // validated file's, not whatever the name points at by now.
+    await using handle = await scanCtx.fs.open(entryPath);
+    const stats = await handle.stat();
+    if (stats.size > scanCtx.maxFileSize) return { kind: 'tooLarge' };
+    buffer = await handle.readFile({ signal: scanCtx.signal });
   } catch (error) {
     if (scanCtx.signal?.aborted) throw error;
     return { kind: 'inaccessible' };
@@ -394,7 +387,7 @@ export async function searchContent(
     let skippedTooLarge = 0;
     let skippedBinary = 0;
     const scanCtx: ScanContext = {
-      pathGuard,
+      fs: new GuardedFileSystem(pathGuard),
       signal: options.signal,
       maxFileSize,
       maxResults,

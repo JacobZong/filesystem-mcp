@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine expands `{1..100000}` and compares the alternatives pairwise on the
   event loop, which blocked every other request for most of a minute. A
   pattern that expands to more than 1024 alternatives is now refused.
+- **`search_text`, batch `read`, and an append's result now read through the
+  same symlink-swap guard as every other read.** `search_text` read each
+  file by name after validating it, so a symlink swapped in between returned
+  matches from a file outside the allowed folders. A batch `read`, and the
+  MIME type and line count an append reports, skipped the Linux check that
+  the opened file still sits inside the allowed folders, so swapping a
+  parent folder for a symlink leaked them there. These reads now refuse a
+  swapped final symlink on Linux and macOS and, on Linux, re-check the
+  opened file's real location. Windows has no equivalent open flag, so
+  there the swap window stays as narrow as for every other read; creating
+  a symlink on Windows needs privilege. Exploiting this took a local
+  process able to write inside an allowed folder.
 
 ### Changed
 
