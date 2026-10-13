@@ -54,6 +54,8 @@ decision tickets, in batch PRs merged with `npm run check` green.
   — delivered in PR #81 (`f4124ef2`); `npm run check` 676/0/5; net +37.
 - [Deliver batch B2: F1, F2, F3, F4](tickets/T-05-deliver-b2-tools.md)
   — delivered in PR #82 (`cd242a8c`); `npm run check` 693/0/5; `src/` net -8.
+- [Deliver batch B3: F6 and the sensitive.ts anchor](tickets/T-06-deliver-b3-primitives.md)
+  — delivered in PR #83 (`7df3f33e`) via plan, hunt, run; 693/0/5; `src/` +9 (imports).
 
 ## Not yet specified
 
