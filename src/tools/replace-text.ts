@@ -670,10 +670,11 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       );
     }
     const text = lines.join('\n') + (structured.diff ? `\n\n${structured.diff}` : '');
-    const isError = isTotalFailure(structured.summary);
-    if (link) {
-      return { structured, text, resources: [link], isError };
-    }
-    return { structured, text, isError };
+    return {
+      structured,
+      text,
+      resources: link ? [link] : [],
+      isError: isTotalFailure(structured.summary),
+    };
   },
 });

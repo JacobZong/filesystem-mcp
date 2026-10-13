@@ -158,25 +158,17 @@ async function planPath(
       return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
     }
   }
-  const pending = hasChildren;
-  return { status: 'plan', plan: { inputPath, validPath, itemType, firstStats, pending } };
+  return {
+    status: 'plan',
+    plan: { inputPath, validPath, itemType, firstStats, pending: hasChildren },
+  };
 }
 
-async function performDeletion(
-  validPath: string,
-  args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  isDirectory: boolean,
-  fsOps: Pick<GuardedFileSystem, 'rm' | 'rmdir'>,
-): Promise<void> {
-  if (isDirectory && !args.recursive) {
-    await fsOps.rmdir(validPath);
-  } else {
-    await fsOps.rm(validPath, {
-      recursive: args.recursive,
-      force: args.ignoreIfNotExists,
-    });
-  }
-}
+type Identity = Pick<LstatResult['stats'], 'dev' | 'ino' | 'birthtimeMs'>;
+
+/** Same filesystem object. birthtimeMs joins dev/ino, which read 0 on some non-POSIX drivers. */
+const sameIdentity = (a: Identity, b: Identity): boolean =>
+  a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 
 /**
  * Phase 2 (mutation): TOCTOU re-stat against the plan's first stat, then
@@ -204,10 +196,7 @@ async function finalizeDeletion(
   // the type but changes dev/ino/birthtimeMs. birthtimeMs is the primary
   // cross-platform signal — dev/ino can read 0 on some non-POSIX drivers — so
   // combine all three rather than trusting dev/ino alone.
-  const identityChanged =
-    plan.firstStats.stats.dev !== currentStats.stats.dev ||
-    plan.firstStats.stats.ino !== currentStats.stats.ino ||
-    plan.firstStats.stats.birthtimeMs !== currentStats.stats.birthtimeMs;
+  const identityChanged = !sameIdentity(plan.firstStats.stats, currentStats.stats);
   if (plan.itemType !== 'other' && (currentItemType !== plan.itemType || identityChanged)) {
     return {
       failure: {
@@ -221,7 +210,9 @@ async function finalizeDeletion(
   }
 
   try {
-    await performDeletion(plan.validPath, args, currentStats.stats.isDirectory(), ctx.fs);
+    if (currentStats.stats.isDirectory() && !args.recursive) await ctx.fs.rmdir(plan.validPath);
+    else
+      await ctx.fs.rm(plan.validPath, { recursive: args.recursive, force: args.ignoreIfNotExists });
   } catch (error) {
     return { failure: toDeleteFailure(plan.inputPath, error) };
   }
@@ -263,13 +254,7 @@ async function executePlan(
     const identity = confirmationState?.deleteIdentities?.find(
       (entry) => entry.path === plan.validPath,
     );
-    const { stats } = plan.firstStats;
-    if (
-      identity?.itemType !== plan.itemType ||
-      identity.dev !== stats.dev ||
-      identity.ino !== stats.ino ||
-      identity.birthtimeMs !== stats.birthtimeMs
-    ) {
+    if (identity?.itemType !== plan.itemType || !sameIdentity(identity, plan.firstStats.stats)) {
       return {
         failure: {
           path: plan.validPath,

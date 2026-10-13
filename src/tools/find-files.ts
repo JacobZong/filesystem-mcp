@@ -174,9 +174,6 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
         stoppedReason: structured.stoppedReason,
         skippedInaccessible: structured.skippedInaccessible,
       });
-    if (link) {
-      return { structured, text, resources: [link] };
-    }
-    return { structured, text };
+    return { structured, text, resources: link ? [link] : [] };
   },
 });

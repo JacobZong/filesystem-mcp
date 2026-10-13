@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event loop, which blocked every other request for most of a minute. A
   pattern that expands to more than 1024 alternatives is now refused.
 
+### Changed
+
+- **Leaner internals from the fourth over-engineering audit.** Net -39 lines
+  across 8 files: `ToolCtx` drops three fields only the executor read,
+  `delete` inlines its one-caller removal helper and shares one identity
+  check, stdio reuses `normalizeUnknownError`, and the link-returning tools
+  return once instead of branching on whether a link exists.
+
 ## [2.7.6] - 2026-10-12
 
 A security and reliability release. It closes a symlink-swap sandbox escape
