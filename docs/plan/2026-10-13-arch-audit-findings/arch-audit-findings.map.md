@@ -2,7 +2,7 @@
 kind: frontier-map
 id: M-01
 title: Fix the 2026-10-13 architecture audit findings
-status: open
+status: closed
 created: 2026-10-13T00:00:00Z
 ---
 
@@ -66,16 +66,18 @@ states, refined by this map's decision tickets, in batch PRs merged with
 
 ## Not yet specified
 
-- QC follow-up from the finding 1 PR: open every read through
-  `GuardedFileSystem.open` (pass `readFileWithStats` the handle, delete
-  `openReadableFileHandle`, the `verifyHandle` lambdas and `readRaw`'s
-  duplicate open; `readEditableText` becomes a size check plus
-  `readFile`). Open question: it sits outside the execution contract's
-  scope, so does the destination widen to take it, or does it leave as
-  its own refactor? See [`read-path-h4.run.md`](read-path-h4.run.md).
+_None._
 
 ## Out of scope
 
+- QC follow-up from the finding 1 PR: open every read through
+  `GuardedFileSystem.open`. That would pass `readFileWithStats` the
+  handle, delete `openReadableFileHandle` and the `verifyHandle` lambdas,
+  and fold `readRaw`'s duplicate open. Ruled out of scope by the user on
+  2026-10-13. It sits outside the execution contract and is not one of
+  the 15 findings. It drops the abort-on-open race and saves about 20
+  lines. It is left for a later refactor or ponytail pass. See
+  [`read-path-h4.run.md`](read-path-h4.run.md).
 - Reopening ADR-001 so `globEntries` resolves `ignoreCeiling` itself. The
   2026-09-28 amendment blesses per-caller ceilings; that needs a
   `write-adr` effort of its own.
@@ -86,3 +88,26 @@ states, refined by this map's decision tickets, in batch PRs merged with
   user's call.
 
 ## Superseded
+
+## Closure record
+
+Closed 2026-10-13. All 13 tickets are closed, none is initializing, and
+Not yet specified is empty. All 15 findings are on `main`.
+
+| Slot | PR | Findings |
+| :--- | :--- | :--- |
+| security | #72 | 1 (plus the 2026-10-12 map's finding 9) |
+| 1 | #73 | 2, 6, 13 |
+| 3 | #75 | 3, 7, 8, 9, 14 |
+| 4 | #76 | 4, 12, 15 |
+| 6 | #78 | 5, 10, 11 |
+
+Slots 2, 5 and 7 belonged to the 2026-10-12 map (PRs #74, #77 and #79),
+which closed the same day.
+
+- Execution-contract evidence: each delivery ticket's Resolution records
+  its `npm run check` counts, net line delta and PR link. `src/` shrank
+  in every batch: -27, -31, -111, -51 and -10 lines.
+- Next handoff: none required. Releasing is the user's call, through the
+  Release workflow. The ADR-001 ceiling reopen and the QC follow-up are
+  under Out of scope, should either be wanted.
