@@ -7,7 +7,7 @@
 
 The `--port` leg builds its modern handler with
 `createMcpHandler(..., { legacy: 'reject' })`
-([`http.ts:334`](../../src/transport/http.ts#L334)), a posture pinned by
+(in `startHttpServer`, [`http.ts`](../../src/transport/http.ts)), a posture pinned by
 `http-server.test.ts` test 4: a client that opens with the 2025 `initialize`
 handshake gets HTTP 400 with an unsupported-protocol-version error. Every
 mainstream host today — Claude Desktop, Cursor, VS Code, the MCP Inspector's
@@ -76,7 +76,8 @@ reach it.
 
 ## Decision
 
-Flip `src/transport/http.ts:334` to `legacy: 'stateless'`. Two guards make
+Flip the `createMcpHandler` call in `startHttpServer`
+(`src/transport/http.ts`) to `legacy: 'stateless'`. Two guards make
 the gap fail closed instead of half-working:
 
 - **Confirmations**: `src/tools/index.ts` forwards `era` into `ToolDeps`,
@@ -127,3 +128,14 @@ found` instead of being accepted onto a silently-dropped lease.
   narrowing which 2025-era clients get served (e.g. only over stdio) — the
   first version of this decision found no case that needed the middle
   ground.
+- **Amended 2026-10-13:** the Decision spells the subscribe gate as
+  `deps.era !== 'modern' && deps.notifier === undefined`. The code in
+  `registerResources` runs `deps.era !== 'modern' && !legacyHttp`, where
+  `legacyHttp` is `era === 'legacy' && notifier !== undefined`. The two
+  differ only when `era` is omitted and a notifier is present, a shape one
+  in-repo test builds (`TC-FUNC-059` in `__tests__/tools.test.ts`). Shipped
+  transports always pass `era`, so production matches the Decision.
+  `server.ts` gates the `resources.subscribe` and `listChanged`
+  advertisement on the same `legacyHttp` predicate, so a modern instance
+  advertises `subscribe` (the SDK's listen filter needs it) while
+  registering no subscribe handler.

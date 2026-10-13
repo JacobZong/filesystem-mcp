@@ -311,8 +311,9 @@ export function bearerAuthMiddleware(
  * app's `allowedOrigins` consumer). Defaults to the SDK's loopback hostname set
  * so loopback browser clients keep working; operators set
  * `FS_ALLOWED_ORIGINS` to allow remote clients on non-loopback
- * binds. An empty value reads as unset, matching how parseAllowedHostsEnv
- * treats an all-empty list. The same set is consulted by corsMiddleware
+ * binds. An unset or empty value falls back to those defaults; an all-blank
+ * value is a configured but empty list, unlike `resolveAllowedHosts`, which
+ * reads an all-blank `FS_ALLOWED_HOSTS` as unset. The same set is consulted by corsMiddleware
  * so a remote origin is reflected end-to-end in Access-Control-Allow-Origin.
  */
 export function computeAllowedOriginHostnames(originsEnv: string | undefined): string[] {

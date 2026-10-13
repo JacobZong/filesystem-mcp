@@ -46,11 +46,11 @@ export function registeredTools(readOnly: boolean): readonly DefinedTool[] {
 export { LIST, LIST_ROOTS, READ, SEARCH_TEXT, FIND_FILES, STAT };
 
 interface ToolRegistrarDeps extends ToolDeps {
-  readonly readOnly?: boolean;
+  readonly readOnly: boolean;
 }
 
 export function registerTools(deps: ToolRegistrarDeps): void {
-  for (const tool of registeredTools(deps.readOnly ?? false)) {
+  for (const tool of registeredTools(deps.readOnly)) {
     tool.register(deps);
   }
 }

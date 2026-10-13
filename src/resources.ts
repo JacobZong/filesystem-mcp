@@ -75,10 +75,9 @@ export interface ResourceRegistrationOptions {
   cacheScope?: 'public' | 'private';
 }
 
-type ResourceRegistrarDeps = Omit<ResourceRegistrationOptions, 'pathGuard' | 'readOnly'> & {
+type ResourceRegistrarDeps = Omit<ResourceRegistrationOptions, 'pathGuard'> & {
   readonly server: McpServer;
   readonly pathGuard: PathGuard;
-  readonly readOnly?: boolean;
 };
 
 /**
@@ -489,7 +488,7 @@ function owns(contract: ResourceContract, uri: string): boolean {
 
 export function registerResources(deps: ResourceRegistrarDeps): { dispose(): void } {
   const server = deps.server;
-  const resourceContracts = getResourceContracts({ ...deps, readOnly: deps.readOnly ?? false });
+  const resourceContracts = getResourceContracts(deps);
   const file = resourceContracts[2];
 
   for (const contract of resourceContracts) {
@@ -521,9 +520,7 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
   // reach. A legacy instance on the HTTP leg (the one built with a `notifier`)
   // lives for one request: a subscription accepted there would take a watcher
   // lease for an instance that is gone before the file changes. Leave the
-  // handlers off so the SDK refuses the verb, and no lease is taken. The
-  // predicate mirrors the capability gate in server.ts exactly, so the
-  // handler is registered if and only if `resources.subscribe` is advertised.
+  // handlers off so the SDK refuses the verb, and no lease is taken.
   // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
   const legacyHttp = deps.era === 'legacy' && deps.notifier !== undefined;
   if (deps.era !== 'modern' && !legacyHttp) {

@@ -189,7 +189,7 @@ export async function createServer(
     pageStore,
     resourceStore,
     cacheScope,
-    ...(options.readOnly ? { readOnly: true } : {}),
+    readOnly: options.readOnly ?? false,
     ...(extraDeps?.watcherRegistry ? { watcherRegistry: extraDeps.watcherRegistry } : {}),
     ...(extraDeps?.notifier ? { notifier: extraDeps.notifier } : {}),
     ...(extraDeps?.era ? { era: extraDeps.era } : {}),
