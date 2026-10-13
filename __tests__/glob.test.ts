@@ -179,6 +179,9 @@ describe('globEntries', () => {
         '?(*)?(*)?(*)?(*)x',
         '+(a)+(b)+(c)+(d)x',
         'src/{x,*a*a*a*b}/y',
+        '*([)]|?)#',
+        '+([)]*)x',
+        '*([(]|a)x',
       ]) {
         assert.strictEqual(isSafeGlobSyntax(bad), false, bad);
       }
@@ -195,6 +198,8 @@ describe('globEntries', () => {
         '*(ab)x',
         '*(?)x',
         '+([ab])x',
+        '*([)])x',
+        '+([()])x',
         '?(*)?(*)?(*)x',
         '.!(git|svn|hg)',
         '@(.|)*',

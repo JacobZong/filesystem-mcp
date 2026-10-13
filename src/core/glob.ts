@@ -144,6 +144,29 @@ const isRooted = (alternative: string): boolean =>
   (IS_WINDOWS && (alternative.split('/')[0] ?? '').endsWith(':'));
 
 /**
+ * Index of the `)` that closes the group opened at `open`, or -1. A `[...]`
+ * class is skipped whole: a `)` or `|` inside one is a literal, not syntax.
+ */
+function groupClose(segment: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < segment.length; i++) {
+    const c = segment[i];
+    if (c === '[') {
+      // A `]` first in the class (or after `!`/`^`) is literal, so search past it.
+      const first = segment[i + 1] === '!' || segment[i + 1] === '^' ? i + 2 : i + 1;
+      const end = segment.indexOf(']', first + 1);
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    }
+    if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
  * Whether matching this brace-free segment can backtrack for seconds on one
  * long name. Two shapes do: a repeated group (`*(…)`, `+(…)`) whose body can
  * match more than one way (`|`, `*`, or a nested group), and more than
@@ -156,8 +179,11 @@ function canBacktrack(segment: string): boolean {
     const opener = segment[i - 1];
     if (opener !== '*' && opener !== '+') continue;
     if (opener === '+') wildcards++;
-    const close = segment.indexOf(')', i + 1);
-    const body = segment.slice(i + 1, close === -1 ? undefined : close);
+    const close = groupClose(segment, i);
+    // Classes are literals: only `|`, `*` or a group outside one can backtrack.
+    const body = segment
+      .slice(i + 1, close === -1 ? undefined : close)
+      .replace(/\[[!^]?\]?[^\]]*\]/gu, '');
     if (/[|*(]/u.test(body)) return true;
   }
   return wildcards > MAX_SEGMENT_WILDCARDS;
