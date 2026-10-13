@@ -21,6 +21,14 @@ export const MAX_BRACE_ALTERNATIVES = 1024;
 /** Bound synchronous glob compilation when checking candidate traversal segments. */
 export const MAX_DOTDOT_CHECK_CHARS = 4096;
 
+/**
+ * fs.glob tests each name against a regex compiled from the segment,
+ * synchronously. Every unbounded wildcard (a run of `*`, or a `+(` group) adds
+ * a degree of backtracking: on a 255-character name three cost under 100 ms,
+ * four about 1 s, and five do not finish.
+ */
+export const MAX_SEGMENT_WILDCARDS = 3;
+
 // The range bodies fs.glob's brace expansion recognises, as it writes them.
 const NUMERIC_RANGE_RE = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/u;
 const ALPHA_RANGE_RE = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/u;
@@ -135,6 +143,26 @@ const isRooted = (alternative: string): boolean =>
   win32.parse(alternative).root !== '' ||
   (IS_WINDOWS && (alternative.split('/')[0] ?? '').endsWith(':'));
 
+/**
+ * Whether matching this brace-free segment can backtrack for seconds on one
+ * long name. Two shapes do: a repeated group (`*(…)`, `+(…)`) whose body can
+ * match more than one way (`|`, `*`, or a nested group), and more than
+ * MAX_SEGMENT_WILDCARDS unbounded wildcards in the segment.
+ */
+function canBacktrack(segment: string): boolean {
+  if (segment === '**') return false;
+  let wildcards = (segment.match(/\*+/gu) ?? []).length;
+  for (let i = segment.indexOf('('); i !== -1; i = segment.indexOf('(', i + 1)) {
+    const opener = segment[i - 1];
+    if (opener !== '*' && opener !== '+') continue;
+    if (opener === '+') wildcards++;
+    const close = segment.indexOf(')', i + 1);
+    const body = segment.slice(i + 1, close === -1 ? undefined : close);
+    if (/[|*(]/u.test(body)) return true;
+  }
+  return wildcards > MAX_SEGMENT_WILDCARDS;
+}
+
 export function isSafeGlobSyntax(pattern: string): boolean {
   if (!pattern || pattern.trim().length === 0) {
     return false;
@@ -154,6 +182,7 @@ export function isSafeGlobSyntax(pattern: string): boolean {
   }
   let dotdotCheckChars = 0;
   for (const segment of segments) {
+    if (canBacktrack(segment)) return false;
     if (!segment.includes('.') || !DOTDOT_SPELLING_RE.test(segment)) continue;
     dotdotCheckChars += segment.length;
     if (dotdotCheckChars > MAX_DOTDOT_CHECK_CHARS || isTraversalSegment(segment)) return false;

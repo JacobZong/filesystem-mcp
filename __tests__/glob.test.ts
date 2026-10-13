@@ -166,10 +166,47 @@ describe('globEntries', () => {
       }
     });
 
+    it('refuses wildcard shapes whose match backtracks on a long name', () => {
+      for (const bad of [
+        '**/*(?|?)#',
+        '*(a|a)x',
+        '*(*)x',
+        '*(a*)x',
+        '+(?|?)x',
+        '*(@(a|a))x',
+        '*a*a*a*b',
+        '**a**a**a**b',
+        '?(*)?(*)?(*)?(*)x',
+        '+(a)+(b)+(c)+(d)x',
+        'src/{x,*a*a*a*b}/y',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(bad), false, bad);
+      }
+    });
+
+    it('accepts wildcard shapes that match in bounded time', () => {
+      for (const ok of [
+        '**/*.ts',
+        '**/**/*.ts',
+        '*foo*bar*',
+        '*.test.*',
+        'a**a**b',
+        '*(z)oo.txt',
+        '*(ab)x',
+        '*(?)x',
+        '+([ab])x',
+        '?(*)?(*)?(*)x',
+        '.!(git|svn|hg)',
+        '@(.|)*',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(ok), true, ok);
+      }
+    });
+
     it('checks a pattern of 1024 long dotted segments without a compile each', () => {
-      // Each alternative's segment holds `*`, so it can never be a literal
+      // Each alternative's segment holds `?`, so it can never be a literal
       // `..` and must not cost a minimatch compile (1.5-9 s for all of them).
-      const pattern = `{0..1023}.${'*.'.repeat(495)}`;
+      const pattern = `{0..1023}.${'?.'.repeat(495)}`;
       const started = performance.now();
       assert.strictEqual(isSafeGlobSyntax(pattern), true);
       assert.ok(performance.now() - started < 1000, 'validation must not pin the event loop');
@@ -282,6 +319,32 @@ describe('globEntries', () => {
     } finally {
       await harness.close();
       await cleanupTestRoot(top);
+    }
+  });
+
+  it('find_files, search_text and replace_text refuse a backtracking glob quickly', async () => {
+    const root = await createTestRoot();
+    await writeFile(join(root, 'a'.repeat(40)), 'x');
+    const harness = await createTestClientPair([root]);
+    try {
+      const started = performance.now();
+      for (const [name, extra] of [
+        ['find_files', {}],
+        ['search_text', { searchPattern: 'x' }],
+        ['replace_text', { searchPattern: 'x', replacement: 'y', dryRun: true }],
+      ] as const) {
+        const result = await harness.client.callTool({
+          name,
+          arguments: { path: root, pattern: '**/*(?|?)#', ...extra },
+        });
+        const text = firstTextBlock(result).text ?? '';
+        assert.strictEqual(result.isError, true, `${name}: ${text}`);
+        assert.match(text, /unsafe path/u, name);
+      }
+      assert.ok(performance.now() - started < 5000, 'refusal must not pin the event loop');
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(root);
     }
   });
 
