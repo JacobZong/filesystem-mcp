@@ -7,6 +7,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import {
@@ -3951,5 +3952,58 @@ describe('High-severity bug-hunt regressions (tools)', () => {
         assert.strictEqual(await readFile(file, 'utf-8'), original);
       },
     );
+
+    for (const dryRun of [false, true]) {
+      it(
+        dryRun
+          ? 'a dry replace_text timeout does not claim rewritten files'
+          : 'a live replace_text timeout names the files it already rewrote',
+        { timeout: 10000 },
+        async (t) => {
+          const dir = join(tmpDir, dryRun ? 'rt-timeout-dry' : 'rt-timeout-live');
+          const names = Array.from({ length: 40 }, (_, i) => `f${String(i).padStart(2, '0')}.txt`);
+          for (const n of names) await writeTestFile(dir, n, 'foo\n');
+          const controller = new AbortController();
+          t.mock.method(AbortSignal, 'timeout', () => controller.signal);
+          // eslint-disable-next-line @typescript-eslint/unbound-method -- re-applied with `this` below
+          const realWrite = GuardedFileSystem.prototype.writeFile;
+          t.mock.method(
+            GuardedFileSystem.prototype,
+            'writeFile',
+            async function (this: GuardedFileSystem, ...a: Parameters<typeof realWrite>) {
+              const out = await realWrite.apply(this, a);
+              controller.abort(new DOMException('test timeout', 'TimeoutError'));
+              return out;
+            },
+          );
+          if (dryRun) controller.abort(new DOMException('test timeout', 'TimeoutError'));
+          const result = await pair.client.callTool({
+            name: 'replace_text',
+            arguments: { path: dir, searchPattern: 'foo', replacement: 'foobar', dryRun },
+          });
+          const text = (result.content as { type: string; text: string }[])
+            .map((c) => c.text)
+            .join('\n');
+          assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
+          let written = 0;
+          for (const n of names) {
+            if ((await readFile(join(dir, n), 'utf-8')) === 'foobar\n') written++;
+          }
+          if (dryRun) {
+            assert.doesNotMatch(text, /already rewritten/u);
+            assert.doesNotMatch(text, /A higher timeout/u);
+            assert.strictEqual(text.match(/scan stopped early/gu)?.length, 1);
+            assert.strictEqual(written, 0);
+            return;
+          }
+          assert.match(text, /file\(s\) were already rewritten and stay changed/u);
+          assert.ok(written >= 1 && written < 40, `written=${String(written)}`);
+          assert.strictEqual(
+            Number(/(\d+) file\(s\) were already rewritten/u.exec(text)?.[1]),
+            written,
+          );
+        },
+      );
+    }
   });
 });

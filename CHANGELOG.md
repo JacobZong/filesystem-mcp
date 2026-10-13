@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **`includeHidden` finds dotfiles for a `!(…)` pattern again.** A pattern
-  such as `**/!(*.test).ts` with `includeHidden: true` skipped dot-prefixed
-  names like `.eslintrc.ts` since 2.8.0.
-
 ### Security
 
 - **A glob pattern can no longer freeze the server.** `find_files`,
@@ -21,6 +15,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wildcards in one path segment. Node matches globs synchronously, and such
   patterns backtracked for minutes on one long file name, blocking every
   client. The refusal is the usual `Invalid glob or unsafe path` error.
+
+### Changed
+
+- **A `replace_text` timeout says what it already wrote.** A live run that
+  hits the 5-second deadline keeps the files it already rewrote. Its text now
+  names them and warns that re-running the same replacement applies it to
+  them again.
+
+### Fixed
+
+- **A cancelled or timed-out read no longer shuts the server down.** A file
+  read that started after its call was cancelled, for example a
+  `replace_text` worker opening its next file after the 5-second deadline,
+  raised an uncaught `AbortError` and the server exited.
+- **Write tools over stdio link only files `resources/read` can return.**
+  A file written past about 9.75 MiB no longer gets a `resource_link` that
+  the stdio connection's `resources/read` always refuses.
+- **`includeHidden` finds dotfiles for a `!(…)` pattern again.** A pattern
+  such as `**/!(*.test).ts` with `includeHidden: true` skipped dot-prefixed
+  names like `.eslintrc.ts` since 2.8.0.
 
 ## [2.8.1] - 2026-10-13
 

@@ -20,8 +20,9 @@ import { ErrorCode, isFsError, Problem } from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
+import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent, searchFiles } from '../src/core/search.ts';
-import { getMaxTextFileSize } from '../src/core/util.ts';
+import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES } from '../src/core/util.ts';
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
   cleanupTestRoot,
@@ -722,6 +723,24 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         resourceLink: undefined,
       });
     });
+
+    it('written file links stop at the stdio ceiling on stdio only', () => {
+      const path = join(tmpDir, 'stdio-links.txt');
+      const over = MAX_OUTBOUND_RESULT_BYTES + 1;
+      assert.deepStrictEqual(
+        writtenFileLinks(path, 'text/plain', over, false, undefined, 'stdio'),
+        {
+          resourceUri: undefined,
+          resourceLink: undefined,
+        },
+      );
+      assert.ok(
+        writtenFileLinks(path, 'text/plain', MAX_OUTBOUND_RESULT_BYTES, false, undefined, 'stdio')
+          .resourceUri,
+      );
+      assert.ok(writtenFileLinks(path, 'text/plain', over, false, undefined, 'http').resourceUri);
+      assert.ok(writtenFileLinks(path, 'text/plain', over).resourceUri);
+    });
   });
 
   describe('Stat metadata (TC-FUNC-031–034)', () => {
@@ -1122,5 +1141,69 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
     assert.strictEqual(content.toString('utf-8'), 'hello\n');
     await fs.appendFile(link, 'more\n');
     assert.strictEqual(await readFile(target, 'utf-8'), 'hello\nmore\n');
+  });
+
+  describe('aborted read streams', () => {
+    let tmpDir: string;
+    before(async () => {
+      tmpDir = await createTestRoot();
+    });
+    after(async () => {
+      await cleanupTestRoot(tmpDir);
+    });
+
+    const isAbort = (err: unknown): boolean =>
+      ['TimeoutError', 'AbortError'].includes((err as { name?: string }).name ?? '');
+
+    // Node double-emits a pre-aborted signal's error; the stray copy is uncaught.
+    async function withUncaughtWatch(body: () => Promise<void>): Promise<void> {
+      const uncaught: unknown[] = [];
+      const onUncaught = (error: unknown): void => {
+        uncaught.push(error);
+      };
+      process.on('uncaughtException', onUncaught);
+      try {
+        await body();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        assert.deepStrictEqual(uncaught, []);
+      } finally {
+        process.off('uncaughtException', onUncaught);
+      }
+    }
+
+    const aborted = (): AbortSignal => {
+      const controller = new AbortController();
+      controller.abort(new DOMException('test timeout', 'TimeoutError'));
+      return controller.signal;
+    };
+
+    it('a pre-aborted signal rejects without an uncaught exception', async () => {
+      const file = await writeTestFile(tmpDir, 'pre-aborted.txt', 'line one\nline two\n');
+      await withUncaughtWatch(async () => {
+        const handle = await fsPromises.open(file, 'r');
+        try {
+          await assert.rejects(readFileBufferWithLimit(handle, 1024, file, aborted()), isAbort);
+        } finally {
+          await handle.close();
+        }
+      });
+    });
+
+    it('a pre-aborted range read rejects without an uncaught exception', async () => {
+      const file = await writeTestFile(tmpDir, 'pre-aborted-range.txt', 'line one\nline two\n');
+      await withUncaughtWatch(async () => {
+        const stats = await fsPromises.stat(file);
+        await assert.rejects(
+          readFileWithStats(
+            file,
+            file,
+            stats,
+            { kind: 'range', start: 1, end: 1, signal: aborted() },
+            () => fsPromises.open(file, 'r'),
+          ),
+          isAbort,
+        );
+      });
+    });
   });
 });
