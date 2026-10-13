@@ -138,8 +138,11 @@ export async function seedRootsFromClient(ctx: FilesystemServerContext): Promise
  *
  * Watcher leases are tracked by listen request ID and released on cancellation,
  * rejection, graceful completion, or connection close.
+ *
+ * `_config` is unused: an API key has no meaning on stdio. The parameter keeps
+ * the `./transport` export's signature.
  */
-export function startServer(options: ServerOptions, config: RuntimeConfig = {}): StdioServerHandle {
+export function startServer(options: ServerOptions, _config?: RuntimeConfig): StdioServerHandle {
   let closed = false;
   let activeCtx: FilesystemServerContext | undefined;
   const pathGuard = new PathGuard(options);
@@ -158,7 +161,6 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
       pathGuard,
       era,
       transport: 'stdio',
-      ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
     });
     if (closed) {
       // The connection went away while this instance was being built.
@@ -304,14 +306,13 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
       const shorter = oversized === 'request ID' ? 'ID' : 'token';
       const id = oversized === 'progress token' && 'id' in message ? message.id : undefined;
       void wire
-        .send({
-          jsonrpc: '2.0',
-          ...(id !== undefined ? { id } : {}),
-          error: {
-            code: ProtocolErrorCode.InvalidRequest,
-            message: `Stdio ${oversized} exceeds ${String(MAX_STDIO_REQUEST_ID_BYTES)} JSON-encoded bytes. Use a shorter ${shorter}.`,
-          },
-        })
+        .send(
+          jsonRpcError(
+            ProtocolErrorCode.InvalidRequest,
+            `Stdio ${oversized} exceeds ${String(MAX_STDIO_REQUEST_ID_BYTES)} JSON-encoded bytes. Use a shorter ${shorter}.`,
+            id,
+          ),
+        )
         .catch((error: unknown) => {
           wire.onerror?.(normalizeUnknownError(error));
         });

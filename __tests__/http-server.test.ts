@@ -82,6 +82,13 @@ describe('Real HTTP Server integration', () => {
     assert.strictEqual(r.status, 401);
   });
 
+  it('an API-keyed server marks its cacheable lists private', async () => {
+    const client = await http.makeClient('cache-scope');
+    const discover = client.getDiscoverResult() as { cacheScope?: string } | undefined;
+    assert.ok(discover, 'a modern connection must retain its discover result');
+    assert.strictEqual(discover.cacheScope, 'private');
+  });
+
   for (const contentType of ['text/plain', undefined]) {
     it(`rejects an unfinished ${contentType ?? 'missing Content-Type'} upload before reading its body`, async () => {
       const result = await postWithoutEndingUpload(

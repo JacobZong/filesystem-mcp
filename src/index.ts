@@ -80,19 +80,11 @@ async function main(): Promise<void> {
     }
     throw error;
   }
-  const { allowedDirs, allowCwd, port, readOnly, printConfig, httpHost, apiKey } = parsed;
-
-  if (printConfig) {
-    await runPrintConfig({
-      allowedDirs,
-      allowCwd,
-      readOnly,
-      ...(port !== undefined ? { port } : {}),
-      ...(httpHost !== undefined ? { httpHost } : {}),
-      ...(apiKey !== undefined ? { apiKey } : {}),
-    });
+  if (parsed.printConfig) {
+    await runPrintConfig(parsed);
     return;
   }
+  const { allowedDirs, allowCwd, port, readOnly } = parsed;
 
   if (allowedDirs.length > 0) {
     console.error('Allowed directories (from CLI):');
@@ -108,17 +100,13 @@ async function main(): Promise<void> {
   }
 
   const serverOptions = { allowCwd, cliAllowedDirs: allowedDirs, readOnly };
-  const runtimeConfig = {
-    ...(httpHost !== undefined ? { httpHost } : {}),
-    ...(apiKey !== undefined ? { apiKey } : {}),
-  };
 
   if (port !== undefined) {
-    activeHttpServer = await startHttpServer(port, serverOptions, runtimeConfig);
+    activeHttpServer = await startHttpServer(port, serverOptions, parsed);
   } else {
     registerShutdownTrigger('end');
     registerShutdownTrigger('close');
-    activeStdioHandle = startServer(serverOptions, runtimeConfig);
+    activeStdioHandle = startServer(serverOptions);
   }
 }
 

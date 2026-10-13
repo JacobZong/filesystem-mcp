@@ -304,7 +304,7 @@ export async function startHttpServer(
         pageStore: sharedPageStore,
         era,
         transport: 'http',
-        ...(apiKey !== undefined ? { apiKey } : {}),
+        cacheScope: apiKey ? 'private' : 'public',
       });
       return c.mcp;
     },
