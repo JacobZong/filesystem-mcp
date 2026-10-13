@@ -137,7 +137,7 @@ async with Client(transport) as client: ...
 - With `FS_API_KEY` set on the server, every request needs
   `Authorization: Bearer <key>`. Without it, connecting fails with HTTP 401
   (`SdkHttpError`, code `CLIENT_HTTP_AUTHENTICATION`, in TypeScript).
-- The server is stateless per request: there is no session ID. One server can
+- The server is stateless per request, with no session ID. One server can
   serve many clients at once, and they share its allowed folders, including
   folders granted by any one of them.
 - Send absolute paths. Relative paths resolve against the directory the server
@@ -201,7 +201,7 @@ it also has a `hint` saying how to add one.
 **Relative paths resolve against the server's working directory**, not
 against a root. Over stdio, start the server with `cwd` set to the
 workspace. Over HTTP, use absolute paths built from `list_roots`. A relative
-path that lands outside the roots does not fail outright: it becomes a request
+path that lands outside the roots does not fail outright. It becomes a request
 to grant access to the server's working directory, which a client that
 approves grants automatically would accept. `~` expands to the home directory
 of the user running the server.
@@ -346,7 +346,7 @@ appear in `resources/list`, and each one added or expired sends
 
 A `find_files` or `search_text` scan that hit a limit ends with
 `// scan stopped early: ...` and sets `_meta.stoppedReason` (`maxResults` or
-`timeout`): the totals are then a floor, not a count. Narrow the path or the
+`timeout`). The totals are then a floor, not a count. Narrow the path or the
 pattern. The [limits table](configuration.md#limits) has the numbers.
 
 ## Progress, cancellation, and timeouts
@@ -389,7 +389,7 @@ and a `requestedSchema` that has exactly one property. Answer with
 `{ action: 'accept', content: { <property>: <value> } }`, or with
 `{ action: 'decline' }`. Declining fails that item with `CANCELLED`; for a
 grant, the path then fails with `ACCESS_DENIED`. Accepting with `skip` is not
-a failure, and nothing changes: `create` and `move` list the path under
+a failure, and nothing changes. `create` and `move` list the path under
 `skipped` instead of `files` or `moves`, and `delete` reports
 `deleted: false` with the text `SKIPPED`. A client that announces success
 should check for those. A handler that understands
@@ -440,7 +440,7 @@ while (result.resultType === 'input_required') {
 }
 ```
 
-`requestState` is opaque: send it back unchanged with the same tool name and
+`requestState` is opaque. Send it back unchanged with the same tool name and
 arguments. The server signs it, binds it to the request, and lets it expire
 after 10 minutes; a changed or expired one is rejected with
 `Invalid or expired requestState`. It is signed with a key made at startup,
@@ -462,8 +462,8 @@ percent-encoded with `/` kept:
 Unencoded, a `#` or `?` in a file name would cut the URI short. A Unix path
 therefore gives a double slash: `filesystem-mcp://file//home/me/a.txt`.
 Reading one returns `text` for text files and base64 `blob` for images and
-other binaries, with a `mimeType`. `resources/read` does not ask for access:
-a file outside the roots is not found, so call a tool (`stat`) first if the
+other binaries, with a `mimeType`. `resources/read` does not ask for access.
+A file outside the roots is not found, so call a tool (`stat`) first if the
 user should be asked.
 
 **Fresh reads.** On 2026-07-28, results carry cache hints, and the TypeScript
@@ -523,11 +523,11 @@ if (client.getProtocolEra() === 'modern') {
 ## Using the tools from a model
 
 - Pass `tools/list` to the model as function definitions. OpenAI and Anthropic
-  reject a top-level `oneOf`/`anyOf`/`allOf`/`not` in function parameters:
-  remove those keys before sending, and leave validation to the server.
+  reject a top-level `oneOf`/`anyOf`/`allOf`/`not` in function parameters.
+  Remove those keys before sending, and leave validation to the server.
 - Use `internal://instructions` as, or in, the system prompt.
 - Send the model the text blocks, including on `isError` (prefix them with
-  `ERROR:` or similar). The messages are written so a model can recover.
+  `ERROR:` or similar). The server writes the messages so a model can recover.
 - Gate the tools with `destructiveHint`, and show the `dryRun` diff before
   asking the user, as [gatekeeper](../examples/clients/gatekeeper/) does.
 

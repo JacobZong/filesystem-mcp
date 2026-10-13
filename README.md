@@ -40,15 +40,15 @@ Once it is connected, you can ask things like:
 - Search and editing are made for code. The AI can search inside files like
   `grep`, with a regex engine (RE2) that cannot hang, and by default the
   server skips `.gitignore`d files and folders like `node_modules`. Edits are
-  exact-match replacements that fail loudly instead of guessing, and you can
-  preview them as a diff first.
-- It goes easy on the AI's context. The AI can read many files in one call or
+  exact-match replacements that return an error when the text does not match,
+  and you can preview them as a diff first.
+- It saves the AI's context. The AI can read many files in one call or
   only the lines it needs, and it can check a file's size and token estimate
   before reading it.
 - It works with any MCP client, over stdio or HTTP, on macOS, Linux, and
   Windows. You can install it with npx, Docker, or a one-click Claude Desktop
   extension, or [build your own client](#build-your-own-client) on it.
-- It is private: it runs on your machine, has no telemetry, and makes no
+- It is private. It runs on your machine, has no telemetry, and makes no
   network calls.
 
 ### Compared with the reference server
@@ -205,8 +205,8 @@ sets the server up for your current project:
 <details>
 <summary><b>Docker</b></summary>
 
-The container can only see the folders you mount. This setup is read-only
-twice over: the `:ro` mount and the `--read-only` flag.
+The container can only see the folders you mount. This setup blocks writes
+twice, with the `:ro` mount and with the `--read-only` flag.
 
 ```json
 {
@@ -298,16 +298,16 @@ with API keys, Docker, and troubleshooting.
 
 ## Security
 
-| Protection         | How it works                                                                                                                                                                                                                                                                                                                                                               |
-| :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Folder sandbox     | The server resolves every path, including symlinks, and the resolved path must stay inside an allowed folder.                                                                                                                                                                                                                                                              |
-| Secret files       | `.env`, `*.pem`, `*.key`, SSH keys, `.npmrc`, cloud credentials, and [more](docs/configuration.md#secret-files) are blocked and hidden from listings.                                                                                                                                                                                                                      |
-| You stay in charge | The server asks you before the AI deletes a non-empty folder, gets access to a new folder, or writes over a file with `create` or `move`. Only `create` and copies skip that question, when the AI passes `overwrite: true`. In-place edits (`edit`, `patch`, `replace_text`) do not ask, but `dryRun` previews them. A client that cannot ask gets a clear error instead. |
-| Off-limits folders | Neither the AI nor the client can ever add your home folder itself, system folders, or `~/.ssh`, `~/.aws`, and similar folders.                                                                                                                                                                                                                                            |
-| Safe writes        | New content goes to a temporary file that is then renamed into place, so a crash never leaves a half-written file. Writes keep the file's permissions.                                                                                                                                                                                                                     |
-| No regex hangs     | RE2 runs in linear time, so no search pattern can freeze the server.                                                                                                                                                                                                                                                                                                       |
-| HTTP               | The server listens only on localhost by default. Any other address requires an API key.                                                                                                                                                                                                                                                                                    |
-| Container          | The Docker image runs as a non-root user.                                                                                                                                                                                                                                                                                                                                  |
+| Protection         | How it works                                                                                                                                                                                                                                                                                                                                                          |
+| :----------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Folder sandbox     | The server resolves every path, including symlinks, and the resolved path must stay inside an allowed folder.                                                                                                                                                                                                                                                         |
+| Secret files       | `.env`, `*.pem`, `*.key`, SSH keys, `.npmrc`, cloud credentials, and [more](docs/configuration.md#secret-files) are blocked and hidden from listings.                                                                                                                                                                                                                 |
+| You stay in charge | The server asks you before the AI deletes a non-empty folder, gets access to a new folder, or writes over a file with `create` or `move`. Only `create` and copies skip that question, when the AI passes `overwrite: true`. In-place edits (`edit`, `patch`, `replace_text`) do not ask, but `dryRun` previews them. A client that cannot ask gets an error instead. |
+| Off-limits folders | Neither the AI nor the client can ever add your home folder itself, system folders, or `~/.ssh`, `~/.aws`, and similar folders.                                                                                                                                                                                                                                       |
+| Safe writes        | New content goes to a temporary file that is then renamed into place, so a crash never leaves a half-written file. Writes keep the file's permissions.                                                                                                                                                                                                                |
+| No regex hangs     | RE2 runs in linear time, so no search pattern can freeze the server.                                                                                                                                                                                                                                                                                                  |
+| HTTP               | The server listens only on localhost by default. Any other address requires an API key.                                                                                                                                                                                                                                                                               |
+| Container          | The Docker image runs as a non-root user.                                                                                                                                                                                                                                                                                                                             |
 
 If you find a vulnerability, please report it privately.
 [SECURITY.md](SECURITY.md) explains how.
@@ -351,7 +351,7 @@ The basics:
   `create`, and `list_roots`. `read` is the exception: the file's text is
   only in the text block, and `_meta` holds metadata about it.
 - **Paths.** Relative paths resolve against the server's working directory,
-  not its root: set `cwd` over stdio, and send absolute paths over HTTP.
+  not its root. Set `cwd` over stdio, and send absolute paths over HTTP.
 - **Confirmations.** Overwrites, recursive deletes, and paths outside the
   roots are questions for the user. Declare the `elicitation` capability and
   answer them in a handler, or, on the 2026-07-28 protocol, take them as data
@@ -376,20 +376,20 @@ clients:
 | [hooks](examples/clients/hooks/)           | Runs a task through a model whenever the workspace changes          |
 | [python](examples/clients/python/)         | A TODO report for a workspace, with the Python SDK                  |
 
-## Privacy Policy
+## Privacy policy
 
 Filesystem MCP runs entirely on your machine. This policy covers the npm
 package, the Docker image, and the `.mcpb` desktop extension.
 
 - **Data collection:** none. The server has no telemetry, analytics, or crash
   reporting, and makes no outbound network requests.
-- **Use and storage:** files are read and written only inside the folders you
-  allow, and only when your MCP client calls a tool. Tool results go to that
+- **Use and storage:** the server reads and writes files only inside the
+  folders you allow, and only when your MCP client calls a tool. Tool results go to that
   client and nowhere else. Short-lived result caches live in memory and
   disappear when the server exits.
 - **Third-party sharing:** none by this server. Your MCP client may send tool
   results to its model provider under that client's own privacy policy.
-- **Retention:** nothing is kept after the process exits. Diagnostic logs go to
+- **Retention:** the server keeps nothing after the process exits. Diagnostic logs go to
   stderr on your machine; your MCP client may save them in its own log files.
 - **Contact:** open an issue at
   <https://github.com/j0hanz/filesystem-mcp/issues>, or report security
@@ -399,7 +399,7 @@ package, the Docker image, and the `.mcpb` desktop extension.
 ## Contributing
 
 Bug reports, ideas, and pull requests are welcome. Start with
-[CONTRIBUTING.md](CONTRIBUTING.md): it covers setup, running the server from
+[CONTRIBUTING.md](CONTRIBUTING.md). It covers setup, running the server from
 source, and the checks a pull request needs.
 
 If Filesystem MCP is useful to you, a star on GitHub helps other people find it.

@@ -65,8 +65,8 @@ add these folders, even if you say yes:
   `~/.docker`, `~/.config/gcloud`.
 
 Symlinks are resolved first, so a link that points at one of these folders is
-refused too. Folders you pass as arguments or in `FS_ALLOWED_DIRS` are used as
-given: you named them on purpose.
+refused too. The server uses folders you pass as arguments or in `FS_ALLOWED_DIRS` as
+given, because you named them on purpose.
 
 ## Secret files
 
@@ -85,7 +85,7 @@ Matching ignores case, so `.ENV` is blocked too.
 
 Three switches change the list:
 
-| You want to…                     | Use                                                    |
+| You want to                      | Use                                                    |
 | :------------------------------- | :----------------------------------------------------- |
 | Block more paths                 | `--deny <pattern>` (repeatable) and/or `FS_DENYLIST`   |
 | Unblock one built-in pattern     | `--allow <pattern>` (repeatable) and/or `FS_ALLOWLIST` |
@@ -206,15 +206,15 @@ These variables are for HTTP only:
 `read` handles text files and returns images and audio as media. It refuses
 other binary files and UTF-16 text files.
 
-Stdio request IDs may occupy at most 1024 bytes when JSON-encoded, including
-quotes and escapes. Longer IDs are rejected before execution with JSON-RPC
-`InvalidRequest` (`-32600`) without an `id`; the oversized ID is not echoed.
-Use a shorter ID and retry. A string `_meta.progressToken` has the same limit,
-because every progress notification echoes it; a request whose token is longer
-is rejected the same way, but the error carries the request's `id`. This bound
-reserves space for IDs and tokens in successful responses, error responses and
-progress notifications under the client's 10 MiB stdio buffer limit. HTTP is
-unchanged.
+A stdio request ID may take at most 1024 bytes when JSON-encoded, counting
+quotes and escapes. The server rejects a longer ID before running the request,
+with JSON-RPC `InvalidRequest` (`-32600`) and no `id`, and does not echo the
+oversized ID. Use a shorter ID and retry. A string `_meta.progressToken` has
+the same limit, because every progress notification echoes it. The server
+rejects a request with a longer token the same way, but that error carries the
+request's `id`. The limit keeps room for IDs and tokens in responses, errors,
+and progress notifications under the client's 10 MiB stdio buffer. It does not
+apply over HTTP.
 
 ## Running over HTTP
 
@@ -259,14 +259,14 @@ filesystem-mcp --port 3000 --http-host 0.0.0.0 ~/code/app
 
 Over HTTP, clients that speak the newest MCP revision (2026-07-28) get every
 feature. Older (2025-era) clients can use all tools, resources, and prompts,
-but not confirmations or file change notifications: an overwrite, a recursive
+but not confirmations or file change notifications. An overwrite, a recursive
 delete, or a request for a new folder fails with an error that says so. For
 those clients, use stdio, or `overwrite: true` where a tool offers it.
 
 The server never picks up a client's workspace folders over HTTP, whatever
 the client's version, so pass folders as arguments when you start it. All
 clients of one server share its folders, including any folder one of them was
-granted. Clients should send absolute paths: a relative path resolves against
+granted. Clients should send absolute paths, because a relative path resolves against
 the folder the server was started in, not against a root. The
 [client guide](client-guide.md) covers this and the rest of what a client
 needs to know.
@@ -327,7 +327,7 @@ client. In clients without confirmations, the server refuses a path outside
 the allowed folders instead of asking about it.
 
 **`Sensitive file blocked`.** The file matches the [secret-file list](#secret-files)
-or one of your `--deny` rules. Unblock just that built-in pattern with
+or one of your `--deny` rules. Unblock that built-in pattern with
 `--allow`, for example `--allow '.env.example'`. `--deny` rules cannot be
 lifted this way; remove the rule instead.
 

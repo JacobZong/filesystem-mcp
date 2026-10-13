@@ -1,6 +1,6 @@
 # Example clients
 
-Small, runnable apps that use filesystem-mcp as their workspace engine. Each
+Small, runnable apps that do all their file work through filesystem-mcp. Each
 one is useful on its own and is a starting point for your own MCP client:
 copy the folder, install its dependencies, and change what you need. The
 [client guide](../docs/client-guide.md) explains the server's side of every
