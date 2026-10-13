@@ -120,6 +120,12 @@ Line numbers drift; re-grep before every edit.
 
 ## Refuted, do not re-hunt
 
+- Finding 1 (store cap vs the outbound owner), refuted at delivery on
+  2026-10-13. Stdio already builds its store with
+  `{ maxReadResultBytes: MAX_OUTBOUND_RESULT_BYTES }` (`src/server.ts:178`),
+  and `putText` measures the JSON-encoded read-back against it, so a
+  near-cap entry was already refused on stdio. The move only swapped the
+  refusal message there, and it would have narrowed HTTP's cap.
 - `search.ts` `maxResults ?? 100` — live default for 11 test call sites;
   a required-param move nets +11.
 - `lockForWrite` `resolvedTarget` param — net 0; probing the lock-resolved
