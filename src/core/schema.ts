@@ -11,7 +11,20 @@ const MAX_PATH_LENGTH = 4096;
 
 const LINE_BREAK_RE = /[\n\r]/;
 
-export const isBlank = (val: string): boolean => val.trim().length === 0;
+const isBlank = (val: string): boolean => val.trim().length === 0;
+
+/**
+ * Text that must carry non-blank content. `min(1)` stays so `minLength: 1`
+ * still publishes on the wire; it aborts so an empty value reports one
+ * message, not the same one twice.
+ */
+export function nonBlankString(label: string): z.ZodString {
+  const message = `${label} cannot be empty or whitespace-only`;
+  return z
+    .string()
+    .min(1, { message, abort: true })
+    .refine((val) => !isBlank(val), { message });
+}
 
 function refineSafeText(
   label: string,

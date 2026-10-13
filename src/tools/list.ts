@@ -1,5 +1,3 @@
-import type { ContentBlock } from '@modelcontextprotocol/server';
-
 import { basename, posix } from 'node:path';
 
 import * as z from 'zod/v4';
@@ -26,7 +24,7 @@ import {
   MAX_LIST_ENTRIES,
   MAX_TREE_DEPTH,
 } from '../core/util.ts';
-import { defineTool, type ToolCtx } from './define.ts';
+import { defineTool } from './define.ts';
 
 interface CollectedEntry {
   name: string;
@@ -225,81 +223,6 @@ type ListOutput = ListPageMetadata & {
   nextCursor?: string;
 };
 
-async function handleList(
-  args: z.infer<typeof ListInputSchema>,
-  ctx: ToolCtx,
-): Promise<{
-  structured: ListOutput;
-  markdown: string;
-  offset: number;
-  link?: ContentBlock;
-}> {
-  const path = args.path;
-  const resolvedPath = ctx.fs.pathGuard.resolvePathOrRoot(path);
-  const queryKey = JSON.stringify({
-    method: 'list',
-    path: resolvedPath,
-    maxDepth: args.maxDepth,
-    includeHidden: args.includeHidden,
-    includeIgnored: args.includeIgnored,
-  });
-  const paged = await paginate<CollectedEntry, ListPageMetadata, JsonResourceResult>({
-    store: ctx.pageStore,
-    queryKey,
-    cursor: args.cursor,
-    pageSize: args.maxEntries,
-    produce: async () => {
-      const validDir = await ctx.fs.pathGuard.validateExistingDirectory(resolvedPath);
-      const result = await collect(validDir, {
-        maxDepth: args.maxDepth,
-        includeHidden: args.includeHidden,
-        includeIgnored: args.includeIgnored,
-        signal: ctx.signal,
-        pathGuard: ctx.fs.pathGuard,
-        entryCap: MAX_LIST_ENTRIES,
-        onProgress: ctx.onProgress,
-      });
-      return {
-        items: result.entries,
-        metadata: {
-          path: validDir,
-          totalEntries: result.totalEntries,
-          totalFiles: result.totalFiles,
-          totalDirectories: result.totalDirectories,
-        },
-        truncated: result.totalEntries > result.entries.length,
-      };
-    },
-    externalize: (entries, metadata) => {
-      const name = basename(metadata.path);
-      // The stored tree is the whole collected set, bounded by the hard cap.
-      const fullOutput = {
-        entries,
-        markdown: renderMarkdown(name, entries),
-        totalEntries: metadata.totalEntries,
-        totalFiles: metadata.totalFiles,
-        totalDirectories: metadata.totalDirectories,
-        ...(metadata.totalEntries > entries.length ? { truncated: true } : {}),
-      };
-      return putJsonResource(ctx.resourceStore, `${name} tree`, fullOutput);
-    },
-  });
-
-  const resourceUri = paged.resource?.entry.uri;
-  return {
-    structured: {
-      ...paged.metadata,
-      entries: [...paged.page],
-      entryCount: paged.page.length,
-      ...(resourceUri !== undefined ? { resourceUri } : {}),
-      ...(paged.nextCursor !== undefined ? { nextCursor: paged.nextCursor } : {}),
-    },
-    markdown: renderMarkdown(basename(paged.metadata.path), [...paged.page]),
-    offset: paged.offset,
-    ...(paged.resource ? { link: paged.resource.link } : {}),
-  };
-}
-
 export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   name: 'list',
   title: 'List',
@@ -316,14 +239,70 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   }),
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
-    const { structured, markdown, offset, link } = await handleList(args, ctx);
+    const resolvedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
+    const queryKey = JSON.stringify({
+      method: 'list',
+      path: resolvedPath,
+      maxDepth: args.maxDepth,
+      includeHidden: args.includeHidden,
+      includeIgnored: args.includeIgnored,
+    });
+    const paged = await paginate<CollectedEntry, ListPageMetadata, JsonResourceResult>({
+      store: ctx.pageStore,
+      queryKey,
+      cursor: args.cursor,
+      pageSize: args.maxEntries,
+      produce: async () => {
+        const validDir = await ctx.fs.pathGuard.validateExistingDirectory(resolvedPath);
+        const result = await collect(validDir, {
+          maxDepth: args.maxDepth,
+          includeHidden: args.includeHidden,
+          includeIgnored: args.includeIgnored,
+          signal: ctx.signal,
+          pathGuard: ctx.fs.pathGuard,
+          entryCap: MAX_LIST_ENTRIES,
+          onProgress: ctx.onProgress,
+        });
+        return {
+          items: result.entries,
+          metadata: {
+            path: validDir,
+            totalEntries: result.totalEntries,
+            totalFiles: result.totalFiles,
+            totalDirectories: result.totalDirectories,
+          },
+          truncated: result.totalEntries > result.entries.length,
+        };
+      },
+      externalize: (entries, metadata) => {
+        const name = basename(metadata.path);
+        // The stored tree is the whole collected set, bounded by the hard cap.
+        const fullOutput = {
+          entries,
+          markdown: renderMarkdown(name, entries),
+          totalEntries: metadata.totalEntries,
+          totalFiles: metadata.totalFiles,
+          totalDirectories: metadata.totalDirectories,
+          ...(metadata.totalEntries > entries.length ? { truncated: true } : {}),
+        };
+        return putJsonResource(ctx.resourceStore, `${name} tree`, fullOutput);
+      },
+    });
+
+    const structured: ListOutput = {
+      ...paged.metadata,
+      entries: [...paged.page],
+      entryCount: paged.page.length,
+      ...(paged.resource ? { resourceUri: paged.resource.entry.uri } : {}),
+      ...(paged.nextCursor !== undefined ? { nextCursor: paged.nextCursor } : {}),
+    };
     // The tree is what the model reads, so position and the full-list URI ride
     // the text too — paging needs no second lookup. `pageTrailer` is the one
     // owner of that line, and it owes it on the last page as much as the first.
     const text =
-      markdown +
+      renderMarkdown(basename(paged.metadata.path), [...paged.page]) +
       pageTrailer({
-        offset,
+        offset: paged.offset,
         shown: structured.entryCount,
         total: structured.totalEntries,
         noun: 'entries',
@@ -335,7 +314,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
     return {
       structured,
       text,
-      ...(link ? { resources: [link] } : {}),
+      ...(paged.resource ? { resources: [paged.resource.link] } : {}),
     };
   },
 });
