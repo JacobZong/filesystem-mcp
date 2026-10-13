@@ -399,3 +399,92 @@ describe('Mutation regressions', () => {
     }
   });
 });
+
+describe('Pending confirmation outcomes', () => {
+  const tools = [
+    {
+      name: 'create',
+      accept: 'overwrite',
+      args: (root: string) => ({ files: [{ path: join(root, 'dst.txt'), content: 'new' }] }),
+      refused: /create cancelled: overwrite of .*dst\.txt.* was (declined|dismissed) by the user/,
+      applied: async (root: string) => (await readFile(join(root, 'dst.txt'), 'utf8')) === 'new',
+    },
+    {
+      name: 'move',
+      accept: 'overwrite',
+      args: (root: string) => ({
+        moves: [{ source: join(root, 'src.txt'), destination: join(root, 'dst.txt') }],
+      }),
+      refused: /Move cancelled: overwrite of .*dst\.txt.* was (declined|dismissed) by the user/,
+      applied: async (root: string) => (await readFile(join(root, 'dst.txt'), 'utf8')) === 'src',
+    },
+    {
+      name: 'move',
+      accept: 'overwrite',
+      args: (root: string) => ({
+        moves: [{ source: join(root, 'src.txt'), destination: join(root, 'dst.txt') }],
+        copy: true,
+      }),
+      refused: /Copy cancelled: overwrite of .*dst\.txt.* was (declined|dismissed) by the user/,
+      applied: async (root: string) => (await readFile(join(root, 'dst.txt'), 'utf8')) === 'src',
+    },
+    {
+      name: 'delete',
+      accept: 'delete',
+      args: (root: string) => ({ paths: [join(root, 'dir')], recursive: true }),
+      refused: /Delete cancelled: confirmation was (declined|dismissed) by the user/,
+      applied: async (root: string) =>
+        access(join(root, 'dir')).then(
+          () => false,
+          () => true,
+        ),
+    },
+  ] as const;
+  const answers = [
+    {
+      label: 'accept',
+      response: (accept: string) => ({ action: 'accept', content: { choice: accept } }) as const,
+    },
+    { label: 'skip', response: () => ({ action: 'accept', content: { choice: 'skip' } }) as const },
+    { label: 'decline', response: () => ({ action: 'decline' }) as const },
+    { label: 'cancel', response: () => ({ action: 'cancel' }) as const },
+  ] as const;
+
+  for (const tool of tools) {
+    const toolLabel = 'copy' in tool.args('') ? 'copy' : tool.name;
+    for (const answer of answers) {
+      it(`${toolLabel}: ${answer.label} maps to its outcome`, async () => {
+        const root = await createTestRoot();
+        try {
+          await writeTestFile(root, 'src.txt', 'src');
+          await writeTestFile(root, 'dst.txt', 'dst');
+          await writeTestFile(root, 'dir/child.txt', 'child');
+          const pair = await createElicitationClientPair([root], async () =>
+            answer.response(tool.accept),
+          );
+          try {
+            const result = await pair.client.callTool({
+              name: tool.name,
+              arguments: tool.args(root),
+            });
+            const text = JSON.stringify(result);
+            if (answer.label === 'accept') {
+              assert.notStrictEqual(result.isError, true, text);
+              assert.ok(await tool.applied(root), 'accepted change must apply');
+            } else if (answer.label === 'skip') {
+              assert.notStrictEqual(result.isError, true, text);
+              assert.ok(!(await tool.applied(root)), 'skipped change must not apply');
+            } else {
+              assert.match(text, tool.refused);
+              assert.ok(!(await tool.applied(root)), 'refused change must not apply');
+            }
+          } finally {
+            await pair.close();
+          }
+        } finally {
+          await cleanupTestRoot(root);
+        }
+      });
+    }
+  }
+});

@@ -18,11 +18,10 @@ import { joinRoster, pathLabel } from '../core/fmt.ts';
 import type { FileType, GuardedFileSystem } from '../core/fs.ts';
 import {
   confirmKey,
-  describeRefusal,
   type PendingDeleteIdentity,
   pendingRoundTrip,
   type PendingState,
-  readAcceptedChoice,
+  readPendingVerdict,
 } from '../core/input-required.ts';
 import { resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
@@ -235,19 +234,17 @@ async function executePlan(
   confirmationState: PendingState | undefined,
 ): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
   if (plan.pending) {
-    const key = confirmKey(pendingSorted.indexOf(plan.validPath));
-    const choice = readAcceptedChoice(ctx.inputResponses, key);
-    if (choice === 'skip') {
+    const verdict = readPendingVerdict(ctx, pendingSorted, plan.validPath, 'delete');
+    if (verdict === 'skipped') {
       return { skipped: true as const, path: plan.validPath };
     }
-    if (choice !== 'delete') {
+    if (verdict !== 'accepted') {
       return {
         failure: {
           path: plan.validPath,
-          error: Problem.cancelled(
-            `Delete cancelled: confirmation was ${describeRefusal(ctx, key)}`,
-            { path: plan.validPath },
-          ),
+          error: Problem.cancelled(`Delete cancelled: confirmation was ${verdict.refused}`, {
+            path: plan.validPath,
+          }),
         },
       };
     }

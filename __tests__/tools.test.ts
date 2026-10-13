@@ -7,6 +7,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { normalizePath } from '../src/core/path-utils.ts';
 import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
 import {
   getMaxTextFileSize,
@@ -3005,6 +3006,95 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.strictEqual(replay.isError, true);
     assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
+  });
+
+  it('a page cursor replays only for the query that minted it, whatever the page size', async () => {
+    const dir = join(tmpDir, 'cursor_identity');
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+      await writeTestFile(dir, name, 'NEEDLE\n');
+    }
+    const cases: {
+      name: string;
+      base: Record<string, unknown>;
+      pageSize: string;
+      changed: Record<string, unknown>[];
+    }[] = [
+      {
+        name: 'list',
+        base: { path: dir, maxEntries: 1 },
+        pageSize: 'maxEntries',
+        changed: [
+          { path: tmpDir },
+          { maxDepth: 2 },
+          { includeHidden: true },
+          { includeIgnored: true },
+        ],
+      },
+      {
+        name: 'find_files',
+        base: { path: dir, pattern: '*.txt', maxResults: 1 },
+        pageSize: 'maxResults',
+        changed: [
+          { path: tmpDir },
+          { pattern: '*' },
+          { includeIgnored: true },
+          { includeHidden: true },
+          { sortBy: 'name' },
+          { maxDepth: 2 },
+        ],
+      },
+      {
+        name: 'search_text',
+        base: { path: dir, searchPattern: 'NEEDLE', maxResults: 1 },
+        pageSize: 'maxResults',
+        changed: [
+          { path: tmpDir },
+          { pattern: '*.txt' },
+          { searchPattern: 'NEEDL' },
+          { isRegex: true },
+          { includeHidden: true },
+          { includeIgnored: true },
+          { caseSensitive: true },
+          { maxDepth: 2 },
+          { context: 1 },
+        ],
+      },
+    ];
+
+    for (const { name, base, pageSize, changed } of cases) {
+      const first = await harness.client.callTool({ name, arguments: base });
+      const cursor = (first._meta as { nextCursor?: string } | undefined)?.nextCursor;
+      assert.ok(cursor, `${name} must page`);
+
+      const resized = await harness.client.callTool({
+        name,
+        arguments: { ...base, [pageSize]: 10, cursor },
+      });
+      assert.notStrictEqual(resized.isError, true, `${name}: a new page size still replays`);
+
+      for (const change of changed) {
+        const replay = await harness.client.callTool({
+          name,
+          arguments: { ...base, ...change, cursor },
+        });
+        assert.strictEqual(replay.isError, true, `${name} ${JSON.stringify(change)}`);
+        assert.match(firstTextBlock(replay).text ?? '', /Invalid cursor/);
+      }
+    }
+
+    // An omitted path defaults to the root; spelling the root out (as the guard
+    // stores it) is the same query.
+    const rootPage = await harness.client.callTool({
+      name: 'list',
+      arguments: { maxDepth: 2, maxEntries: 1 },
+    });
+    const rootCursor = (rootPage._meta as { nextCursor?: string } | undefined)?.nextCursor;
+    assert.ok(rootCursor, 'root list must page');
+    const spelled = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: normalizePath(tmpDir), maxDepth: 2, maxEntries: 1, cursor: rootCursor },
+    });
+    assert.notStrictEqual(spelled.isError, true, JSON.stringify(spelled));
   });
 
   it('search_text context returns surrounding lines and renders them grep-style once', async () => {

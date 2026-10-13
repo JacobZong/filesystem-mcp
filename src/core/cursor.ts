@@ -60,6 +60,25 @@ export interface PaginatedPage<T, M, R> extends Page<T, M> {
 }
 
 /**
+ * A paged query's snapshot identity: `method` plus every arg except
+ * `pagingFields`. Result-defining args are in the key by default, so one a tool
+ * forgets to exclude fails loud as an invalid cursor instead of replaying a
+ * stale snapshot.
+ */
+export function pageQueryKey<A extends object>(
+  method: string,
+  args: A,
+  pagingFields: readonly (keyof A & string)[],
+): string {
+  // Sorted: an omitted optional arg the tool fills in (e.g. path) must key the
+  // same as the caller spelling it out, whatever slot the spread lands it in.
+  const kept = Object.entries(args)
+    .filter(([key]) => !pagingFields.includes(key as keyof A & string))
+    .sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify({ method, ...Object.fromEntries(kept) });
+}
+
+/**
  * The one replay-or-produce branch every paged tool runs. A cursor replays a
  * stored snapshot; without one, `produce` runs the query and its result is
  * snapshotted for later pages.
@@ -73,6 +92,7 @@ export interface PaginatedPage<T, M, R> extends Page<T, M> {
  */
 export async function paginate<T, M, R>(params: {
   store: PageSnapshotStore;
+  /** Built by `pageQueryKey`; a snapshot replays only for the key that minted it. */
   queryKey: string;
   cursor: string | undefined;
   pageSize: number;

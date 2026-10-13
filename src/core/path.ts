@@ -11,9 +11,7 @@ import {
   FsError,
   isFsError,
   isNotFoundErrno,
-  isSkippableErrno,
   rethrowIfAborted,
-  SKIPPABLE_FS_CODES,
 } from './errors.ts';
 import { Logger } from './observability.ts';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.ts';
@@ -235,36 +233,6 @@ export class PathGuard {
 
   isSensitive(filePath: string): boolean {
     return this.sensitive.isSensitive(filePath);
-  }
-
-  /**
-   * True when `entryPath` is both within the guard's allowed directories and
-   * not sensitive, checking the requested AND resolved paths. EVERY entry is
-   * realpath-resolved via validateExistingPathDetailed: a symlinked ancestor
-   * directory pointing outside the sandbox would otherwise pass the lexical
-   * containment check (fs.glob follows symlinks and yields external entries as
-   * non-symlink dirents). validateExistingPathDetailed re-checks containment on
-   * the real path against this.allowedDirectoriesState (the guard's full
-   * allowed set — a superset of the single-root `bounds` callers pass) and
-   * re-checks sensitivity on the resolved target, throwing ACCESS_DENIED for
-   * escapes/sensitive, which the catch below turns into a filter. Skippable
-   * errno/fs errors return false (the entry is filtered, not fatal). The
-   * accepted TOCTOU window is documented at the class docstring above.
-   */
-  async isEntryAccessible(entryPath: string): Promise<boolean> {
-    const isSensitive = (requestedPath: string, resolvedPath: string): boolean =>
-      this.isSensitive(requestedPath) || this.isSensitive(resolvedPath);
-    try {
-      const validated = await this.validateExistingPathDetailed(entryPath);
-      return !isSensitive(validated.requestedPath, validated.resolvedPath);
-    } catch (error) {
-      if (isFsError(error)) {
-        if (SKIPPABLE_FS_CODES.has(error.code)) return false;
-        throw error;
-      }
-      if (isSkippableErrno(error)) return false;
-      throw error;
-    }
   }
 
   async validateExistingPath(requestedPath: string): Promise<string> {
