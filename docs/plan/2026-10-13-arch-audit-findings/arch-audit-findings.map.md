@@ -62,6 +62,7 @@ states, refined by this map's decision tickets, in batch PRs merged with
 - [Deliver the singles batch (findings 2, 6, 13)](tickets/T-11-deliver-singles-batch.md) — Delivered: PR #73 merged as f6b890cc (slot 1); check green, src net -31 lines.
 - [Deliver the tool-code batch (findings 3, 7, 8, 9, 14)](tickets/T-12-deliver-tool-code-batch.md) — Delivered: PR #75 merged (slot 3); check green, contract unchanged, src net -111 lines.
 - [Deliver the guard batch (findings 4, 12, 15)](tickets/T-10-deliver-guard-batch.md) — Delivered: PR #76 merged (slot 4); premises reproduced red first; src net -51 lines; grants now stricter on outside-pointing links.
+- [Deliver the transport batch (findings 5, 10, 11)](tickets/T-13-deliver-transport-batch.md) — Delivered: PR #78 merged (slot 6); the API key stops at the HTTP host; public exports unchanged; src net -10.
 
 ## Not yet specified
 

@@ -3,12 +3,12 @@ kind: frontier-ticket
 id: T-07
 title: Deliver the test-cluster batch (findings 2 and 3)
 map: M-01
-status: open
+status: in-progress
 type: task
 mode: afk
 priority: 60
 blocked_by: ["T-02", "T-04"]
-claimed:
+claimed: 2026-10-13T23:00:00Z
 ---
 
 ## Question
