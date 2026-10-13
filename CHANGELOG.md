@@ -32,9 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Write tools over stdio link only files `resources/read` can return.**
   A file written past about 9.75 MiB no longer gets a `resource_link` that
   the stdio connection's `resources/read` always refuses.
-- **`includeHidden` finds dotfiles for a `!(…)` pattern again.** A pattern
-  such as `**/!(*.test).ts` with `includeHidden: true` skipped dot-prefixed
-  names like `.eslintrc.ts` since 2.8.0.
 
 ## [2.8.1] - 2026-10-13
 

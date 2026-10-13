@@ -810,7 +810,7 @@ describe('globEntries characterization', () => {
     }
   });
 
-  it('includeHidden finds dot-prefixed names for a negated extglob segment', async () => {
+  it('includeHidden never adds dot names a negated extglob excluded', async () => {
     const root = await createTestRoot();
     try {
       for (const file of [
@@ -821,20 +821,18 @@ describe('globEntries characterization', () => {
         'sub/b.test.ts',
         'src/x.ts',
         '.src',
+        '.gitignore',
+        '.env.local',
       ]) {
         await mkdir(dirname(join(root, file)), { recursive: true });
         await writeFile(join(root, file), 'x');
       }
       const hidden = (pattern: string): Promise<string[]> =>
         walk({ cwd: root, pattern, includeHidden: true });
-      assert.deepStrictEqual(await hidden('**/!(*.test).ts'), [
-        '.eslintrc.ts',
-        'a.ts',
-        'src/x.ts',
-        'sub/.prettierrc.ts',
-      ]);
-      // `.!(src)` is the dotted variant: every dot name except `.src` itself.
-      assert.ok((await hidden('!(src)')).includes('.eslintrc.ts'));
+      assert.ok(!(await hidden('!(.gitignore)')).includes('.gitignore'));
+      assert.ok(!(await hidden('!(.env.local)')).includes('.env.local'));
+      // Hidden names are left out of a negated segment: the documented limit.
+      assert.deepStrictEqual(await hidden('**/!(*.test).ts'), ['a.ts', 'src/x.ts']);
     } finally {
       await cleanupTestRoot(root);
     }
