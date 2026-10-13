@@ -3,12 +3,12 @@ kind: frontier-ticket
 id: T-12
 title: Deliver the tool-code batch (findings 3, 7, 8, 9, 14)
 map: M-01
-status: in-progress
+status: closed
 type: task
 mode: afk
 priority: 30
 blocked_by: ["T-06", "T-07"]
-claimed: 2026-10-13T19:00:00Z
+claimed:
 ---
 
 ## Question
@@ -29,3 +29,23 @@ Follow the process T-07 settles and the merge slot T-06 settles.
 Completion follows the map's execution contract.
 
 Priority 30: merge slot 3 of 7 (T-06), after the 2026-10-12 map's core singles batch merges.
+
+## Resolution
+
+Delivered, 2026-10-13, via
+[PR #75](https://github.com/j0hanz/filesystem-mcp/pull/75), merged to
+`main` as `f8653ec5` with the user's go-ahead (merge slot 3 of 7).
+
+- Completion check (the execution contract):
+  - Findings 3, 7, 8, 9 and 14 are in the diff, as the ticket states.
+  - `npm run check` exits 0: 673 tests, 668 pass, 5 skipped.
+  - The contract snapshot is unchanged.
+  - CI is green on all 6 checks.
+- `src/` net line delta: +242 / -353 (-111) across 8 files.
+- Process (T-07, direct): a pin test for finding 8, written first and
+  failing on `main` (old wording, plus a doubled message for empty
+  input), then refactor, then one combined bug-hunt and qc review
+  (approved, nothing blocking).
+- Scope note: the empty `searchPattern` in search_text and replace_text
+  also takes the shared wording, because one schema now serves all three
+  fields. T-04 settled that wording for edit.

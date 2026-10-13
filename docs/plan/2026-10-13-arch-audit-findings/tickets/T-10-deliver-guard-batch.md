@@ -3,12 +3,12 @@ kind: frontier-ticket
 id: T-10
 title: Deliver the guard batch (findings 4, 12, 15)
 map: M-01
-status: open
+status: in-progress
 type: task
 mode: afk
 priority: 40
 blocked_by: ["T-06", "T-07"]
-claimed:
+claimed: 2026-10-13T20:00:00Z
 ---
 
 ## Question

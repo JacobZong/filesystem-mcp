@@ -60,6 +60,7 @@ states, refined by this map's decision tickets, in batch PRs merged with
 - [In what order do the batches merge relative to M-01?](tickets/T-06-merge-order.md) — One chain over both maps: singles, old core singles, tool code, guard, old resources.ts, transport, old test cluster last.
 - [Which delivery process does each batch follow?](tickets/T-07-delivery-process.md) — Mixed: singles and tool code go direct (pin, refactor, bug-hunt, qc); guard and transport are planned (write-plan, plan-hunt, run-plan, bug-hunt, qc).
 - [Deliver the singles batch (findings 2, 6, 13)](tickets/T-11-deliver-singles-batch.md) — Delivered: PR #73 merged as f6b890cc (slot 1); check green, src net -31 lines.
+- [Deliver the tool-code batch (findings 3, 7, 8, 9, 14)](tickets/T-12-deliver-tool-code-batch.md) — Delivered: PR #75 merged (slot 3); check green, contract unchanged, src net -111 lines.
 
 ## Not yet specified
 
