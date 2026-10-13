@@ -27,6 +27,7 @@ import {
   createTestRoot,
   firstTextBlock,
   fsErrorMatcher,
+  modernClientMeta,
   writeTestFile,
 } from './helpers.ts';
 
@@ -577,11 +578,7 @@ describe('describeRefusal', () => {
 });
 
 describe('wrapped inputResponses over the modern wire', () => {
-  const META = {
-    'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-    'io.modelcontextprotocol/clientCapabilities': { elicitation: { form: {} } },
-    'io.modelcontextprotocol/clientInfo': { name: 'raw-modern-test', version: '1.0.0' },
-  };
+  const META = modernClientMeta('raw-modern-test', { elicitation: { form: {} } });
 
   async function post(
     handler: ReturnType<typeof createMcpHandler>,

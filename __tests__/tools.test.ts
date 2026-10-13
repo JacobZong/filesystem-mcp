@@ -3608,3 +3608,259 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 });
+
+// High-severity regressions from the 2026-10 bug hunt (H1-H3, H6). Their own
+// root: two of them symlink the root into itself, which every other walk in
+// this file would then see.
+describe('High-severity bug-hunt regressions (tools)', () => {
+  let tmpDir: string;
+  let pair: TestClientContext;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    pair = await createTestClientPair([tmpDir]);
+  });
+  after(async () => {
+    await pair.close();
+    await cleanupTestRoot(tmpDir);
+  });
+
+  describe('H2: concurrent and aliased writes keep every change', () => {
+    it('30 concurrent edit calls on one file all apply (no lost updates)', async () => {
+      const file = join(tmpDir, 'counters.txt');
+      const n = 30;
+      await writeFile(
+        file,
+        Array.from({ length: n }, (_, i) => `slot ${String(i)} = 0`).join('\n') + '\n',
+      );
+      const calls = Array.from({ length: n }, (_, i) =>
+        pair.client.callTool({
+          name: 'edit',
+          arguments: {
+            path: file,
+            edits: [{ oldText: `slot ${String(i)} = 0`, newText: `slot ${String(i)} = 1` }],
+          },
+        }),
+      );
+      const results = await Promise.all(calls);
+      assert.ok(
+        results.every((r) => r.isError !== true),
+        'every concurrent edit should succeed',
+      );
+      const after = await readFile(file, 'utf-8');
+      for (let i = 0; i < n; i++) {
+        assert.ok(after.includes(`slot ${String(i)} = 1`), `slot ${String(i)} must be updated`);
+      }
+      assert.ok(!after.includes('= 0'), 'no slot should keep its original value');
+    });
+
+    it('aliased creates never overwrite a file that appeared after planning', async (t) => {
+      const file = join(tmpDir, 'concurrent-create.txt');
+      const alias = join(tmpDir, 'create-alias');
+      if (!(await trySymlink(tmpDir, alias, () => t.skip('symlinks not permitted')))) return;
+      const result = await pair.client.callTool({
+        name: 'create',
+        arguments: {
+          files: [
+            { path: file, content: 'first' },
+            { path: join(alias, 'concurrent-create.txt'), content: 'second' },
+          ],
+        },
+      });
+      const structured = result.structuredContent as {
+        files?: unknown[];
+        failures?: unknown[];
+      };
+      assert.strictEqual(structured.files?.length, 1, JSON.stringify(result));
+      assert.strictEqual(structured.failures?.length, 1);
+      const contents = await readFile(file, 'utf-8');
+      assert.ok(contents === 'first' || contents === 'second');
+    });
+
+    it('a batch naming one file through a symlinked parent applies both entries', async (t) => {
+      const file = join(tmpDir, 'aliased.txt');
+      await writeFile(file, 'AAA\nBBB\n');
+      const alias = join(tmpDir, 'aliasdir');
+      if (!(await trySymlink(tmpDir, alias, () => t.skip('symlinks not permitted')))) return;
+
+      const result = await pair.client.callTool({
+        name: 'edit',
+        arguments: {
+          files: [
+            { path: file, edits: [{ oldText: 'AAA', newText: 'XXX' }] },
+            { path: join(alias, 'aliased.txt'), edits: [{ oldText: 'BBB', newText: 'YYY' }] },
+          ],
+        },
+      });
+      assert.notStrictEqual(result.isError, true);
+      const after = await readFile(file, 'utf-8');
+      assert.ok(after.includes('XXX') && after.includes('YYY'), `both edits must land: ${after}`);
+    });
+  });
+
+  describe('H3: an overlapping move batch is refused with no data loss', () => {
+    it('a swap [A->B, B->A] is refused and both files survive', async () => {
+      const a = join(tmpDir, 'swapA');
+      const b = join(tmpDir, 'swapB');
+      await writeFile(a, 'AAA\n');
+      await writeFile(b, 'BBB\n');
+      const result = await pair.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [
+            { source: a, destination: b },
+            { source: b, destination: a },
+          ],
+        },
+      });
+      assert.strictEqual(result.isError, true, 'a doomed swap is a total failure');
+      assert.strictEqual(await readFile(a, 'utf-8'), 'AAA\n');
+      assert.strictEqual(await readFile(b, 'utf-8'), 'BBB\n');
+    });
+
+    it('a chain [B->C, A->B] is refused and no file is destroyed', async () => {
+      const a = join(tmpDir, 'chainA');
+      const b = join(tmpDir, 'chainB');
+      const c = join(tmpDir, 'chainC');
+      await writeFile(a, 'AAA\n');
+      await writeFile(b, 'BBB\n');
+      const result = await pair.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [
+            { source: b, destination: c },
+            { source: a, destination: b },
+          ],
+        },
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(await readFile(a, 'utf-8'), 'AAA\n');
+      assert.strictEqual(await readFile(b, 'utf-8'), 'BBB\n');
+      await assert.rejects(readFile(c, 'utf-8'), 'C must never be created');
+    });
+
+    it('independent moves in one batch still run concurrently', async () => {
+      const x = join(tmpDir, 'indX');
+      const y = join(tmpDir, 'indY');
+      await writeFile(x, 'X\n');
+      await writeFile(y, 'Y\n');
+      const result = await pair.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [
+            { source: x, destination: join(tmpDir, 'indX2') },
+            { source: y, destination: join(tmpDir, 'indY2') },
+          ],
+        },
+      });
+      assert.notStrictEqual(result.isError, true);
+      assert.strictEqual(await readFile(join(tmpDir, 'indX2'), 'utf-8'), 'X\n');
+      assert.strictEqual(await readFile(join(tmpDir, 'indY2'), 'utf-8'), 'Y\n');
+    });
+  });
+
+  describe('H1: edit ignoreWhitespace is bounded on a dense match', () => {
+    it(
+      'a short oldText matching thousands of times fails ambiguous quickly',
+      { timeout: 5000 },
+      async () => {
+        const file = join(tmpDir, 'dense.txt');
+        await writeFile(file, 'a b\n'.repeat(20_000));
+        const result = await pair.client.callTool({
+          name: 'edit',
+          arguments: {
+            path: file,
+            ignoreWhitespace: true,
+            edits: [{ oldText: 'a b', newText: 'X' }],
+          },
+        });
+        assert.strictEqual(result.isError, true, 'an ambiguous match is an error');
+        assert.match(firstTextBlock(result).text ?? '', /matches at least \d+ places/i);
+
+        const exact = await pair.client.callTool({
+          name: 'edit',
+          arguments: {
+            path: file,
+            edits: [{ oldText: 'a b', newText: 'X' }],
+          },
+        });
+        assert.strictEqual(exact.isError, true, 'repeated exact matches are ambiguous too');
+        assert.match(firstTextBlock(exact).text ?? '', /matches at least \d+ places/i);
+
+        // Nothing should have been written.
+        assert.strictEqual(await readFile(file, 'utf-8'), 'a b\n'.repeat(20_000));
+      },
+    );
+  });
+
+  describe('H1 + H6: core search is interruptible and guards over-long lines', () => {
+    it('H6: a line past the RE2 input bound is reported skippedTooLarge, not a false empty, and later searches still work', async () => {
+      const dir = join(tmpDir, 'oversized');
+      const bigLine = 'a'.repeat(RE2_MAX_INPUT_BYTES + 1024); // one line over the bound
+      await writeTestFile(dir, 'huge.txt', bigLine);
+      await writeTestFile(dir, 'ok.txt', 'hello NEEDLE world\n');
+
+      const outcome = await searchContent(
+        dir,
+        'NEEDLE',
+        { isRegex: false },
+        pair.serverCtx.pathGuard,
+      );
+      assert.strictEqual(outcome.summary.skippedTooLarge, 1, 'the huge-line file is skipped');
+      assert.strictEqual(outcome.matches.length, 1, 'the ordinary file is still searched');
+
+      // The wasm module is still alive for a second search in the same process.
+      const again = await searchContent(
+        dir,
+        'NEEDLE',
+        { isRegex: false },
+        pair.serverCtx.pathGuard,
+      );
+      assert.strictEqual(again.matches.length, 1);
+    });
+
+    it('H1: an aborted search over a dense-match line resolves as timeout, not a hang', async () => {
+      const dir = join(tmpDir, 'dense-line');
+      await writeTestFile(dir, 'line.txt', 'needle\n'.repeat(200_000));
+      const controller = new AbortController();
+      const search = searchContent(
+        dir,
+        'needle',
+        { isRegex: false, maxResults: 100_000, signal: controller.signal },
+        pair.serverCtx.pathGuard,
+      );
+      setTimeout(() => controller.abort(new DOMException('deadline', 'TimeoutError')), 50);
+      const outcome = await search;
+      assert.strictEqual(outcome.summary.stoppedReason, 'timeout');
+      assert.ok(outcome.summary.truncated, 'an aborted scan is incomplete');
+      assert.ok(outcome.summary.filesScanned > 0, 'the scan started before cancellation');
+    });
+
+    it(
+      'H1: a live replace_text timeout never writes a partially spliced file',
+      { timeout: 5000 },
+      async (t) => {
+        const file = join(tmpDir, 'dense-replace.txt');
+        const original = 'a'.repeat(200_000) + '\n';
+        await writeFile(file, original);
+        t.mock.method(AbortSignal, 'timeout', () => {
+          const controller = new AbortController();
+          setTimeout(() => controller.abort(new DOMException('test timeout', 'TimeoutError')), 100);
+          return controller.signal;
+        });
+        const result = await pair.client.callTool({
+          name: 'replace_text',
+          arguments: {
+            path: file,
+            searchPattern: 'a',
+            replacement: 'b',
+            isRegex: true,
+            caseSensitive: true,
+          },
+        });
+        assert.strictEqual((result._meta as { stoppedReason?: string }).stoppedReason, 'timeout');
+        assert.strictEqual(await readFile(file, 'utf-8'), original);
+      },
+    );
+  });
+});

@@ -18,18 +18,16 @@ import {
   cleanupTestRoot,
   createRawStdioServer,
   createStdioClient,
+  createTestHttpHarness,
   createTestRoot,
   firstTextBlock,
+  modernClientMeta,
   waitFor,
   waitForResourceUpdate,
   writeTestFile,
 } from './helpers.ts';
 
-const MODERN_META = {
-  'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-  'io.modelcontextprotocol/clientCapabilities': {},
-  'io.modelcontextprotocol/clientInfo': { name: 'raw-stdio-test', version: '1.0.0' },
-};
+const MODERN_META = modernClientMeta('raw-stdio-test');
 
 const within = <T>(p: Promise<T>, ms: number) =>
   Promise.race([
@@ -430,11 +428,7 @@ describe('Stdio subscription lease lifecycle', () => {
         id: 'overflow-listen',
         method: 'subscriptions/listen',
         params: {
-          _meta: {
-            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-            'io.modelcontextprotocol/clientCapabilities': {},
-            'io.modelcontextprotocol/clientInfo': { name: 'raw-stdio-test', version: '1.0.0' },
-          },
+          _meta: MODERN_META,
           notifications: { resourceSubscriptions: [buildFileResourceUri(file)] },
         },
       });
@@ -993,4 +987,57 @@ describe('Stdio subscription lease lifecycle', () => {
       });
     }
   }
+});
+
+describe('H5: a read whose encoded result exceeds the transport buffer errors cleanly', () => {
+  let tmpDir: string;
+  let harness: Awaited<ReturnType<typeof createStdioClient>>;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    harness = await createStdioClient(tmpDir);
+  });
+  after(async () => {
+    await harness.close();
+    await cleanupTestRoot(tmpDir);
+  });
+
+  it('a ~9.9 MiB full read fails TOO_LARGE and the connection survives', async () => {
+    // Under the 10 MiB file-size limit (full read allowed), but every "\n"
+    // doubles under JSON escaping, so the serialized result clears the SDK
+    // client's 10 MiB ReadBuffer. Without the outbound cap this drops the
+    // session; with it, a small TOO_LARGE comes back and head still works.
+    const big = join(tmpDir, 'too-big-to-return.txt');
+    await writeFile(big, 'line\n'.repeat(Math.floor((9.9 * 1024 * 1024) / 5)));
+
+    const full = await harness.client.callTool({ name: 'read', arguments: { path: big } });
+    assert.strictEqual(full.isError, true, JSON.stringify(full.content).slice(0, 200));
+    assert.match(firstTextBlock(full).text ?? '', /TOO_LARGE/);
+    assert.match(firstTextBlock(full).text ?? '', /head|tail|startLine/);
+
+    const head = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: big, head: 10 },
+    });
+    assert.notStrictEqual(head.isError, true, 'connection survived; head still works');
+    assert.ok(firstTextBlock(head).text?.includes('line'));
+  });
+
+  it('the same ~9.9 MiB read still succeeds over HTTP, which has no ReadBuffer frame limit', async () => {
+    // The stdio cap must not shrink what a direct HTTP read returns: HTTP
+    // streams the response with no 10 MiB framing. This guards against the
+    // cap being applied transport-blind.
+    const httpTmp = await createTestRoot();
+    const http = await createTestHttpHarness([httpTmp]);
+    try {
+      const big = join(httpTmp, 'big-over-http.txt');
+      await writeFile(big, 'line\n'.repeat(Math.floor((9.9 * 1024 * 1024) / 5)));
+      const result = await http.client.callTool({ name: 'read', arguments: { path: big } });
+      assert.notStrictEqual(result.isError, true, 'HTTP returns the large read, not TOO_LARGE');
+      assert.ok((firstTextBlock(result).text ?? '').startsWith('line\n'));
+    } finally {
+      await http.close();
+      await cleanupTestRoot(httpTmp);
+    }
+  });
 });
