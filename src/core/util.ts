@@ -55,6 +55,21 @@ export function splitCsvList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Parse a boolean env flag: `true`/`1` enable, `false`/`0`/empty disable.
+ * Any other value warns once per var (when `name` is given) and reads as
+ * false, so a typo like `FS_ALLOW_SENSITIVE=yes` is never silent.
+ */
+export function parseTrueEnvFlag(value: string | undefined, name?: string): boolean {
+  if (value === undefined) return false;
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed === 'true' || trimmed === '1') return true;
+  if (name && trimmed !== '' && trimmed !== 'false' && trimmed !== '0') {
+    warnInvalidSetting(name, value, '"true" or "1"', false);
+  }
+  return false;
+}
+
 const REGEXP_SYNTAX = /[\\^$.*+?()[\]{}|/]/;
 const REGEXP_OTHER_PUNCTUATORS = /[,\-=<>#&!%:;@~'`"]/;
 const REGEXP_CONTROL_ESCAPES: Readonly<Record<string, string>> = {

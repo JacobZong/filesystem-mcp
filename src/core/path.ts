@@ -1,7 +1,7 @@
 import type { Stats } from 'node:fs';
 import { lstat, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import { cli } from './config.ts';
@@ -24,11 +24,9 @@ import {
   isWindowsDriveRelativePath,
   normalizeAllowedDirectory,
   normalizePath,
-  parseTrueEnvFlag,
-  toPosixPath,
 } from './path-utils.ts';
 import { SensitiveMatcher } from './sensitive.ts';
-import { ROOTS_TIMEOUT_MS } from './util.ts';
+import { parseTrueEnvFlag, ROOTS_TIMEOUT_MS } from './util.ts';
 
 // Allowed-directory assembly and the PathGuard that enforces it. The
 // sensitive-file denylist lives in sensitive.ts, and the character-level
@@ -97,11 +95,6 @@ async function partitionRootsWithin(
     );
   }
   return { kept, dropped };
-}
-
-/** `path.relative` with forward slashes, so displayed paths match across platforms. */
-export function toPosixRelative(from: string, to: string): string {
-  return toPosixPath(relative(from, to));
 }
 
 // ---------------------------------------------------------------------------

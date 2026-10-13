@@ -3,12 +3,12 @@ kind: frontier-ticket
 id: T-06
 title: Deliver batch B3: F6 and the sensitive.ts anchor
 map: M-01
-status: open
+status: in-progress
 type: task
 mode: hitl
 priority: 100
 blocked_by: [T-03, T-05]
-claimed:
+claimed: 2026-10-13T11:32:00Z
 ---
 
 ## Question

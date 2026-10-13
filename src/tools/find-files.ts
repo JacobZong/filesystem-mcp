@@ -2,7 +2,7 @@ import * as z from 'zod/v4';
 
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
-import { toPosixRelative } from '../core/path.ts';
+import { toPosixRelative } from '../core/path-utils.ts';
 import {
   CursorSchema,
   IncludeHidden,

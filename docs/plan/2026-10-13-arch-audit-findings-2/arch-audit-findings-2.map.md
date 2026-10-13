@@ -52,6 +52,8 @@ decision tickets, in batch PRs merged with `npm run check` green.
   edits verified by symbol grep, no `bug-hunt`.
 - [Deliver batch B1: F5, F7, F11](tickets/T-04-deliver-b1-isolated.md)
   — delivered in PR #81 (`f4124ef2`); `npm run check` 676/0/5; net +37.
+- [Deliver batch B2: F1, F2, F3, F4](tickets/T-05-deliver-b2-tools.md)
+  — delivered in PR #82 (`cd242a8c`); `npm run check` 693/0/5; `src/` net -8.
 
 ## Not yet specified
 
