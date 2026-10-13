@@ -75,7 +75,7 @@ export const SafeGlobPattern = z
     refineSafeText('Pattern', (val) =>
       isSafeGlobSyntax(val)
         ? undefined
-        : `Invalid glob or unsafe path (absolute/.. forbidden, at most ${String(MAX_BRACE_ALTERNATIVES)} brace alternatives, ${String(MAX_DOTDOT_CHECK_CHARS)} traversal-check characters, and ${String(MAX_SEGMENT_WILDCARDS)} * wildcards per path segment; no |, * or nested group inside *(…) or +(…))`,
+        : `Invalid glob or unsafe path (absolute/.. forbidden, at most ${String(MAX_BRACE_ALTERNATIVES)} brace alternatives, ${String(MAX_DOTDOT_CHECK_CHARS)} traversal-check characters, and ${String(MAX_SEGMENT_WILDCARDS)} * runs and extglob groups together per path segment; no |, * or nested group inside *(…) or +(…))`,
     ),
   )
   .describe('Relative glob pattern under the search root (e.g. "**/*.ts", "src/**/*.js").')

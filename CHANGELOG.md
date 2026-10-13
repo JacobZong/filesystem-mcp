@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A glob pattern can no longer freeze the server.** `find_files`,
   `search_text` and `replace_text` refuse a pattern that puts `|`, `*` or a
-  nested group inside `*(…)` or `+(…)`, or that has more than three `*`
-  wildcards in one path segment. Node matches globs synchronously, and such
+  nested group inside `*(…)` or `+(…)`, or that has more than three `*` runs
+  and extglob groups (`?(…)`, `@(…)`, `!(…)`, `+(…)`, `*(…)`) together in one
+  path segment. Node matches globs synchronously, and such
   patterns backtracked for minutes on one long file name, blocking every
   client. The refusal is the usual `Invalid glob or unsafe path` error.
 

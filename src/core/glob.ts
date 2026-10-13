@@ -23,9 +23,10 @@ export const MAX_DOTDOT_CHECK_CHARS = 4096;
 
 /**
  * fs.glob tests each name against a regex compiled from the segment,
- * synchronously. Every unbounded wildcard (a run of `*`, or a `+(` group) adds
- * a degree of backtracking: on a 255-character name three cost under 100 ms,
- * four about 1 s, and five do not finish.
+ * synchronously. Every run of `*` and every extglob group (`?(`, `+(`, `@(`,
+ * `!(`, `*(`) adds a degree of backtracking: on a 255-character name three cost
+ * under 100 ms, four about 1 s, and five do not finish; a chain of `?(a|aa)`
+ * groups grows the same way.
  */
 export const MAX_SEGMENT_WILDCARDS = 3;
 
@@ -170,15 +171,18 @@ function groupClose(segment: string, open: number): number {
  * Whether matching this brace-free segment can backtrack for seconds on one
  * long name. Two shapes do: a repeated group (`*(…)`, `+(…)`) whose body can
  * match more than one way (`|`, `*`, or a nested group), and more than
- * MAX_SEGMENT_WILDCARDS unbounded wildcards in the segment.
+ * MAX_SEGMENT_WILDCARDS `*` runs and extglob groups together.
  */
 function canBacktrack(segment: string): boolean {
   if (segment === '**') return false;
   let wildcards = (segment.match(/\*+/gu) ?? []).length;
   for (let i = segment.indexOf('('); i !== -1; i = segment.indexOf('(', i + 1)) {
     const opener = segment[i - 1];
+    if (opener === undefined || !'*+?@!'.includes(opener)) continue;
+    // Each group can match more than one way, so it adds a degree of
+    // backtracking like a `*` run does (`*(` is already counted as one).
+    if (opener !== '*') wildcards++;
     if (opener !== '*' && opener !== '+') continue;
-    if (opener === '+') wildcards++;
     const close = groupClose(segment, i);
     // Classes are literals: only `|`, `*` or a group outside one can backtrack.
     const body = segment
