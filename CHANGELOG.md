@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`includeHidden` finds dotfiles for a `!(…)` pattern again.** A pattern
+  such as `**/!(*.test).ts` with `includeHidden: true` skipped dot-prefixed
+  names like `.eslintrc.ts` since 2.8.0.
+
 ### Security
 
 - **A glob pattern can no longer freeze the server.** `find_files`,

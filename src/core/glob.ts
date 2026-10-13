@@ -467,11 +467,15 @@ function splitPatternPrefix(normalizedPattern: string): {
 
 /**
  * The segment matching the dot-prefixed names `segment` would match if fs.glob
- * did not skip them, or `undefined` when there are none. Only a leading `*` or
- * `?` stands for that dot: a literal never does, and a character class or a
+ * did not skip them, or `undefined` when there are none. Only a leading `*`, `?`
+ * or `!(` stands for that dot: a literal never does, and a character class or a
  * brace set is left as written rather than parsed.
  */
 function dotVariant(segment: string): string | undefined {
+  // `!(…)` matches every name but the listed ones, dot names included when
+  // they are asked for; `.!(…)` is that set's dot-prefixed half. It misses only
+  // a dot name equal to `.` + a listed one (`.src` for `!(src)`).
+  if (segment.startsWith('!(')) return `.${segment}`;
   // `*(…)` and `?(…)` are extglobs, not wildcards.
   if (segment[1] === '(') return undefined;
   if (segment.startsWith('*')) return `.${segment}`;
