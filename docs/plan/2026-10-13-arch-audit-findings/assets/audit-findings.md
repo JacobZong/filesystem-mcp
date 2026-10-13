@@ -90,7 +90,7 @@ Line numbers drift; re-grep before every edit.
   `src/tools/search-text.ts:44-50`.
 - Move: `schema.ts` exports `nonBlankString(label)`; un-export `isBlank`.
   4 files, net ≈ -9.
-- Behaviour: edit's custom `min(1)` message: keep it or reword.
+- Behaviour (T-04): edit takes the shared wording for empty and blank.
 
 ### 9. `handleEditFile` wrapper
 
@@ -103,7 +103,7 @@ Line numbers drift; re-grep before every edit.
 - `src/server.ts:73-79` takes `apiKey` with a secret-justifying comment;
   only use `:102` derives `cacheScope`.
 - Move: hosts pass `cacheScope`; delete the comment. 3 files, net ≈ -6.
-- Behaviour: whether stdio still reports `private` when `FS_API_KEY` set.
+- Behaviour (T-04): stdio always passes `public`; HTTP derives it.
 - Overlaps M-01 finding 5 (`server.ts`).
 
 ### 11. stdio hand-builds a JSON-RPC error envelope

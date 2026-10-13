@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `delete` inlines its one-caller removal helper and shares one identity
   check, stdio reuses `normalizeUnknownError`, and the link-returning tools
   return once instead of branching on whether a link exists.
+- **One declaration of the tool dependencies, one way to build an error.**
+  Net -31 lines across 3 files: the tool registrar extends `ToolDeps`
+  instead of re-declaring and copying its six fields, and every `Problem`
+  in `errors.ts`, including `FsError`'s, goes through the one builder that
+  drops unset keys. ADR-002 records that its legacy-harness migration
+  covers 15 test files, not six.
 
 ## [2.7.6] - 2026-10-12
 

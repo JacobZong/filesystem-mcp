@@ -24,8 +24,8 @@ export interface Problem {
 }
 
 interface ProblemFactoryOptions {
-  path?: string;
-  suggestion?: string;
+  path?: string | undefined;
+  suggestion?: string | undefined;
 }
 
 function build(code: ErrorCode, message: string, opts: ProblemFactoryOptions = {}): Problem {
@@ -53,11 +53,7 @@ export const Problem = {
       (shouldOverride ? DEFAULT_SUGGESTIONS[code] : undefined) ??
       problem.suggestion ??
       DEFAULT_SUGGESTIONS[problem.code];
-    const resolvedPath = path ?? problem.path;
-    return build(code, problem.message, {
-      ...(resolvedPath !== undefined ? { path: resolvedPath } : {}),
-      ...(suggestion !== undefined ? { suggestion } : {}),
-    });
+    return build(code, problem.message, { path: path ?? problem.path, suggestion });
   },
   toText(error: unknown, defaultCode: ErrorCode): string {
     return formatDetailedError(Problem.fromUnknown(error, defaultCode));
@@ -154,9 +150,7 @@ export function classifyCauseChain(error: unknown): Problem {
   if (aborted) return Problem.cancelled(message);
   if (timedOut) return build(ErrorCode.TIMEOUT, message);
   if (errno !== undefined) {
-    return build(ERRNO_MAP[errno.code] ?? ErrorCode.IO_ERROR, message, {
-      ...(errno.path !== undefined ? { path: errno.path } : {}),
-    });
+    return build(ERRNO_MAP[errno.code] ?? ErrorCode.IO_ERROR, message, { path: errno.path });
   }
   return build(ErrorCode.UNKNOWN, message);
 }
@@ -253,12 +247,7 @@ export class FsError extends Error {
     suggestion: string | undefined = DEFAULT_SUGGESTIONS[code],
   ) {
     super(message, cause === undefined ? {} : { cause });
-    this.problem = {
-      code,
-      message,
-      ...(path !== undefined ? { path } : {}),
-      ...(suggestion !== undefined ? { suggestion } : {}),
-    };
+    this.problem = build(code, message, { path, suggestion });
     this.name = 'FsError';
   }
 

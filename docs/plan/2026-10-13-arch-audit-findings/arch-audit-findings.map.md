@@ -54,6 +54,11 @@ states, refined by this map's decision tickets, in batch PRs merged with
 - [What exactly changes in behavior for findings 3, 10, 12 and 15?](tickets/T-02-behaviour-deltas.md) — 3 breaks nothing; 10 changes only modern stdio with FS_API_KEY; 12 hides sensitive-named dirs and must catch guard throws; 15 grants a missing seeded root via a symlinked boundary and must keep the empty-boundary return.
 - [Does finding 1 ship as a security fix, separately and first?](tickets/T-03-security-fix-first.md) — Yes: own PR, merged before every other batch of both maps, CHANGELOG Security entry and no advisory. Scope adds countFileLines and the old map's finding 9. Tests: flipper plus a Linux-only ancestor swap.
 - [Which delivery process does the finding 1 security PR follow?](tickets/T-09-security-pr-process.md) — Planned: write-plan, plan-hunt, run-plan, then bug-hunt and qc before merge.
+- [Deliver the finding 1 read-path security PR](tickets/T-08-deliver-security-pr.md) — Delivered: PR #72 merged as 989b4e9b; check green (672 tests), Linux race tests ran; src net -27 lines.
+- [Are the visible behavior changes acceptable?](tickets/T-04-behaviour-acceptance.md) — All accepted: 3 keeps the undefined key; 8 takes the shared wording; 10 stdio always public; 12 tightened with a wrapped guard; 13 by amendment line; 15 granted with a pin test first.
+- [How are the 15 findings batched into PRs alongside M-01?](tickets/T-05-batching.md) — Four file-disjoint PRs: singles {2,6,13}, tool code {3,7,8,9,14}, guard {4,12,15}, transport {5,10,11}; the old map's finding 5 is not folded in.
+- [In what order do the batches merge relative to M-01?](tickets/T-06-merge-order.md) — One chain over both maps: singles, old core singles, tool code, guard, old resources.ts, transport, old test cluster last.
+- [Which delivery process does each batch follow?](tickets/T-07-delivery-process.md) — Mixed: singles and tool code go direct (pin, refactor, bug-hunt, qc); guard and transport are planned (write-plan, plan-hunt, run-plan, bug-hunt, qc).
 
 ## Not yet specified
 
@@ -64,9 +69,6 @@ states, refined by this map's decision tickets, in batch PRs merged with
   `readFile`). Open question: it sits outside the execution contract's
   scope, so does the destination widen to take it, or does it leave as
   its own refactor? See [`read-path-h4.run.md`](read-path-h4.run.md).
-- One delivery task per batch PR for findings 2-15. Waits on the batching
-  decision; each batch's task graduates once its batch, process and merge
-  slot are known.
 
 ## Out of scope
 
