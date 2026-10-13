@@ -558,6 +558,77 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await access(tmpDir);
   });
 
+  it('TC-FUNC-010c: deleting an allowed root through an aliasing junction is refused', async (t) => {
+    const top = await createTestRoot();
+    const a = join(top, 'a');
+    const b = join(a, 'b');
+    try {
+      await mkdir(b, { recursive: true });
+      await writeFile(join(b, 'keep.txt'), 'keep');
+      if (!(await trySymlink(a, join(a, 'j'), () => t.skip('symlink creation not permitted')))) {
+        return;
+      }
+      const pair = await createTestClientPair([a, b]);
+      try {
+        const result = await pair.client.callTool({
+          name: 'delete',
+          arguments: { paths: [join(a, 'j', 'b')], recursive: true },
+        });
+        assert.strictEqual(result.isError, true);
+        assert.match(firstTextBlock(result).text ?? '', /workspace root/i);
+        await access(join(b, 'keep.txt'));
+      } finally {
+        await pair.close();
+      }
+    } finally {
+      await cleanupTestRoot(top);
+    }
+  });
+
+  it('a missing path under an out-of-root junction answers ACCESS_DENIED, not NOT_FOUND', async (t) => {
+    const top = await createTestRoot();
+    const root = join(top, 'root');
+    const outside = join(top, 'outside');
+    try {
+      await mkdir(root);
+      await mkdir(outside);
+      if (
+        !(await trySymlink(outside, join(root, 'out'), () =>
+          t.skip('symlink creation not permitted'),
+        ))
+      ) {
+        return;
+      }
+      const pair = await createTestClientPair([root]);
+      try {
+        const escaping = await pair.client.callTool({
+          name: 'stat',
+          arguments: { path: join(root, 'out', 'nope') },
+        });
+        const escapingText = firstTextBlock(escaping).text ?? '';
+        assert.match(escapingText, /ACCESS_DENIED/);
+        assert.doesNotMatch(escapingText, /NOT_FOUND/);
+
+        const inside = await pair.client.callTool({
+          name: 'stat',
+          arguments: { path: join(root, 'nope') },
+        });
+        assert.match(firstTextBlock(inside).text ?? '', /NOT_FOUND/);
+
+        const read = await pair.client.callTool({
+          name: 'read',
+          arguments: { path: join(root, 'out', 'nope') },
+        });
+        assert.strictEqual(read.isError, true);
+        assert.doesNotMatch(firstTextBlock(read).text ?? '', /not found/i);
+      } finally {
+        await pair.close();
+      }
+    } finally {
+      await cleanupTestRoot(top);
+    }
+  });
+
   it('TC-FUNC-012: --read-only suppresses mutating tools on client.listTools()', async () => {
     const readOnlyHarness = await createTestClientPair([tmpDir], { readOnly: true });
     try {
@@ -1764,6 +1835,20 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const diff = '--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-a\n+X\n b\n';
     const result = await harness.client.callTool({ name: 'patch', arguments: { path: f, diff } });
     assert.strictEqual(result.isError, true);
+  });
+
+  it('patch refuses a zero-context hunk past the end of the file and writes nothing', async () => {
+    const f = join(tmpDir, 'patch_past_end.txt');
+    await writeFile(f, 'a\nb\n');
+    for (const diff of [
+      '--- f.txt\n+++ f.txt\n@@ -10,0 +11,1 @@\n+X\n',
+      '--- f.txt\n+++ f.txt\n@@ -3,0 +4,1 @@\n+X\n',
+    ]) {
+      const result = await harness.client.callTool({ name: 'patch', arguments: { path: f, diff } });
+      assert.strictEqual(result.isError, true);
+      assert.match(firstTextBlock(result).text ?? '', /would duplicate or drop lines/u);
+      assert.strictEqual(await readFile(f, 'utf-8'), 'a\nb\n');
+    }
   });
 
   it('patch dryRun advertises no resourceUri or resource_link for the unwritten file', async () => {
