@@ -79,6 +79,8 @@ interface TransferPlan {
    * — see {@link validateTransferSource}.
    */
   opSource: string;
+  /** Symlink-resolved source, for cross-entry overlap detection (opSource may be the link). */
+  resolvedSource: string;
   validDest: string;
   /**
    * A rename that only changes the destination's case. Move must perform it —
@@ -165,7 +167,15 @@ async function planTransfer(
 
   return {
     status: 'plan',
-    plan: { pair, opSource, validDest, isCaseOnlyRename, destExistedOriginally, pending },
+    plan: {
+      pair,
+      opSource,
+      resolvedSource,
+      validDest,
+      isCaseOnlyRename,
+      destExistedOriginally,
+      pending,
+    },
   };
 }
 
@@ -307,7 +317,40 @@ async function runTransfers(
     ready.push(candidate);
   }
 
-  const pendingSorted = ready
+  // One entry's (resolved) source overlapping another's destination means the
+  // two race and a file is lost: a swap [A->B, B->A] or a chain [B->C, A->B].
+  // Refuse both sides so the survivors are independent and can run concurrently.
+  // isPathInsideDirectory covers equality and containment, case-folded.
+  const touches = (x: string, y: string): boolean =>
+    isPathInsideDirectory(x, y) || isPathInsideDirectory(y, x);
+  const overlapping = new Set<TransferPlan>();
+  for (const [i, a] of ready.entries()) {
+    for (const b of ready.slice(i + 1)) {
+      if (touches(a.resolvedSource, b.validDest) || touches(b.resolvedSource, a.validDest)) {
+        overlapping.add(a);
+        overlapping.add(b);
+      }
+    }
+  }
+  const safe: TransferPlan[] = [];
+  for (const plan of ready) {
+    if (!overlapping.has(plan)) {
+      safe.push(plan);
+      continue;
+    }
+    failures.push(
+      pairFailure(
+        plan.pair,
+        new FsError(
+          ErrorCode.INVALID_INPUT,
+          `${VERB[op]} cancelled: "${plan.pair.source}" or "${plan.pair.destination}" overlaps another entry's source or destination in this batch. Issue dependent moves one at a time.`,
+          plan.pair.source,
+        ),
+      ),
+    );
+  }
+
+  const pendingSorted = safe
     .filter((p) => p.pending)
     .map((p) => p.validDest)
     .sort();
@@ -330,14 +373,14 @@ async function runTransfers(
     if (round !== undefined) return round;
   }
 
-  const total = ready.length;
+  const total = safe.length;
   let completed = 0;
   const tick = (): void => {
     completed += 1;
     ctx.onProgress({ current: completed, total });
   };
   const { results: execResults, errors: execErrors } = await processInParallel(
-    ready,
+    safe,
     async (readyPlan) => {
       try {
         return await executeTransfer(op, readyPlan, ctx, pendingSorted);
@@ -351,7 +394,7 @@ async function runTransfers(
 
   for (const { error, index } of execErrors) {
     rethrowIfAborted(error);
-    const failed = ready[index];
+    const failed = safe[index];
     if (failed) failures.push(pairFailure(failed.pair, error));
   }
 

@@ -63,6 +63,8 @@ export async function createServer(
     pageStore?: PageSnapshotStore;
     /** The protocol era this instance serves; omitted where the caller does not know. */
     era?: 'legacy' | 'modern';
+    /** Only `stdio` has the SDK's fixed 10 MiB ReadBuffer, so only there does `read` cap its result. */
+    transport?: 'stdio' | 'http';
     /**
      * The resolved HTTP credential, from `--api-key` or `FS_API_KEY`. Lives here
      * rather than on `ServerOptions` because that object is `PathGuard`'s
@@ -187,6 +189,7 @@ export async function createServer(
     ...(extraDeps?.watcherRegistry ? { watcherRegistry: extraDeps.watcherRegistry } : {}),
     ...(extraDeps?.notifier ? { notifier: extraDeps.notifier } : {}),
     ...(extraDeps?.era ? { era: extraDeps.era } : {}),
+    ...(extraDeps?.transport ? { transport: extraDeps.transport } : {}),
   };
 
   const resourceDisposable = registerResources(deps);

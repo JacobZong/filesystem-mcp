@@ -135,6 +135,7 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
       watcherRegistry: registry,
       pathGuard,
       era,
+      transport: 'stdio',
       ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
     });
     if (closed) {

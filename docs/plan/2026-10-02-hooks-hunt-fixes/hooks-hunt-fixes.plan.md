@@ -27,7 +27,7 @@ guarded by the existing check.
 
 ## Current state
 
-- [`hooks.ts:200-215`](../../../exampels/clients/hooks/hooks.ts#L200-L215) `snapshot()`:
+- [`hooks.ts:200-215`](../../../examples/clients/hooks/hooks.ts#L200-L215) `snapshot()`:
   ```ts
   const args = { pattern: '**/*', includeHidden: true, maxResults: 10000 };
   const found = (await client.callTool({ name: 'find_files', arguments: args })) as CallToolResult;
@@ -36,7 +36,7 @@ guarded by the existing check.
     .filter((l) => l && !l.startsWith('//') && !l.startsWith('No files matching'));
   ```
   The server appends `// scan stopped early: …` when `results.length >= maxResults` or the 5 s timeout hits ([`search.ts:530`](../../../src/core/search.ts#L530), [`fmt.ts:143-146`](../../../src/core/fmt.ts#L143-L146)); `toText` returns `ERROR: …` on `isError`.
-- [`hooks.ts:152-172`](../../../exampels/clients/hooks/hooks.ts#L152-L172) `ownWindows`/`ownDeletes` and `runTool`:
+- [`hooks.ts:152-172`](../../../examples/clients/hooks/hooks.ts#L152-L172) `ownWindows`/`ownDeletes` and `runTool`:
   ```ts
   const ownWindows: [number, number][] = [];
   let ownDeletes = 0;
@@ -46,7 +46,7 @@ guarded by the existing check.
     if (call.function.name === 'delete' || call.function.name === 'move') ownDeletes++;
   }
   ```
-- [`hooks.ts:231-235`](../../../exampels/clients/hooks/hooks.ts#L231-L235) `isOwn`:
+- [`hooks.ts:231-235`](../../../examples/clients/hooks/hooks.ts#L231-L235) `isOwn`:
   ```ts
   const isOwn = (change: Change): boolean => {
     if (change.kind === 'deleted') return ownDeletes > 0;
@@ -54,8 +54,8 @@ guarded by the existing check.
     return ownWindows.some(([from, to]) => at >= from && at <= to);
   };
   ```
-- [`hooks.ts:245-247`](../../../exampels/clients/hooks/hooks.ts#L245-L247) `converse()` resets `ownWindows.length = 0; ownDeletes = 0;`.
-- [`hooks.ts:276-296`](../../../exampels/clients/hooks/hooks.ts#L276-L296) `onQuiet()`:
+- [`hooks.ts:245-247`](../../../examples/clients/hooks/hooks.ts#L245-L247) `converse()` resets `ownWindows.length = 0; ownDeletes = 0;`.
+- [`hooks.ts:276-296`](../../../examples/clients/hooks/hooks.ts#L276-L296) `onQuiet()`:
   ```ts
   timer = null;
   if (running || closing) return;
@@ -77,8 +77,8 @@ guarded by the existing check.
   }
   ```
 - `move` arguments are `{ moves: [{ source, destination }], copy? }` ([`move.ts:40-51`](../../../src/tools/move.ts#L40-L51)); `move` is a plain `rename`, so mtime is preserved ([`move.ts:486`](../../../src/tools/move.ts#L486)). `find_files` returns root-relative paths with `/` separators.
-- [`check.ts`](../../../exampels/clients/hooks/check.ts): harness `runHooks({ dir, script, args, stdin, env, beforeReply })`, `workspace()` makes `a.txt`+`b.txt`, `touch(dir, name)`, `quiet(n)`, `waitFor`, `r.stop()`; R9/R12 scenario at lines 248–261 is the template for the new `move` scenario; R4 scenario at 185–190 for the startup-exit scenario.
-- [`hooks/README.md`](../../../exampels/clients/hooks/README.md): "Not reacting to itself" bullet (lines ~79–82), "The gate" bullet says "No tool names are hardcoded", and the **Limits** paragraph.
+- [`check.ts`](../../../examples/clients/hooks/check.ts): harness `runHooks({ dir, script, args, stdin, env, beforeReply })`, `workspace()` makes `a.txt`+`b.txt`, `touch(dir, name)`, `quiet(n)`, `waitFor`, `r.stop()`; R9/R12 scenario at lines 248–261 is the template for the new `move` scenario; R4 scenario at 185–190 for the startup-exit scenario.
+- [`hooks/README.md`](../../../examples/clients/hooks/README.md): "Not reacting to itself" bullet (lines ~79–82), "The gate" bullet says "No tool names are hardcoded", and the **Limits** paragraph.
 - Line budget: R18 (folded) caps `hooks.ts` at 350 as formatted by Prettier; it is at 346.
 
 ## Commands

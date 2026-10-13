@@ -5,6 +5,97 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.6] - 2026-10-12
+
+A security and reliability release. It closes a symlink-swap sandbox escape
+and fixes six high-severity issues found by a stress and fuzz sweep. No
+schema-legal tool call changes shape and the declared tool surface is
+unchanged. Three changes can turn a call that used to succeed into a refusal;
+read Fixed before upgrading if you batch `move` entries that swap or chain
+files, or call `create` on a path another process may create at the same
+moment. Error wording changed for the `replace_text` size refusal, the
+sensitive-file block, and an ambiguous `edit` (see Changed); error codes did
+not.
+
+### Security
+
+- **A symlink swapped onto a path between validation and the file operation can
+  no longer escape the sandbox on reads or appends.** The read and append open
+  seams now open the resolved target with `O_NOFOLLOW`, so a regular file
+  swapped for a symlink is refused rather than followed outside the allowed
+  folders, and the opened descriptor's real path is re-checked against the
+  allowed folders (on Linux) to catch a swapped parent directory, before any
+  byte is read or written. The same descriptor check covers the text reads
+  behind `edit`, `patch`, and `diff`. Legitimate symlinks that resolve inside
+  an allowed folder are unaffected.
+- **`create` no longer overwrites a file that appears after its overwrite
+  check.** Without `overwrite: true`, a path that did not exist when `create`
+  checked whether to ask for confirmation, but exists by the time it writes,
+  is now refused with `INVALID_INPUT` (`create refused: "<path>" appeared
+after overwrite confirmation was checked`) instead of being silently
+  replaced.
+
+### Changed
+
+- **`replace_text` refuses a file over the text size limit with the shared
+  `createTooLargeError` wording** its streaming reader already returns,
+  `File exceeds size limit (N > M bytes)` with the path in the error
+  envelope, instead of a per-tool hand-rolled message. Refusal-path only;
+  no successful call changes shape. Batch failure rows in the text output now
+  show the full relative path instead of the file name, so same-named files
+  in different folders stay distinguishable.
+- **The sensitive-file error points to the narrowest fix.** It now suggests
+  `--allow <pattern>` (or `FS_ALLOWLIST`) to unblock one built-in secret-file
+  pattern, names `--allow-sensitive` as the switch that turns the whole list
+  off, and says paths blocked with `--deny` or `FS_DENYLIST` stay blocked.
+  Previously it only suggested `--allow-sensitive`.
+- **`--help` describes `--allow-sensitive` and `FS_ALLOW_SENSITIVE` as turning
+  off the built-in secret-file denylist** (`.env`, keys, credentials), names
+  the env vars for `--walk-cwd`, `--deny`, and `--allow-missing-roots`, and
+  sizes its name column from the longest entry so `FS_ALLOW_UNRESTRICTED_HOSTS`
+  no longer runs into its description.
+- **An ambiguous `edit` reports "matches at least N places"** when it stopped
+  counting early, instead of presenting the partial count as exact.
+- **Documentation.** The README is rewritten for new users with a per-client
+  quick start, and new `docs/configuration.md`, `SECURITY.md`, and
+  `docs/client-guide.md` cover every flag and limit, the security policy, and
+  building a client. Four example clients (`fsq`, `browser`, `tail`, `python`)
+  live under `examples/clients/`, and the misspelled `exampels/` folder is now
+  `examples/`.
+
+### Fixed
+
+- **A regex search or replace over a many-match or very long input no longer
+  freezes the whole server.** `search_text`, `replace_text`, and `edit` with
+  `ignoreWhitespace` scan through RE2, which copies the whole input on every
+  match, so a dense pattern ran for tens of seconds with the event loop pinned
+  and the 5-second timeout unable to fire. The scans now yield periodically so
+  the timeout fires, other requests interleave, and an aborted `replace_text`
+  never writes a partially-substituted file. `edit` stops as soon as a match is
+  known ambiguous instead of counting every occurrence.
+- **Concurrent or aliased writes no longer silently lose changes.** Two edits
+  of one file — two batch entries reaching it through a symlinked parent, or two
+  overlapping tool calls — each read the same base and the last atomic rename
+  won, dropping the other's changes while both reported success. `edit`,
+  `patch`, `replace_text`, and `create` now serialize the read-modify-write per
+  resolved file.
+- **A `move` batch whose entries overlap is refused instead of destroying
+  data.** A swap (`A→B`, `B→A`) or a chain (`B→C`, `A→B`) ran its renames
+  concurrently and lost a file; such a batch now fails closed per entry with a
+  clear message, and independent entries still run in parallel.
+- **Over stdio, a `read` whose result would exceed the client's 10 MiB message
+  buffer now returns a clear `TOO_LARGE` error** telling you to read a slice,
+  instead of a response that overflowed the buffer and dropped the whole
+  connection. This could happen for a file under the size limit once its text
+  was JSON-encoded. The cap applies to stdio only — HTTP streams responses with
+  no such frame limit and keeps returning large reads. An image or audio file
+  that trips the cap is told to connect over HTTP, since media cannot be read
+  as a slice.
+- **A file containing a single line larger than the regex input bound is now
+  reported as skipped** rather than aborting the regex engine and returning a
+  misleading "no files were searched" with a wrong reason. A later search in
+  the same process keeps working.
+
 ## [2.7.5] - 2026-10-09
 
 A hardening and documentation release. Nothing breaks for existing callers:

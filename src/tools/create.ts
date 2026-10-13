@@ -25,7 +25,7 @@ import { isSamePath } from '../core/path-utils.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
-import { defineTool } from './define.ts';
+import { defineTool, type ToolCtx } from './define.ts';
 
 const EPOCH = new Date(0);
 
@@ -165,7 +165,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     const batch = await runOverPaths<
       z.infer<typeof CreateFileItemSchema>,
       { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
-    >(args.files, ctx, ErrorCode.UNKNOWN, async ({ path, content, append }) => {
+    >(args.files, ctx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
       const pendingPath = pendingByPath.get(path);
       if (pendingPath !== undefined) {
         const key = confirmKey(pendingSorted.indexOf(pendingPath));
@@ -180,101 +180,24 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
         }
       }
 
-      await ctx.fs.mkdir(dirname(path), { recursive: true });
-
-      // Overwrite: file content == `content`, so content-derived meta is
-      // exact and the atomic temp+rename write protects the existing mode.
-      // Append: the resulting file is everything that was there plus
-      // `content`, so size/created/modified come from a real post-append
-      // stat, MIME from the resulting file's leading bytes, and the line
-      // count streams the file — reading a multi-GB log back whole is the
-      // round-trip append exists to avoid.
-      let validPath: string;
-      let meta: WrittenFileMeta;
-      let created: string;
-      let modified: string;
-      if (append) {
-        const appended = await ctx.fs.appendFile(path, content, {
-          signal: ctx.signal,
-        });
-        validPath = appended.validPath;
-        // The append is the commit point: the bytes are on disk, so
-        // everything below is best-effort RESULT METADATA, not part of the
-        // write. It runs unwired to ctx.signal, and a metadata failure
-        // degrades the result instead of failing it — either would report
-        // the append as failed and a client retry would append twice. The
-        // stat covers the committed validPath, never the input path: a
-        // symlink there could have been swapped between write and stat,
-        // and the result must describe the file the bytes landed in.
-        let stats: Stats | undefined;
-        let mimeType: string;
-        let kind: FileKind;
-        let lineCount = 0;
-        try {
-          stats = (await ctx.fs.stat(appended.validPath)).stats;
-          // Sniff the resulting file's leading bytes, not the appended
-          // chunk: text appended to a binary file is still a binary file.
-          const sample = await ctx.fs.readLeadingSample(appended.validPath, MIME_SAMPLE_SIZE);
-          const mimeInfo = detectMimeFromContent(appended.validPath, sample);
-          mimeType = mimeInfo.mimeType;
-          kind = mimeInfo.kind;
-          lineCount = await countFileLines(appended.validPath);
-        } catch (error) {
-          ctx.log(
-            'warning',
-            `create append: result metadata degraded for ${appended.validPath}: ${formatUnknownErrorMessage(error)}`,
-            'create',
+      // Lock per resolved file so two entries naming one file (e.g. through a
+      // symlinked parent) cannot clobber each other.
+      return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
+        // The file may have appeared since the overwrite set was planned.
+        if (
+          !append &&
+          !overwrite &&
+          pendingPath === undefined &&
+          (await destExists(ctx.fs, resolvedTarget, 'create'))
+        ) {
+          throw new FsError(
+            ErrorCode.INVALID_INPUT,
+            `create refused: "${path}" appeared after overwrite confirmation was checked`,
+            path,
           );
-          // A POSIX mode-0222 file appends fine but cannot be opened 'r';
-          // fall back to the chunk for MIME (an approximation) and report
-          // the line count as unknown-as-zero rather than fail the append.
-          const mimeInfo = detectMimeFromContent(appended.validPath, content);
-          mimeType = mimeInfo.mimeType;
-          kind = mimeInfo.kind;
         }
-        // A failed stat leaves the size unknown, so nothing is advertised.
-        meta = {
-          size: stats?.size ?? 0,
-          lineCount,
-          mimeType,
-          kind,
-          ...writtenFileLinks(
-            appended.validPath,
-            mimeType,
-            stats?.size,
-            false,
-            stats?.mtime.toISOString(),
-          ),
-        };
-        created = (stats?.birthtime ?? EPOCH).toISOString();
-        modified = (stats?.mtime ?? EPOCH).toISOString();
-      } else {
-        const written = await ctx.fs.writeFile(path, content, {
-          signal: ctx.signal,
-        });
-        validPath = written.validPath;
-        const fileStats = (await ctx.fs.stat(path, { signal: ctx.signal })).stats;
-        created = fileStats.birthtime.toISOString();
-        modified = fileStats.mtime.toISOString();
-        meta = buildWrittenFileMeta({
-          validPath: written.validPath,
-          content,
-          lastModified: modified,
-        });
-      }
-
-      const file: CreateFileResult = {
-        path: validPath,
-        size: meta.size,
-        lineCount: meta.lineCount,
-        mimeType: meta.mimeType,
-        kind: meta.kind,
-        resourceUri: meta.resourceUri,
-        created,
-        modified,
-      };
-
-      return meta.resourceLink ? { file, resourceLink: meta.resourceLink } : { file };
+        return createOne(path, content, append, ctx);
+      });
     });
 
     const results: CreateFileResult[] = [];
@@ -317,3 +240,106 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
         : `${String(args.files.length)} files`,
   }),
 });
+
+async function createOne(
+  path: string,
+  content: string,
+  append: boolean | undefined,
+  ctx: ToolCtx,
+): Promise<{ file: CreateFileResult; resourceLink?: ContentBlock }> {
+  await ctx.fs.mkdir(dirname(path), { recursive: true });
+
+  // Overwrite: file content == `content`, so content-derived meta is
+  // exact and the atomic temp+rename write protects the existing mode.
+  // Append: the resulting file is everything that was there plus
+  // `content`, so size/created/modified come from a real post-append
+  // stat, MIME from the resulting file's leading bytes, and the line
+  // count streams the file — reading a multi-GB log back whole is the
+  // round-trip append exists to avoid.
+  let validPath: string;
+  let meta: WrittenFileMeta;
+  let created: string;
+  let modified: string;
+  if (append) {
+    const appended = await ctx.fs.appendFile(path, content, {
+      signal: ctx.signal,
+    });
+    validPath = appended.validPath;
+    // The append is the commit point: the bytes are on disk, so
+    // everything below is best-effort RESULT METADATA, not part of the
+    // write. It runs unwired to ctx.signal, and a metadata failure
+    // degrades the result instead of failing it — either would report
+    // the append as failed and a client retry would append twice. The
+    // stat covers the committed validPath, never the input path: a
+    // symlink there could have been swapped between write and stat,
+    // and the result must describe the file the bytes landed in.
+    let stats: Stats | undefined;
+    let mimeType: string;
+    let kind: FileKind;
+    let lineCount = 0;
+    try {
+      stats = (await ctx.fs.stat(appended.validPath)).stats;
+      // Sniff the resulting file's leading bytes, not the appended
+      // chunk: text appended to a binary file is still a binary file.
+      const sample = await ctx.fs.readLeadingSample(appended.validPath, MIME_SAMPLE_SIZE);
+      const mimeInfo = detectMimeFromContent(appended.validPath, sample);
+      mimeType = mimeInfo.mimeType;
+      kind = mimeInfo.kind;
+      lineCount = await countFileLines(appended.validPath);
+    } catch (error) {
+      ctx.log(
+        'warning',
+        `create append: result metadata degraded for ${appended.validPath}: ${formatUnknownErrorMessage(error)}`,
+        'create',
+      );
+      // A POSIX mode-0222 file appends fine but cannot be opened 'r';
+      // fall back to the chunk for MIME (an approximation) and report
+      // the line count as unknown-as-zero rather than fail the append.
+      const mimeInfo = detectMimeFromContent(appended.validPath, content);
+      mimeType = mimeInfo.mimeType;
+      kind = mimeInfo.kind;
+    }
+    // A failed stat leaves the size unknown, so nothing is advertised.
+    meta = {
+      size: stats?.size ?? 0,
+      lineCount,
+      mimeType,
+      kind,
+      ...writtenFileLinks(
+        appended.validPath,
+        mimeType,
+        stats?.size,
+        false,
+        stats?.mtime.toISOString(),
+      ),
+    };
+    created = (stats?.birthtime ?? EPOCH).toISOString();
+    modified = (stats?.mtime ?? EPOCH).toISOString();
+  } else {
+    const written = await ctx.fs.writeFile(path, content, {
+      signal: ctx.signal,
+    });
+    validPath = written.validPath;
+    const fileStats = (await ctx.fs.stat(path, { signal: ctx.signal })).stats;
+    created = fileStats.birthtime.toISOString();
+    modified = fileStats.mtime.toISOString();
+    meta = buildWrittenFileMeta({
+      validPath: written.validPath,
+      content,
+      lastModified: modified,
+    });
+  }
+
+  const file: CreateFileResult = {
+    path: validPath,
+    size: meta.size,
+    lineCount: meta.lineCount,
+    mimeType: meta.mimeType,
+    kind: meta.kind,
+    resourceUri: meta.resourceUri,
+    created,
+    modified,
+  };
+
+  return meta.resourceLink ? { file, resourceLink: meta.resourceLink } : { file };
+}

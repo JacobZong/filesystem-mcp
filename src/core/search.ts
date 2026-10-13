@@ -34,6 +34,25 @@ export type Regex = RE2;
 const MAX_MATCHES_PER_LINE = 100_000;
 
 /**
+ * re2-wasm copies the whole input on every exec, so draining a dense pattern is
+ * O(matches x input) and fully synchronous: the loop pins and the tool's
+ * AbortSignal.timeout (a timer) can never fire. The returned `tick` yields a
+ * macrotask every ~10ms and reports whether `signal` has aborted.
+ */
+export function createYielder(signal: AbortSignal | undefined): () => Promise<boolean> {
+  let last = Date.now();
+  return async () => {
+    if (Date.now() - last > 10) {
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      last = Date.now();
+    }
+    return signal?.aborted ?? false;
+  };
+}
+
+/**
  * Largest input one RE2 call may scan as a single string. The input is copied
  * into the same fixed 16 MB wasm heap as the patterns; about 10 MB of input
  * aborts the module. 4 MiB leaves room for the copy and the pattern set.
@@ -166,16 +185,19 @@ export function* execMatches(regex: Regex, text: string): Generator<RegexMatch, 
  * Find non-overlapping occurrences of a global regex in a single line, reporting
  * the first match's column alongside the count.
  */
-function findLineMatches(
+async function findLineMatches(
   regex: Regex,
   line: string,
-): { count: number; column: number } | undefined {
+  tick: () => Promise<boolean>,
+): Promise<{ count: number; column: number } | undefined> {
   let count = 0;
   let column = -1;
+  // Awaiting mid-drain is safe with a shared regex: execMatches re-writes
+  // lastIndex from its own match before every exec, with no await inside.
   for (const match of execMatches(regex, line)) {
     if (column === -1) column = match.start;
     count++;
-    if (count >= MAX_MATCHES_PER_LINE) break;
+    if (count >= MAX_MATCHES_PER_LINE || (await tick())) break;
   }
   return count > 0 ? { count, column } : undefined;
 }
@@ -283,13 +305,23 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
   // file has, for matching or for context.
   const lineCount =
     content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
+  // A single line past RE2_MAX_INPUT_BYTES OOMs the wasm module for the rest of
+  // the process; report the file tooLarge instead. Only a buffer over the bound
+  // can hold such a line, so ordinary files skip the per-line measure.
+  const checkLineSize = buffer.length > RE2_MAX_INPUT_BYTES;
   const matches: SearchResult[] = [];
+  const tick = createYielder(scanCtx.signal);
   for (let i = 0; i < lineCount; i++) {
     const line = lines[i];
     if (line === undefined) continue;
+    if (checkLineSize && Buffer.byteLength(line, 'utf8') > RE2_MAX_INPUT_BYTES) {
+      return { kind: 'tooLarge' };
+    }
+    // Yield between lines too: millions of short lines never yield per-match.
+    if (await tick()) break;
     // One scan per line: the helper resets lastIndex itself, so it
     // doubles as the "does this line match" test.
-    const found = findLineMatches(scanCtx.regex, line);
+    const found = await findLineMatches(scanCtx.regex, line, tick);
     if (found) {
       matches.push({
         file: entryPath,
@@ -317,19 +349,23 @@ export async function searchContent(
   pathGuard: PathGuard,
 ): Promise<SearchContentOutcome> {
   const source = options.isRegex ? pattern || '' : escapeRegExp(pattern || '');
-  const regex = compileRegex(source, {
-    caseSensitive: Boolean(options.caseSensitive),
-  });
-  // Whole-buffer test: `m` makes ^/$ line-relative so a per-line hit is always a
-  // buffer hit (the converse can be false — a false positive just falls through
-  // to the per-line scan). \A/\z/\Z are buffer-relative even under `m`, inline
-  // flag groups can undo `m`, and $ cannot see past a \r, so those inputs skip
-  // the prefilter (see canPrefilter).
-  const prefilter = compileRegex(source, {
-    caseSensitive: Boolean(options.caseSensitive),
-    multiline: true,
-  });
+  // Compiles live inside the try so a failing second compile does not leak the
+  // first's wasm memory; freeRegex is null-safe.
+  let regex: Regex | undefined;
+  let prefilter: Regex | undefined;
   try {
+    regex = compileRegex(source, {
+      caseSensitive: Boolean(options.caseSensitive),
+    });
+    // Whole-buffer test: `m` makes ^/$ line-relative so a per-line hit is always a
+    // buffer hit (the converse can be false — a false positive just falls through
+    // to the per-line scan). \A/\z/\Z are buffer-relative even under `m`, inline
+    // flag groups can undo `m`, and $ cannot see past a \r, so those inputs skip
+    // the prefilter (see canPrefilter).
+    prefilter = compileRegex(source, {
+      caseSensitive: Boolean(options.caseSensitive),
+      multiline: true,
+    });
     const matches: SearchResult[] = [];
     const maxResults = options.maxResults ?? 100;
     const maxFileSize = getMaxTextFileSize();

@@ -1,5 +1,6 @@
 // File reading pipeline split out of fs.ts. fs.ts imports from here; never the reverse.
 import { isUtf8 } from 'node:buffer';
+import { constants } from 'node:fs';
 import type { Stats } from 'node:fs';
 import { open as fsOpen } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
@@ -13,10 +14,22 @@ import { getMaxTextFileSize } from './util.ts';
 
 const STREAM_CHUNK_SIZE = 64 * 1024;
 
-const READ_ONLY_FILE_FLAG = 'r';
+// O_NOFOLLOW refuses (ELOOP) a final-component symlink, so a regular file
+// swapped for a symlink between validation and open is refused, not followed.
+// Opens receive the realpath-resolved target, so in-root symlinks still work.
+// Absent (undefined at runtime, despite @types/node) on Windows; 0 is a no-op.
+const { O_NOFOLLOW = 0, O_NONBLOCK = 0 } = constants as {
+  O_NOFOLLOW?: number;
+  O_NONBLOCK?: number;
+};
+export const READ_NOFOLLOW = constants.O_RDONLY | O_NOFOLLOW;
+// O_NONBLOCK: an append to a symlink-swapped FIFO fails fast instead of hanging.
+export const APPEND_NOFOLLOW = constants.O_WRONLY | constants.O_APPEND | O_NOFOLLOW | O_NONBLOCK;
+export const APPEND_CREATE_NOFOLLOW =
+  constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW;
 
 async function openReadableFileHandle(filePath: string, signal?: AbortSignal): Promise<FileHandle> {
-  const handlePromise = fsOpen(filePath, READ_ONLY_FILE_FLAG);
+  const handlePromise = fsOpen(filePath, READ_NOFOLLOW);
   if (!signal) return handlePromise;
   try {
     return await withAbort(handlePromise, signal);
@@ -520,6 +533,7 @@ export async function readFileWithStats(
   validPath: string,
   stats: Stats,
   spec: ReadSpec,
+  verifyHandle?: (handle: FileHandle) => Promise<void>,
 ): Promise<ReadFileResult> {
   const options: ReadOptions = {
     maxSize: getMaxTextFileSize(),
@@ -529,6 +543,7 @@ export async function readFileWithStats(
   assertFileStats(filePath, stats);
 
   await using handle = await openReadableFileHandle(validPath, spec.signal);
+  await verifyHandle?.(handle);
 
   await assertNotBinary(validPath, filePath, handle, options);
   spec.signal?.throwIfAborted();

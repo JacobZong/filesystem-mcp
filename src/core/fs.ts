@@ -19,7 +19,7 @@ import {
 } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
-import { withAbort } from './concurrency.ts';
+import { runExclusive, withAbort } from './concurrency.ts';
 import {
   ErrorCode,
   formatUnknownErrorMessage,
@@ -31,10 +31,17 @@ import {
 import { detectMimeFromContent } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
-import { respellCaseOnlyTarget } from './path-utils.ts';
+import { normalizePath, respellCaseOnlyTarget } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
-import { assertFileStats, createTooLargeError, readFileWithStats } from './read.ts';
+import {
+  APPEND_CREATE_NOFOLLOW,
+  APPEND_NOFOLLOW,
+  assertFileStats,
+  createTooLargeError,
+  READ_NOFOLLOW,
+  readFileWithStats,
+} from './read.ts';
 import { getMaxTextFileSize } from './util.ts';
 
 export type { FileType };
@@ -80,7 +87,7 @@ const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
  * a new line, an unterminated final line counts, an empty file is 0.
  */
 export async function countFileLines(filePath: string): Promise<number> {
-  const handle = await fsOpen(filePath, 'r');
+  const handle = await fsOpen(filePath, READ_NOFOLLOW);
   try {
     let newlines = 0;
     let lastByte = 0;
@@ -109,6 +116,45 @@ export class GuardedFileSystem {
 
   constructor(pathGuard: PathGuard) {
     this.pathGuard = pathGuard;
+  }
+
+  /**
+   * O_NOFOLLOW only guards the final component; an ANCESTOR directory swapped
+   * for a symlink after validation still passes. Re-read the open descriptor's
+   * real path (Linux `/proc/self/fd`; skipped elsewhere) and require it to stay
+   * inside the roots. Run before any byte is read or written through `handle`.
+   */
+  async #assertFdWithinRoots(handle: FileHandle, requestedPath: string): Promise<void> {
+    let fdPath: string;
+    try {
+      fdPath = await fsReadlink(`/proc/self/fd/${String(handle.fd)}`);
+    } catch {
+      return;
+    }
+    // A replaced target reads back as "<path> (deleted)".
+    const inRoots =
+      isAbsolute(fdPath) &&
+      !fdPath.endsWith(' (deleted)') &&
+      this.pathGuard.allowedRootContaining(normalizePath(fdPath)) !== undefined &&
+      !this.pathGuard.isSensitive(normalizePath(fdPath));
+    if (!inRoots) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Path changed under validation and now resolves outside the allowed roots (TOCTOU).',
+        requestedPath,
+      );
+    }
+  }
+
+  /**
+   * Serialize a read-modify-write on the resolved write target, so two writers
+   * of one file (any spelling, including via a symlinked parent) cannot both
+   * read the same base and have the last rename win. `writeFile`/`appendFile`
+   * do not take the lock, so `fn` may call them.
+   */
+  async lockForWrite<T>(filePath: string, fn: (resolvedTarget: string) => Promise<T>): Promise<T> {
+    const key = await resolveForWrite(this.pathGuard, filePath);
+    return runExclusive(key, () => fn(key));
   }
 
   async stat(
@@ -260,18 +306,21 @@ export class GuardedFileSystem {
     let created = false;
     let handle: FileHandle;
     if (existed) {
-      handle = await fsOpen(validPath, 'a');
+      handle = await fsOpen(validPath, APPEND_NOFOLLOW);
     } else {
       try {
-        handle = await fsOpen(validPath, 'ax');
+        handle = await fsOpen(validPath, APPEND_CREATE_NOFOLLOW);
         created = true;
       } catch (error) {
         if (!isNodeError(error) || error.code !== 'EEXIST') throw error;
-        handle = await fsOpen(validPath, 'a');
+        handle = await fsOpen(validPath, APPEND_NOFOLLOW);
       }
     }
     try {
       signal?.throwIfAborted();
+      // A file we just O_EXCL-created is a fresh regular file; only an existing one
+      // can have been reached through a swapped ancestor.
+      if (!created) await this.#assertFdWithinRoots(handle, filePath);
       // Ceiling: an append is not transactional, so an abort landing
       // mid-write can leave a prefix of the content on disk. Unwiring the
       // signal would trade that for a silently-completed write; a client
@@ -300,7 +349,7 @@ export class GuardedFileSystem {
    */
   async readLeadingSample(filePath: string, size: number): Promise<Buffer> {
     const { validPath } = await this.stat(filePath);
-    const handle = await fsOpen(validPath, 'r');
+    const handle = await fsOpen(validPath, READ_NOFOLLOW);
     try {
       const buffer = Buffer.alloc(size);
       const { bytesRead } = await handle.read(buffer, 0, size, 0);
@@ -336,7 +385,9 @@ export class GuardedFileSystem {
     spec.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     const stats = await withAbort(fsStat(validPath), spec.signal);
-    return readFileWithStats(filePath, validPath, stats, spec);
+    return readFileWithStats(filePath, validPath, stats, spec, (handle) =>
+      this.#assertFdWithinRoots(handle, filePath),
+    );
   }
 
   async readEditableText(
@@ -354,11 +405,17 @@ export class GuardedFileSystem {
         { size: stats.size, maxFileSize: maxSize },
       );
     }
-    const { content } = await readFileWithStats(filePath, validPath, stats, {
-      kind: 'full',
-      strictUtf8: true,
-      ...(options?.signal ? { signal: options.signal } : {}),
-    });
+    const { content } = await readFileWithStats(
+      filePath,
+      validPath,
+      stats,
+      {
+        kind: 'full',
+        strictUtf8: true,
+        ...(options?.signal ? { signal: options.signal } : {}),
+      },
+      (handle) => this.#assertFdWithinRoots(handle, filePath),
+    );
     return { validPath, content, stats };
   }
 
@@ -378,14 +435,18 @@ export class GuardedFileSystem {
       throw createTooLargeError(stats.size, maxTextFileSize, filePath);
     }
     let content: Buffer;
+    const handle = await fsOpen(validPath, READ_NOFOLLOW);
     try {
-      content = await fsReadFile(validPath, options);
+      await this.#assertFdWithinRoots(handle, filePath);
+      content = await fsReadFile(handle, options);
     } catch (error) {
       // Node wraps even a TimeoutError signal reason in AbortError.
       if (error instanceof Error && error.name === 'AbortError') {
         options?.signal?.throwIfAborted();
       }
       throw error;
+    } finally {
+      await handle.close();
     }
     const mimeInfo = detectMimeFromContent(validPath, content);
     return {
@@ -397,7 +458,14 @@ export class GuardedFileSystem {
 
   async open(filePath: string): Promise<FileHandle> {
     const validPath = await this.pathGuard.validateExistingPath(filePath);
-    return fsOpen(validPath, 'r');
+    const handle = await fsOpen(validPath, READ_NOFOLLOW);
+    try {
+      await this.#assertFdWithinRoots(handle, filePath);
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+    return handle;
   }
 
   // Single resolution + stat: validateExistingPathDetailed resolves the real
