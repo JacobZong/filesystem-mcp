@@ -109,3 +109,10 @@ project.
   `resources.ts`) rather than passed through `deps`: adding a field to
   plumbing this record schedules for deletion would be a new seam in code
   meant to be temporary.
+- **Amended 2026-10-13:** the Decision's "six test files" undercounts.
+  `grep -l "createTestClientPair\|createLinkedPair" __tests__/*.ts`
+  without `__tests__/helpers.ts` returned 15 files on 2026-10-13. The
+  migration that blocks removal is that grep's file list, not a fixed
+  number. Also, `src/tools/index.ts` no longer declares its own `era`
+  field: its registrar deps extend `ToolDeps` in `src/tools/define.ts`,
+  so the `era` removal there is one field, not two.

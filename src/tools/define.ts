@@ -89,7 +89,7 @@ export interface ToolCtx {
   readonly transport?: 'stdio' | 'http' | undefined;
 }
 
-interface ToolDeps {
+export interface ToolDeps {
   readonly server: McpServer;
   readonly pathGuard: PathGuard;
   readonly pageStore: PageSnapshotStore;
@@ -145,13 +145,7 @@ export interface DefinedTool {
   register(deps: ToolDeps): RegisteredTool;
 }
 
-function toToolCtx(
-  ctx: ServerContext,
-  deps: Pick<
-    ToolDeps,
-    'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era' | 'transport'
-  >,
-): Omit<ToolCtx, 'log' | 'onProgress'> {
+function toToolCtx(ctx: ServerContext, deps: ToolDeps): Omit<ToolCtx, 'log' | 'onProgress'> {
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
   // legacy connection fixed them at `initialize` and has no envelope at all.
