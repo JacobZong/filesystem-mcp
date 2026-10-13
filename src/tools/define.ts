@@ -7,7 +7,6 @@ import type {
   Notification,
   RegisteredTool,
   RequestId,
-  RequestMeta,
   RequestStateAccessor,
   ServerContext,
   StandardSchemaWithJSON,
@@ -42,17 +41,13 @@ import { ProgressSession } from './progress.ts';
 
 export interface ToolCtx {
   readonly signal: AbortSignal;
-  readonly _meta?: RequestMeta | undefined;
   /** The JSON-RPC id of the `tools/call` this context serves; prefixes every log line. */
   readonly requestId: RequestId;
-  /** W3C trace context the client put in `_meta`, when it did; rides the log prefix. */
-  readonly traceparent?: string | undefined;
   readonly fs: GuardedFileSystem;
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore;
   /** Emits a log line to stderr via `Logger.emit`, gated by `FS_LOG_LEVEL`. */
   readonly log: (level: LoggingLevel, data: unknown, logger?: string) => void;
-  readonly sendNotification: (notification: Notification) => Promise<void>;
   readonly onProgress: (params: { current: number; total?: number }) => void;
   /**
    * Multi-round-trip `inputResponses` carried by a retried `tools/call`
@@ -184,15 +179,10 @@ function toToolCtx(
 
   return {
     signal: ctx.mcpReq.signal,
-    ...(ctx.mcpReq._meta ? { _meta: ctx.mcpReq._meta } : {}),
     requestId: ctx.mcpReq.id,
-    ...(typeof ctx.mcpReq._meta?.[TRACEPARENT_META_KEY] === 'string'
-      ? { traceparent: ctx.mcpReq._meta[TRACEPARENT_META_KEY] }
-      : {}),
     fs: new GuardedFileSystem(deps.pathGuard),
     pageStore: deps.pageStore,
     resourceStore: deps.resourceStore,
-    sendNotification: async (notification) => ctx.mcpReq.notify(notification),
     inputResponses: ctx.mcpReq.inputResponses,
     droppedInputResponseKeys: ctx.mcpReq.droppedInputResponseKeys,
     requestState: ctx.mcpReq.requestState,
@@ -245,11 +235,14 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       ? AbortSignal.any([ctx.signal, AbortSignal.timeout(def.timeoutMs)])
       : ctx.signal;
     this.#progressCtx = def.progress ? def.progress(parsedArgs) : { label: def.title };
-    const token = ctx._meta?.progressToken;
+    const { mcpReq } = ctx.serverCtx;
+    const token = mcpReq._meta?.progressToken;
+    const notify = async (notification: Notification): Promise<void> => mcpReq.notify(notification);
     this.#progressSession = new ProgressSession({
       label: this.#progressCtx.label,
-      ...(token !== undefined ? { sink: { toolName, token, notify: ctx.sendNotification } } : {}),
+      ...(token !== undefined ? { sink: { toolName, token, notify } } : {}),
     });
+    const traceparent = mcpReq._meta?.[TRACEPARENT_META_KEY];
     this.toolCtx = {
       ...ctx,
       signal: this.signal,
@@ -266,7 +259,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
         // The message is flattened too (uncapped): it can carry a resolved
         // path or OS error text, and input schemas reject CR/LF but not the
         // Unicode line separators.
-        const trace = ctx.traceparent ? ` ${sanitizeLogField(ctx.traceparent)}` : '';
+        const trace = typeof traceparent === 'string' ? ` ${sanitizeLogField(traceparent)}` : '';
         const prefix = logger ? `[${logger}] ` : '';
         const text = sanitizeLogField(msg, Infinity);
         Logger.emit(
@@ -289,18 +282,16 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     this.#progressSession.set({ ...p, message: plainMessage('tick', tickCtx) });
   }
 
-  private async completeProgress(result: O): Promise<void> {
+  private completeProgress(result: O): void {
     const doneCtx: ProgressCtx = this.def.progressDone
       ? { ...this.#progressCtx, ...this.def.progressDone(this.parsedArgs, result) }
       : this.#progressCtx;
     this.#progressSession.complete(plainMessage('done', doneCtx));
-    await this.#progressSession.flush();
   }
 
-  private async failProgress(error: unknown): Promise<{ isError: true; content: ContentBlock[] }> {
+  private failProgress(error: unknown): { isError: true; content: ContentBlock[] } {
     const errMsg = formatUnknownErrorMessage(error);
     this.#progressSession.fail(plainMessage('fail', { ...this.#progressCtx, error: errMsg }));
-    await this.#progressSession.flush();
     const errorText = Problem.toText(error, this.def.defaultErrorCode ?? ErrorCode.UNKNOWN);
     return {
       content: [{ type: 'text' as const, text: errorText }],
@@ -430,10 +421,10 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       }
       const response = buildSuccessResponse(result);
       this.refuseOversized(result, response);
-      await this.completeProgress(result.structured);
+      this.completeProgress(result.structured);
       return response;
     } catch (error) {
-      return await this.failProgress(error);
+      return this.failProgress(error);
     } finally {
       await this.#progressSession.flush();
     }

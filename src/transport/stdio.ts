@@ -11,7 +11,7 @@ import {
 
 import { fileURLToPath } from 'node:url';
 
-import { formatUnknownErrorMessage } from '../core/errors.ts';
+import { formatUnknownErrorMessage, normalizeUnknownError } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PathGuard } from '../core/path.ts';
@@ -317,9 +317,7 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
           },
         })
         .catch((error: unknown) => {
-          wire.onerror?.(
-            error instanceof Error ? error : new Error(formatUnknownErrorMessage(error)),
-          );
+          wire.onerror?.(normalizeUnknownError(error));
         });
       return;
     }
@@ -379,8 +377,7 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
       })
       .catch(async (error: unknown) => {
         releaseListen(id);
-        const failure =
-          error instanceof Error ? error : new Error(formatUnknownErrorMessage(error));
+        const failure = normalizeUnknownError(error);
         wire.onerror?.(failure);
         // The gate swallowed the message, so nothing downstream will answer it.
         // Without this the client waits out its whole request timeout.

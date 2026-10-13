@@ -119,7 +119,6 @@ const DOTDOT_SPELLING_RE = /^[.[\]-]+$/u;
  * compile is refused.
  */
 const isTraversalSegment = (segment: string): boolean => {
-  if (!segment.includes('.') || !DOTDOT_SPELLING_RE.test(segment)) return false;
   try {
     return matchesGlob('..', segment);
   } catch {
@@ -155,11 +154,9 @@ export function isSafeGlobSyntax(pattern: string): boolean {
   }
   let dotdotCheckChars = 0;
   for (const segment of segments) {
-    if (segment.includes('.') && DOTDOT_SPELLING_RE.test(segment)) {
-      dotdotCheckChars += segment.length;
-      if (dotdotCheckChars > MAX_DOTDOT_CHECK_CHARS) return false;
-    }
-    if (isTraversalSegment(segment)) return false;
+    if (!segment.includes('.') || !DOTDOT_SPELLING_RE.test(segment)) continue;
+    dotdotCheckChars += segment.length;
+    if (dotdotCheckChars > MAX_DOTDOT_CHECK_CHARS || isTraversalSegment(segment)) return false;
   }
   return true;
 }

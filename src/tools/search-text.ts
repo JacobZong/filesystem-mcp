@@ -332,9 +332,6 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
         skippedTooLarge: structured.skippedTooLarge,
         skippedInaccessible: structured.skippedInaccessible,
       });
-    if (link) {
-      return { structured, text, resources: [link] };
-    }
-    return { structured, text };
+    return { structured, text, resources: link ? [link] : [] };
   },
 });

@@ -226,11 +226,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     // paths and dropped every per-file size, line count and error the caller
     // asked `create` for. Supplying no text makes this a data tool, so
     // `define.ts` renders the JSON and keeps it in `structuredContent`.
-    if (links.length > 0) {
-      return { structured, resources: links, isError: isTotalFailure(batch.summary) };
-    }
-
-    return { structured, isError: isTotalFailure(batch.summary) };
+    return { structured, resources: links, isError: isTotalFailure(batch.summary) };
   },
   progress: (args) => ({
     label: 'Create',
