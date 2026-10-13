@@ -3,7 +3,13 @@ import { InMemoryTransport } from '@modelcontextprotocol/client';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { ElicitRequest, ElicitResult } from '@modelcontextprotocol/client';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { createMcpHandler, InMemoryServerEventBus } from '@modelcontextprotocol/server';
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  CLIENT_INFO_META_KEY,
+  createMcpHandler,
+  InMemoryServerEventBus,
+  PROTOCOL_VERSION_META_KEY,
+} from '@modelcontextprotocol/server';
 import type { JSONRPCMessage } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
@@ -16,6 +22,7 @@ import { createInterface } from 'node:readline';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
+import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import {
   ErrorCode,
   formatUnknownErrorMessage,
@@ -542,6 +549,18 @@ export async function writeNLineFile(
 ): Promise<string> {
   const lines = Array.from({ length: lineCount }, (_, i) => `Line ${i + 1}`);
   return writeTestFile(root, name, lines.join('\n') + '\n');
+}
+
+/**
+ * The `_meta` stamp a raw 2026-era request carries. The revision is derived
+ * from `MODERN_PROTOCOL_REVISION`, so an era migration edits one constant.
+ */
+export function modernClientMeta(name: string, clientCapabilities: Record<string, unknown> = {}) {
+  return {
+    [PROTOCOL_VERSION_META_KEY]: MODERN_PROTOCOL_REVISION,
+    [CLIENT_CAPABILITIES_META_KEY]: clientCapabilities,
+    [CLIENT_INFO_META_KEY]: { name, version: '1.0.0' },
+  };
 }
 
 /** First text content block of a tool result (assert its shape at one owner). */

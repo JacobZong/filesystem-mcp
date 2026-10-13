@@ -1,7 +1,6 @@
 import {
   createMcpHandler,
   LATEST_PROTOCOL_VERSION,
-  PROTOCOL_VERSION_META_KEY,
   SUPPORTED_PROTOCOL_VERSIONS,
 } from '@modelcontextprotocol/server';
 
@@ -15,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { createServer } from '../src/server.ts';
-import { cleanupTestRoot, createTestRoot } from './helpers.ts';
+import { cleanupTestRoot, createTestRoot, modernClientMeta } from './helpers.ts';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -142,11 +141,7 @@ describe('CLI (real subprocess)', () => {
             id: 1,
             method: 'server/discover',
             params: {
-              _meta: {
-                [PROTOCOL_VERSION_META_KEY]: MODERN_PROTOCOL_REVISION,
-                'io.modelcontextprotocol/clientCapabilities': {},
-                'io.modelcontextprotocol/clientInfo': { name: 'cli-test', version: '1.0.0' },
-              },
+              _meta: modernClientMeta('cli-test'),
             },
           }),
         }),

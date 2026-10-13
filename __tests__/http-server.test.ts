@@ -18,6 +18,7 @@ import {
   createTestRoot,
   firstTextBlock,
   type HttpTestContext,
+  modernClientMeta,
   TEST_API_KEY,
   writeTestFile,
 } from './helpers.ts';
@@ -169,11 +170,7 @@ describe('Real HTTP Server integration', () => {
           id: 'admission',
           method: 'server/discover',
           params: {
-            _meta: {
-              'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-              'io.modelcontextprotocol/clientCapabilities': {},
-              'io.modelcontextprotocol/clientInfo': { name: 'admission-test', version: '1.0.0' },
-            },
+            _meta: modernClientMeta('admission-test'),
           },
         }),
       });
