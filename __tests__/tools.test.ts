@@ -3991,6 +3991,8 @@ describe('High-severity bug-hunt regressions (tools)', () => {
           }
           if (dryRun) {
             assert.doesNotMatch(text, /already rewritten/u);
+            assert.doesNotMatch(text, /A higher timeout/u);
+            assert.strictEqual(text.match(/scan stopped early/gu)?.length, 1);
             assert.strictEqual(written, 0);
             return;
           }
