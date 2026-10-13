@@ -23,8 +23,6 @@ import { normalizePath } from '../src/core/path-utils.ts';
 import { readFileBufferWithLimit, readFileWithStats } from '../src/core/read.ts';
 import { searchContent, searchFiles } from '../src/core/search.ts';
 import { getMaxTextFileSize, MAX_OUTBOUND_RESULT_BYTES, MIB } from '../src/core/util.ts';
-
-const KIB = 1024;
 import type { FilesystemServerContext } from '../src/server.ts';
 import {
   cleanupTestRoot,
@@ -37,6 +35,8 @@ import {
   writeNLineFile,
   writeTestFile,
 } from './helpers.ts';
+
+const KIB = 1024;
 
 describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   let tmpDir: string;
@@ -734,7 +734,10 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       // Escapes to about 12 MiB, so the read refuses it.
       assert.strictEqual(meta(quotes, 'stdio').resourceUri, undefined);
       // The URI and MIME fields push an exact-ceiling file over.
-      assert.strictEqual(meta('x'.repeat(MAX_OUTBOUND_RESULT_BYTES), 'stdio').resourceUri, undefined);
+      assert.strictEqual(
+        meta('x'.repeat(MAX_OUTBOUND_RESULT_BYTES), 'stdio').resourceUri,
+        undefined,
+      );
       assert.ok(meta('x'.repeat(MAX_OUTBOUND_RESULT_BYTES - 64 * KIB), 'stdio').resourceUri);
       assert.ok(meta(quotes, 'http').resourceUri);
       assert.ok(meta(quotes).resourceUri);
