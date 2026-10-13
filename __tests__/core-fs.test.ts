@@ -726,6 +726,20 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       });
     });
 
+    it('a binary written file at the base64 edge gets no stdio link', () => {
+      const path = join(tmpDir, 'edge.bin');
+      const link = (size: number) =>
+        writtenFileLinks(path, 'application/octet-stream', size, false, undefined, 'stdio', {
+          content: '',
+          kind: 'binary',
+        });
+      assert.strictEqual(
+        link(3 * Math.floor(MAX_OUTBOUND_RESULT_BYTES / 4)).resourceUri,
+        undefined,
+      );
+      assert.ok(link(3 * Math.floor((MAX_OUTBOUND_RESULT_BYTES - 64 * KIB) / 4) - 3).resourceUri);
+    });
+
     it('written file links stop at the encoded stdio read size on stdio only', () => {
       const validPath = join(tmpDir, 'stdio-links.txt');
       const meta = (content: string, transport?: 'stdio' | 'http') =>

@@ -114,7 +114,9 @@ function overStdioRead(
 ): boolean {
   if (written === undefined) return 6 * size > MAX_OUTBOUND_RESULT_BYTES - 64 * KIB;
   // readRaw returns any non-text kind as base64 (`isBinary: kind !== 'text'`).
-  if (written.kind !== 'text') return 4 * Math.ceil(size / 3) > MAX_OUTBOUND_RESULT_BYTES;
+  if (written.kind !== 'text') {
+    return 4 * Math.ceil(size / 3) > MAX_OUTBOUND_RESULT_BYTES - 64 * KIB;
+  }
   const result = {
     contents: [{ uri: buildFileResourceUri(validPath), mimeType, text: written.content }],
   };
