@@ -668,7 +668,7 @@ async function* processGlobPatterns(
   } catch (error) {
     if (!suppressErrors) throw error;
     Logger.warn(
-      `globEntries: suppressed mid-walk error for pattern "${patterns.join(', ')}":${formatUnknownErrorMessage(error)}`,
+      `globEntries: suppressed mid-walk error for pattern "${patterns.join(', ')}": ${formatUnknownErrorMessage(error)}`,
     );
   }
   // A pruned walk ends like a finished one. Say it was cut short, so no caller
