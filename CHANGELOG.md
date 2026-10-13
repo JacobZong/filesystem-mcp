@@ -83,6 +83,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same `getResourceContracts` list the tests exercise (net -6 lines, no
   behavior change; the list-changed debug line now formats its error like
   the other two).
+- **The API key stops at the HTTP host.** The server used the key only to
+  mark its cacheable lists `private`; the HTTP host now passes that scope
+  instead of the secret. A stdio server started with `FS_API_KEY`, where
+  the key has no effect, now reports those lists as `public` to 2026-era
+  clients. The CLI result is passed through instead of being rebuilt
+  twice, and stdio's oversized-ID refusal uses the shared JSON-RPC error
+  builder.
 
 ## [2.7.6] - 2026-10-12
 

@@ -71,12 +71,10 @@ export async function createServer(
      */
     transport?: 'stdio' | 'http';
     /**
-     * The resolved HTTP credential, from `--api-key` or `FS_API_KEY`. Lives here
-     * rather than on `ServerOptions` because that object is `PathGuard`'s
-     * constructor argument and is exposed on its public `options` field — a
-     * bearer secret has no business being reachable from a tool handler.
+     * `private` when the HTTP host requires a bearer key, so a shared cache
+     * never serves one tenant's listing to another. Default `public`.
      */
-    apiKey?: string;
+    cacheScope?: 'private' | 'public';
   },
 ): Promise<FilesystemServerContext> {
   // Only `resources` is declared: `McpServer` advertises `tools` and `prompts`
@@ -99,7 +97,7 @@ export async function createServer(
     resources: { subscribe: !legacyHttp, listChanged: !legacyHttp },
   } satisfies ServerCapabilities;
 
-  const cacheScope: 'private' | 'public' = extraDeps?.apiKey ? 'private' : 'public';
+  const cacheScope = extraDeps?.cacheScope ?? 'public';
   const serverConfig: NonNullable<ConstructorParameters<typeof McpServer>[1]> = {
     capabilities,
     enforceStrictCapabilities: true,

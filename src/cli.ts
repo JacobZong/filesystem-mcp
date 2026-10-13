@@ -217,15 +217,9 @@ export async function parseArgs(): Promise<{
 // Effective config reporting — prints the resolved server config as JSON
 // ════════════════════════════════════════════════════════════
 
-export async function runPrintConfig(options: {
-  allowedDirs: string[];
-  allowCwd: boolean;
-  readOnly: boolean;
-  /** Resolved `--port`. Present means the launch this reports on is an HTTP bind. */
-  port?: number;
-  httpHost?: string;
-  apiKey?: string;
-}): Promise<void> {
+export async function runPrintConfig(
+  options: Awaited<ReturnType<typeof parseArgs>>,
+): Promise<void> {
   const pathGuard = new PathGuard({
     allowCwd: options.allowCwd,
     cliAllowedDirs: options.allowedDirs,

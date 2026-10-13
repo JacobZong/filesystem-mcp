@@ -3,12 +3,12 @@ kind: frontier-ticket
 id: T-13
 title: Deliver the transport batch (findings 5, 10, 11)
 map: M-01
-status: open
+status: in-progress
 type: task
 mode: afk
 priority: 60
 blocked_by: ["T-06", "T-07"]
-claimed:
+claimed: 2026-10-13T22:00:00Z
 ---
 
 ## Question
