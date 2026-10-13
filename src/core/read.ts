@@ -90,6 +90,10 @@ export async function readFileBufferWithLimit(
   requestedPath: string,
   signal?: AbortSignal,
 ): Promise<Buffer> {
+  // Node emits an already-aborted signal's AbortError twice: once to the
+  // iterator and once as an 'error' event no one listens to yet, which is
+  // an uncaught exception and shuts the server down. Throw it here instead.
+  signal?.throwIfAborted();
   const stream = handle.createReadStream({
     start: 0,
     highWaterMark: STREAM_CHUNK_SIZE,
@@ -164,6 +168,7 @@ async function* readLinesBounded(
   filePath: string,
   startLine: number,
 ): AsyncGenerator<string, void, undefined> {
+  options.signal?.throwIfAborted(); // see readFileBufferWithLimit
   const stream = handle.createReadStream({
     start: 0,
     highWaterMark: STREAM_CHUNK_SIZE,

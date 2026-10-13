@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A cancelled or timed-out read no longer shuts the server down.** A file
+  read that started after its call was cancelled, for example a
+  `replace_text` worker opening its next file after the 5-second deadline,
+  raised an uncaught `AbortError` and the server exited.
+
 ## [2.8.1] - 2026-10-13
 
 A maintenance release. Internal refactors give the read path, paged
