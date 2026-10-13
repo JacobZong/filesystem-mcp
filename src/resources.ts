@@ -4,7 +4,6 @@ import type {
   McpServer,
   ReadResourceResult,
   Resource,
-  ResourceUpdatedNotificationParams,
   Role,
   ServerContext,
   ServerNotifier,
@@ -28,7 +27,7 @@ import {
   FILESYSTEM_FILE_URI_TEMPLATE,
 } from './core/file-uri.ts';
 import { GuardedFileSystem } from './core/fs.ts';
-import { Logger } from './core/observability.ts';
+import { Logger, voidSend } from './core/observability.ts';
 import { suggestPaths } from './core/path-completer.ts';
 import type { PathGuard } from './core/path.ts';
 import type { ResourceStore } from './core/store.ts';
@@ -397,7 +396,11 @@ function createResultResource(options: ResourceRegistrationOptions): ResourceCon
 // export contracts
 // ═══════════════════════════════════════════════════════════════
 
-export function getResourceContracts(options: ResourceRegistrationOptions): ResourceContract[] {
+// The file template last and typed as subscribable, so the registrar can
+// wire its subscribe handlers from the same list it registers.
+export function getResourceContracts(
+  options: ResourceRegistrationOptions,
+): readonly [ResourceContract, ResourceContract, SubscribableContract] {
   return [
     createInstructionsResource(options),
     createResultResource(options),
@@ -486,13 +489,8 @@ function owns(contract: ResourceContract, uri: string): boolean {
 
 export function registerResources(deps: ResourceRegistrarDeps): { dispose(): void } {
   const server = deps.server;
-  const options = { ...deps, readOnly: deps.readOnly ?? false };
-  const file = createFilesystemResource(options);
-  const resourceContracts = [
-    createInstructionsResource(options),
-    createResultResource(options),
-    file,
-  ];
+  const resourceContracts = getResourceContracts({ ...deps, readOnly: deps.readOnly ?? false });
+  const file = resourceContracts[2];
 
   for (const contract of resourceContracts) {
     const config = {
@@ -543,13 +541,8 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
         deps.notifier.resourceUpdated(updatedUri);
         return;
       }
-      const updatePayload: ResourceUpdatedNotificationParams = { uri: updatedUri };
-      // A failed notify means the connection went away; nothing to recover.
-      void server.server.sendResourceUpdated(updatePayload).catch((err: unknown) => {
-        Logger.debug('resource update not delivered', {
-          uri: updatedUri,
-          error: formatUnknownErrorMessage(err),
-        });
+      voidSend(server.server.sendResourceUpdated({ uri: updatedUri }), 'resource update', {
+        uri: updatedUri,
       });
     };
 

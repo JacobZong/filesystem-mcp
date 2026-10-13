@@ -7,7 +7,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 
 import packageJson from '../package.json' with { type: 'json' };
 import { requestStateCodec } from './core/input-required.ts';
-import { Logger } from './core/observability.ts';
+import { Logger, voidSend } from './core/observability.ts';
 import type { ServerOptions } from './core/path.ts';
 import { PathGuard } from './core/path.ts';
 import { PageSnapshotStore, ResourceStore } from './core/store.ts';
@@ -161,7 +161,6 @@ export async function createServer(
     return Promise.resolve();
   };
 
-  // A failed send means the connection went away; nothing to recover.
   const resourceStore =
     extraDeps?.resourceStore ??
     new ResourceStore(
@@ -170,9 +169,7 @@ export async function createServer(
           extraDeps.notifier.resourcesChanged();
           return;
         }
-        void server.server.sendResourceListChanged().catch((error: unknown) => {
-          Logger.debug('resource list_changed not delivered', { error: String(error) });
-        });
+        voidSend(server.server.sendResourceListChanged(), 'resource list_changed');
       },
       // A tool hands out no link that this connection's resources/read refuses.
       extraDeps?.transport === 'stdio' ? { maxReadResultBytes: MAX_OUTBOUND_RESULT_BYTES } : {},

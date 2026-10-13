@@ -12,7 +12,7 @@ import {
 import { fileURLToPath } from 'node:url';
 
 import { formatUnknownErrorMessage, normalizeUnknownError } from '../core/errors.ts';
-import { Logger } from '../core/observability.ts';
+import { Logger, voidSend } from '../core/observability.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PathGuard } from '../core/path.ts';
 import { getMaxInboundMessageBytes, MAX_STDIO_REQUEST_ID_BYTES } from '../core/util.ts';
@@ -193,12 +193,8 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
   // not callbacks). Reads `activeCtx` when it fires rather than capturing it, so
   // it never pins a disposed instance.
   const sink = (uri: string): void => {
-    // A failed notify means the connection went away; nothing to recover.
-    void activeCtx?.mcp.server.sendResourceUpdated({ uri }).catch((err: unknown) => {
-      Logger.debug('[Stdio] resource update not delivered', {
-        uri,
-        error: formatUnknownErrorMessage(err),
-      });
+    voidSend(activeCtx?.mcp.server.sendResourceUpdated({ uri }), '[Stdio] resource update', {
+      uri,
     });
   };
 

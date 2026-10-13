@@ -76,6 +76,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   symlink that points outside the boundary, and one whose parent cannot be
   resolved. The sensitive-file check moves into the one access check that
   runs it.
+- **One helper for a notification that can fail only because the client
+  left.** The resource-updated and list-changed sends in stdio, the
+  resource registrar and the server each wrote their own catch-and-log;
+  `voidSend` now owns it, and the registrar builds its contracts through
+  the same `getResourceContracts` list the tests exercise (net -6 lines, no
+  behavior change; the list-changed debug line now formats its error like
+  the other two).
 
 ## [2.7.6] - 2026-10-12
 
