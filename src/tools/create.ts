@@ -14,12 +14,7 @@ import {
 } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
 import { destExists, type Stats } from '../core/fs.ts';
-import {
-  confirmKey,
-  describeRefusal,
-  pendingRoundTrip,
-  readAcceptedChoice,
-} from '../core/input-required.ts';
+import { confirmKey, pendingRoundTrip, readPendingVerdict } from '../core/input-required.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
 import { isSamePath } from '../core/path-utils.ts';
 import { RequiredPath } from '../core/schema.ts';
@@ -168,13 +163,12 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     >(args.files, ctx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
       const pendingPath = pendingByPath.get(path);
       if (pendingPath !== undefined) {
-        const key = confirmKey(pendingSorted.indexOf(pendingPath));
-        const choice = readAcceptedChoice(ctx.inputResponses, key);
-        if (choice === 'skip') return { skipped: path };
-        if (choice !== 'overwrite') {
+        const verdict = readPendingVerdict(ctx, pendingSorted, pendingPath, 'overwrite');
+        if (verdict === 'skipped') return { skipped: path };
+        if (verdict !== 'accepted') {
           throw new FsError(
             ErrorCode.CANCELLED,
-            `create cancelled: overwrite of "${path}" was ${describeRefusal(ctx, key)}`,
+            `create cancelled: overwrite of "${path}" was ${verdict.refused}`,
             path,
           );
         }

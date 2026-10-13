@@ -1,9 +1,8 @@
-import { stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { paginate } from '../core/cursor.ts';
+import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { formatCount, pageTrailer, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import { toPosixRelative } from '../core/path.ts';
@@ -185,8 +184,7 @@ async function resolveSearchScope(
 ): Promise<{ basePath: string; explicitFile?: string }> {
   const requested = ctx.fs.pathGuard.resolvePathOrRoot(path);
   // One resolution, one stat: validateExistingDirectory would redo both.
-  const resolved = await ctx.fs.pathGuard.validateExistingPath(requested);
-  const stats = await stat(resolved);
+  const { stats, validPath: resolved } = await ctx.fs.stat(requested, { signal: ctx.signal });
   if (!stats.isFile()) {
     if (!stats.isDirectory()) {
       throw new FsError(ErrorCode.NOT_DIRECTORY, 'Not a directory', requested);
@@ -221,22 +219,13 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
     const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-    const queryKey = JSON.stringify({
-      method: 'search_text',
-      path: requestedPath,
-      pattern: args.pattern,
-      searchPattern: args.searchPattern,
-      isRegex: args.isRegex,
-      includeHidden: args.includeHidden,
-      includeIgnored: args.includeIgnored,
-      caseSensitive: args.caseSensitive,
-      maxDepth: args.maxDepth,
-      context: args.context,
-    });
     const paged = await paginate<SearchMatchPayload, SearchContentPageMetadata, JsonResourceResult>(
       {
         store: ctx.pageStore,
-        queryKey,
+        queryKey: pageQueryKey('search_text', { ...args, path: requestedPath }, [
+          'cursor',
+          'maxResults',
+        ]),
         cursor: args.cursor,
         pageSize: args.maxResults,
         produce: async () => {

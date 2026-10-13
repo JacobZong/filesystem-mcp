@@ -1,7 +1,6 @@
 import type { InputRequiredResult } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
-import { stat } from 'node:fs/promises';
 import { basename, dirname, relative, resolve } from 'node:path';
 
 import * as z from 'zod/v4';
@@ -19,12 +18,7 @@ import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { destExists } from '../core/fs.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
-import {
-  confirmKey,
-  describeRefusal,
-  pendingRoundTrip,
-  readAcceptedChoice,
-} from '../core/input-required.ts';
+import { confirmKey, pendingRoundTrip, readPendingVerdict } from '../core/input-required.ts';
 import {
   isPathInsideDirectory,
   isSamePath,
@@ -116,9 +110,10 @@ async function planTransfer(
   let opSource: string;
   let validDest: string;
   try {
-    ({ realSource, opSource } = await validateTransferSource(op, pair.source, fs));
+    const source = await validateTransferSource(op, pair.source, fs, signal);
+    ({ realSource, opSource } = source);
     validDest = await fs.pathGuard.validatePathForWrite(pair.destination);
-    if (!(op === 'move' && opSource !== realSource) && (await stat(realSource)).isDirectory()) {
+    if (!(op === 'move' && opSource !== realSource) && source.isDirectory) {
       await assertTreeHasNoProtectedEntries(op, realSource, pair.source, validDest, fs, signal);
     }
   } catch (error) {
@@ -193,15 +188,14 @@ async function executeTransfer(
   pendingSorted: readonly string[],
 ): Promise<TransferExecResult> {
   if (plan.pending) {
-    const key = confirmKey(pendingSorted.indexOf(plan.validDest));
-    const choice = readAcceptedChoice(ctx.inputResponses, key);
-    if (choice === 'skip') {
+    const verdict = readPendingVerdict(ctx, pendingSorted, plan.validDest, 'overwrite');
+    if (verdict === 'skipped') {
       return { skipped: plan.pair.destination };
     }
-    if (choice !== 'overwrite') {
+    if (verdict !== 'accepted') {
       throw new FsError(
         ErrorCode.CANCELLED,
-        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${describeRefusal(ctx, key)}`,
+        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${verdict.refused}`,
         plan.pair.destination,
       );
     }
@@ -439,6 +433,8 @@ interface TransferSource {
   realSource: string;
   /** The path the mutation runs on: symlink preserved for move, resolved for copy. */
   opSource: string;
+  /** Whether the resolved source is a directory (from the same guarded stat). */
+  isDirectory: boolean;
 }
 
 /**
@@ -453,13 +449,14 @@ async function validateTransferSource(
   op: PairOp,
   source: string,
   fs: ToolCtx['fs'],
+  signal: AbortSignal | undefined,
 ): Promise<TransferSource> {
   try {
-    const realSource = await fs.pathGuard.validateExistingPath(source);
+    const { stats, validPath: realSource } = await fs.stat(source, { signal });
     const opSource = op === 'move' ? await fs.pathGuard.validatePathForDelete(source) : realSource;
-    return { realSource, opSource };
+    return { realSource, opSource, isDirectory: stats.isDirectory() };
   } catch (error) {
-    if (isFsError(error)) throw error;
+    if (isFsError(error) || signal?.aborted) throw error;
     throw new FsError(ErrorCode.ACCESS_DENIED, `${VERB[op]} failed for ${source}`, source);
   }
 }

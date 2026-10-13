@@ -50,6 +50,8 @@ decision tickets, in batch PRs merged with `npm run check` green.
 - [Which delivery chain does each batch follow?](tickets/T-03-delivery-process.md)
   — B1, B2, B4 direct with pin tests first (F5; F2, F3); B3 planned; text-only
   edits verified by symbol grep, no `bug-hunt`.
+- [Deliver batch B1: F5, F7, F11](tickets/T-04-deliver-b1-isolated.md)
+  — delivered in PR #81 (`f4124ef2`); `npm run check` 676/0/5; net +37.
 
 ## Not yet specified
 

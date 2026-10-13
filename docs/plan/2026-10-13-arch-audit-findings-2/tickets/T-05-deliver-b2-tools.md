@@ -3,12 +3,12 @@ kind: frontier-ticket
 id: T-05
 title: Deliver batch B2: F1, F2, F3, F4
 map: M-01
-status: open
+status: in-progress
 type: task
 mode: hitl
 priority: 100
 blocked_by: [T-03, T-04]
-claimed:
+claimed: 2026-10-13T11:12:00Z
 ---
 
 ## Question

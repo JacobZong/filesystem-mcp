@@ -396,6 +396,23 @@ export function describeRefusal(
 }
 
 /**
+ * How the caller answered one item of a sorted pending set: `'accepted'` for
+ * `acceptChoice`, `'skipped'` for skip, otherwise the refusal's wording.
+ */
+export function readPendingVerdict(
+  ctx: Pick<PendingCtx, 'inputResponses' | 'droppedInputResponseKeys'>,
+  pendingSorted: readonly string[],
+  item: string,
+  acceptChoice: string,
+): 'accepted' | 'skipped' | { refused: string } {
+  const key = confirmKey(pendingSorted.indexOf(item));
+  const choice = readAcceptedChoice(ctx.inputResponses, key);
+  if (choice === acceptChoice) return 'accepted';
+  if (choice === 'skip') return 'skipped';
+  return { refused: describeRefusal(ctx, key) };
+}
+
+/**
  * Order-independent equality of two sorted, de-duplicated path lists. Used to
  * compare a recomputed pending set against the `requestState`-bound set (R9):
  * both are sorted by construction, so a straight element-wise compare settles

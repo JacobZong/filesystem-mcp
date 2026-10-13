@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 
-import { paginate } from '../core/cursor.ts';
+import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
 import { toPosixRelative } from '../core/path.ts';
 import {
@@ -82,18 +82,12 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
     const requestedBasePath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-    const queryKey = JSON.stringify({
-      method: 'find_files',
-      path: requestedBasePath,
-      pattern: args.pattern,
-      includeIgnored: args.includeIgnored,
-      includeHidden: args.includeHidden,
-      sortBy: args.sortBy,
-      maxDepth: args.maxDepth,
-    });
     const paged = await paginate<SearchFileResult, SearchFilesPageMetadata, JsonResourceResult>({
       store: ctx.pageStore,
-      queryKey,
+      queryKey: pageQueryKey('find_files', { ...args, path: requestedBasePath }, [
+        'cursor',
+        'maxResults',
+      ]),
       cursor: args.cursor,
       pageSize: args.maxResults,
       produce: async () => {
