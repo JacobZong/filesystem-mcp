@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A `replace_text` timeout says what it already wrote.** A live run that
+  hits the 5-second deadline keeps the files it already rewrote. Its text now
+  names them and warns that re-running the same replacement applies it to
+  them again.
+
 ### Fixed
 
 - **A cancelled or timed-out read no longer shuts the server down.** A file

@@ -627,7 +627,18 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     const lines = [summaryText];
     const stop = structured.stoppedReason;
     if (stop === 'timeout') lines.push(stoppedEarlyLine(stop));
-    else if (stop !== undefined) {
+    // A live run writes as it scans, so a timeout leaves the files it reached
+    // rewritten. The paths ship under `_meta`, which the model does not see; name
+    // them here, or a re-run of a self-matching replacement applies it twice.
+    if (stop === 'timeout' && !args.dryRun && structured.summary.succeeded > 0) {
+      const changed = structured.results.filter((x) => !('error' in x)).map((x) => x.path);
+      const shown = changed.slice(0, 5).join(', ');
+      const more = changed.length > 5 ? `, and ${String(changed.length - 5)} more` : '';
+      lines.push(
+        `// ${String(structured.summary.succeeded)} file(s) were already rewritten and stay changed: ${shown}${more}. ` +
+          'Re-running the same replacement applies it to them again; exclude them, or use dryRun first.',
+      );
+    } else if (stop !== undefined) {
       // maxResults/maxFiles here are the caller's own caps, so raising one is
       // what reaches the rest; the search engine's advice to narrow is not.
       lines.push(

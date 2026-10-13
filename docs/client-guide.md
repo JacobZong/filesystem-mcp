@@ -359,11 +359,15 @@ pattern. The [limits table](configuration.md#limits) has the numbers.
   progress. The SDK's default request timeout is 60 seconds.
 - Abort the call's `AbortSignal` to cancel it. The SDK sends
   `notifications/cancelled` and rejects with an `AbortError`.
-- `list` and `stat` stop themselves after about 5 seconds with a `TIMEOUT`
-  error. `find_files` and `search_text` stop at the same deadline but return
-  what they found so far, with `_meta.stoppedReason: 'timeout'` (see
-  [Pagination](#pagination-and-cached-results)). `maxResults` does not
-  shorten a scan; a narrower `path`, `pattern`, or `maxDepth` does.
+- `list`, `stat` and `read` stop themselves after about 5 seconds with a
+  `TIMEOUT` error. `find_files` and `search_text` stop at the same
+  deadline but return what they found so far, with
+  `_meta.stoppedReason: 'timeout'` (see
+  [Pagination](#pagination-and-cached-results)). `replace_text` stops at
+  the same deadline too: in a live run the files it already rewrote stay
+  rewritten, and the text names them. Run a wide replacement with
+  `dryRun: true` first. `maxResults` does not shorten a scan; a narrower
+  `path`, `pattern`, or `maxDepth` does.
 
 ## Confirmations
 
