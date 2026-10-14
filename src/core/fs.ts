@@ -50,7 +50,7 @@ export type { FileType };
 export type { Stats };
 
 // Directory open for countEntries. O_NOFOLLOW refuses a symlink named as the
-// directory; Linux only, like the descriptor re-check it feeds.
+// directory; used only under COUNT_THROUGH_FD, like the re-check it feeds.
 const DIR_NOFOLLOW = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW;
 // The descriptor re-check and the read through /proc/self/fd need Linux with procfs mounted,
 // as the read path's re-check does; elsewhere the count reads the directory by path.

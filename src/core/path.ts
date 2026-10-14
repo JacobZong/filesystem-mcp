@@ -170,7 +170,8 @@ export async function resolveAllowedDirectoriesState(
  * Linux with procfs; elsewhere it reads the directory by path, so the swap
  * window stays there, like the read path's non-Linux residual. Residuals: the
  * directory walker behind list and the search tools (core/glob.ts) still
- * resolves each entry by path; write paths that resolve a parent by name
+ * resolves each entry by path, as the count does for a symlinked entry;
+ * write paths that resolve a parent by name
  * (`rename`, `mkdir`, `rm`, `cp`) would need openat()-relative-to-dirfd, which
  * Node lacks; non-Linux skips the fd re-check.
  */
