@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { open, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -102,4 +102,50 @@ describe('a file whose size reads as 0 while it holds text', () => {
       assert.strictEqual(outcome.summary.filesMatched, 1, JSON.stringify(outcome.summary));
     });
   }
+});
+
+// A search reads a file in chunks and checks its signal before each, as
+// FileHandle#readFile did, so a cancelled search stops reading at the next one.
+describe('reading a file for a search', () => {
+  let root: string;
+
+  before(async () => {
+    root = await createTestRoot();
+  });
+
+  after(async () => {
+    await cleanupTestRoot(root);
+  });
+
+  it('stops before the next chunk once the search is cancelled', async () => {
+    const file = join(root, 'three-chunks.txt');
+    await writeFile(file, 'x'.repeat(3 * 512 * 1024));
+    const probe = await open(file);
+    const proto = Object.getPrototypeOf(probe) as {
+      read: (...args: unknown[]) => Promise<unknown>;
+    };
+    await probe.close();
+    const original = proto.read;
+    const controller = new AbortController();
+    let reads = 0;
+    proto.read = async function (this: unknown, ...args: unknown[]) {
+      reads++;
+      const result = await original.apply(this, args);
+      controller.abort();
+      return result;
+    };
+    try {
+      const outcome = await searchContent(
+        root,
+        'needle',
+        { isRegex: false, explicitFile: file, signal: controller.signal },
+        await makeGuard([root]),
+      );
+      assert.strictEqual(reads, 1, 'no read after the cancel');
+      assert.strictEqual(outcome.summary.filesScanned, 0, JSON.stringify(outcome.summary));
+      assert.strictEqual(outcome.summary.stoppedReason, 'timeout');
+    } finally {
+      proto.read = original;
+    }
+  });
 });

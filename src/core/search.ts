@@ -59,6 +59,9 @@ export function createYielder(signal: AbortSignal | undefined): () => Promise<bo
  */
 export const RE2_MAX_INPUT_BYTES = 4 * MIB;
 
+/** The chunk `FileHandle#readFile` reads in, and checks its signal between. */
+const READ_CHUNK_BYTES = 512 * 1024;
+
 /** One line's matches: how many, and where the first starts (UTF-16 units). */
 interface LineHit {
   count: number;
@@ -366,7 +369,11 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
       buffer = Buffer.allocUnsafe(size);
       let filled = 0;
       while (filled < size) {
-        const { bytesRead } = await handle.read(buffer, filled, size - filled, filled);
+        // In readFile's own chunks, with its check of the signal before each,
+        // so a deadline on a slow filesystem lands as soon as it did there.
+        scanCtx.signal?.throwIfAborted();
+        const length = Math.min(size - filled, READ_CHUNK_BYTES);
+        const { bytesRead } = await handle.read(buffer, filled, length, filled);
         if (bytesRead === 0) break;
         filled += bytesRead;
       }

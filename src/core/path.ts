@@ -594,7 +594,7 @@ export class PathGuard {
    * a root. When it does not — a desktop host starts the server outside the
    * project, and an HTTP client never shares its working directory — it
    * resolves against the roots: the one root, or with several, the one it
-   * exists under. Tools report paths relative to the root they walked, so this
+   * exists under. A search of the root reports paths relative to it, so this
    * is what lets one tool's output feed the next.
    *
    * "Roots" here are the configured ones and those a client declared, never an
