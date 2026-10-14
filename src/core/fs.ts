@@ -27,6 +27,7 @@ import {
   isFsError,
   isNodeError,
   isNotFoundErrno,
+  rethrowIfAborted,
 } from './errors.ts';
 import { detectMimeFromContent, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
@@ -513,13 +514,30 @@ export class GuardedFileSystem {
    * Direct children of a directory, leaving out entries the guard treats as
    * sensitive so the count never reveals what listings hide. Hidden and
    * ignored entries count: this answers "is it empty?", not "what would list show?".
+   * A symlinked child is resolved, so a link to a secret or outside target is not counted.
    */
   async countEntries(dirPath: string, options?: { signal?: AbortSignal }): Promise<number> {
     const { resolvedPath } = await this.pathGuard.validateExistingPathDetailed(dirPath);
     let count = 0;
     for await (const entry of await fsOpendir(resolvedPath)) {
       options?.signal?.throwIfAborted();
-      if (!this.pathGuard.isSensitive(join(dirPath, entry.name))) count += 1;
+      const childPath = join(dirPath, entry.name);
+      if (this.pathGuard.isSensitive(childPath)) continue;
+      if (entry.isSymbolicLink()) {
+        // Same test as list's isEntryAccessible: a link that escapes the roots,
+        // dangles, or points at a secret file is hidden there, so it is not counted.
+        try {
+          const { requestedPath, resolvedPath: target } =
+            await this.pathGuard.validateExistingPathDetailed(childPath);
+          if (this.pathGuard.isSensitive(requestedPath) || this.pathGuard.isSensitive(target)) {
+            continue;
+          }
+        } catch (error) {
+          rethrowIfAborted(error);
+          continue;
+        }
+      }
+      count += 1;
     }
     return count;
   }

@@ -8,6 +8,7 @@ import {
   createTestClientPair,
   createTestRoot,
   type TestClientContext,
+  trySymlink,
 } from './helpers.ts';
 
 interface StatValue {
@@ -20,11 +21,13 @@ interface StatValue {
 // files are left out of the count, the same way listings hide them.
 describe('stat entryCount for a directory', () => {
   let root: string;
+  let outside: string;
   let harness: TestClientContext;
   let values: (StatValue | undefined)[] = [];
 
   before(async () => {
     root = await createTestRoot();
+    outside = await createTestRoot();
     const empty = join(root, 'empty');
     const full = join(root, 'full');
     await mkdir(empty);
@@ -46,6 +49,7 @@ describe('stat entryCount for a directory', () => {
   after(async () => {
     await harness.close();
     await cleanupTestRoot(root);
+    await cleanupTestRoot(outside);
   });
 
   it('reports entryCount 0 for an empty folder, with no size', () => {
@@ -71,5 +75,21 @@ describe('stat entryCount for a directory', () => {
     assert.strictEqual(value.type, 'file');
     assert.strictEqual(typeof value.size, 'number');
     assert.ok(!('entryCount' in value), 'a file must not report an entryCount');
+  });
+
+  it('does not count a symlink to a secret file or outside the roots', async (t) => {
+    const linked = join(root, 'linked');
+    await mkdir(linked);
+    await writeFile(join(linked, 'a.txt'), 'hello');
+    await writeFile(join(linked, '.env'), 'SECRET=1');
+    const skip = () => t.skip('symlink not permitted');
+    if (!(await trySymlink(join(linked, '.env'), join(linked, 'env-link'), skip, 'file'))) return;
+    if (!(await trySymlink(outside, join(linked, 'out-link'), skip))) return;
+
+    const result = await harness.client.callTool({ name: 'stat', arguments: { path: linked } });
+    assert.notStrictEqual(result.isError, true);
+    const sc = result.structuredContent as { results: { value?: StatValue }[] };
+    // Only a.txt is listed; .env, env-link and out-link are hidden, so none count.
+    assert.strictEqual(sc.results[0]?.value?.entryCount, 1);
   });
 });
