@@ -112,6 +112,8 @@ filesystem-mcp ~/code/app --deny 'private/**' --deny '*.sqlite' --allow '.env.ex
 read, compare, and inspect. Use it for code review, research, or any folder
 you do not want changed.
 
+Set `FS_READ_ONLY=true` to do the same from the environment, for example in a client that can only pass environment variables.
+
 For the strongest setup in Docker, combine it with a read-only mount
 (`-v /path:/workspace:ro`), so the operating system also refuses writes.
 
@@ -123,14 +125,14 @@ exceptions:
 - Lists add up. Folder arguments join `FS_ALLOWED_DIRS`, `--deny` joins
   `FS_DENYLIST`, and `--allow` joins `FS_ALLOWLIST`. So an `FS_ALLOWLIST`
   inherited from your shell still applies when you pass `--allow`.
-- On/off flags only turn things on. `--allow-sensitive`, `--walk-cwd`, and
-  `--allow-missing-roots` cannot switch off their environment variable, so
-  unset the variable instead.
+- On/off flags only turn things on. `--read-only`, `--allow-sensitive`,
+  `--walk-cwd`, and `--allow-missing-roots` cannot switch off their environment
+  variable, so unset the variable instead.
 
 | Flag                      | Default     | What it does                                                                                                                     |
 | :------------------------ | :---------- | :------------------------------------------------------------------------------------------------------------------------------- |
 | `[folders...]`            |             | Allowed folders. See [Choosing folders](#choosing-folders).                                                                      |
-| `--read-only`             | off         | Remove the tools that change files.                                                                                              |
+| `--read-only`             | off         | Remove the tools that change files. Env: `FS_READ_ONLY`.                                                                         |
 | `--deny <pattern>`        |             | Block paths matching the pattern. Repeatable. Env: `FS_DENYLIST`.                                                                |
 | `--allow <pattern>`       |             | Unblock a built-in secret-file pattern. Repeatable. Env: `FS_ALLOWLIST`.                                                         |
 | `--allow-sensitive`       | off         | Turn off the built-in secret-file list. Env: `FS_ALLOW_SENSITIVE`.                                                               |
@@ -164,6 +166,7 @@ These variables control folders and access:
 | `FS_DENYLIST`            | Extra blocked patterns, comma-separated. Combined with `--deny`.          |
 | `FS_ALLOWLIST`           | Built-in patterns to unblock, comma-separated. Combined with `--allow`.   |
 | `FS_ALLOW_SENSITIVE`     | Same as `--allow-sensitive`.                                              |
+| `FS_READ_ONLY`           | Same as `--read-only`.                                                    |
 
 These variables control limits and logging:
 

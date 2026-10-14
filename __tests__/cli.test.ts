@@ -214,4 +214,25 @@ describe('CLI (real subprocess)', () => {
       assert.match(stderr, /--port \/ FS_PORT must be an integer between 1 and 65535/);
     }
   });
+
+  it('FS_READ_ONLY turns on read-only mode like --read-only', async () => {
+    const printed = async (args: string[], env?: Record<string, string>) => {
+      const { code, stdout, stderr } = await runCli(['--print-config', ...args, root], env);
+      assert.strictEqual(code, 0, stderr);
+      return JSON.parse(stdout) as { readOnly: boolean; tools: string[] };
+    };
+
+    const on = await printed([], { FS_READ_ONLY: 'true' });
+    assert.strictEqual(on.readOnly, true);
+    assert.ok(!on.tools.includes('create'));
+    assert.ok(on.tools.includes('read'));
+
+    assert.strictEqual((await printed([], { FS_READ_ONLY: '1' })).readOnly, true);
+
+    const off = await printed([], { FS_READ_ONLY: '0' });
+    assert.strictEqual(off.readOnly, false);
+    assert.ok(off.tools.includes('create'));
+
+    assert.strictEqual((await printed(['--read-only'])).readOnly, true);
+  });
 });

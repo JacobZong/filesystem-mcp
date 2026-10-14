@@ -24,7 +24,7 @@ const OPTIONS_HELP: HelpRow[] = [
   },
   {
     flags: '--read-only',
-    desc: `Disable write tools: ${[...MUTATING_TOOL_NAMES].sort().join(', ')}`,
+    desc: `Disable write tools: ${[...MUTATING_TOOL_NAMES].sort().join(', ')} (env: FS_READ_ONLY)`,
   },
   { flags: '--print-config', desc: 'Print the active configuration as JSON and exit' },
   {
@@ -112,6 +112,7 @@ const ENV_HELP: HelpRow[] = [
     flags: 'FS_ALLOW_MISSING_ROOTS',
     desc: 'Start even if configured allowed directories do not exist ("true" or "1" enables this)',
   },
+  { flags: 'FS_READ_ONLY', desc: 'Disable write tools ("true" or "1" enables this)' },
   {
     flags: 'FS_ALLOWED_HOSTS',
     desc: 'Comma-separated Host header values to accept (HTTP transport)',

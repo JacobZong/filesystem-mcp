@@ -191,7 +191,8 @@ export async function parseArgs(): Promise<{
       v['allow-cwd'] ||
       v['walk-cwd'] ||
       parseTrueEnvFlag(process.env['FS_ALLOW_CWD_WALK'], 'FS_ALLOW_CWD_WALK');
-    const readOnly = v['read-only'];
+    const readOnly =
+      v['read-only'] || parseTrueEnvFlag(process.env['FS_READ_ONLY'], 'FS_READ_ONLY');
     const printConfig = v['print-config'];
     const port = parsePortOption(v.port ?? process.env['FS_PORT']);
     const allowMissingRoots =
