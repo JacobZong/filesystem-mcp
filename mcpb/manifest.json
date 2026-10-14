@@ -40,7 +40,10 @@
     },
     { "name": "diff", "description": "Compare two files as a unified diff." },
     { "name": "read", "description": "Read text files whole, by line range, head, or tail." },
-    { "name": "create", "description": "Create, overwrite, or append to text files." },
+    {
+      "name": "create",
+      "description": "Create, overwrite, or append to text files, or make empty directories."
+    },
     { "name": "edit", "description": "Apply literal string replacements to files." },
     { "name": "move", "description": "Move, rename, or copy files and directories." },
     { "name": "delete", "description": "Permanently delete files or directories." },
