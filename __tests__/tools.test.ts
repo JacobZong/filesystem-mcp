@@ -3686,42 +3686,17 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       "EditSpec's oldText description must be inlined at both use sites",
     );
 
-    // `oneOf` (not `anyOf`): `{path, paths}` matches two branches and so fails,
-    // mirroring the superRefine in singleOrBatchPathsInput. `edit`'s single-file
-    // branch additionally requires `edits`, so `{ path }` alone fails the wire
-    // schema the same way it fails the runtime gate — it used to pass the first
-    // and fail the second, which the model had no way to anticipate.
-    const modeBranches = (name: string, branches: string[][]) => {
-      const tool = tools.find((t) => t.name === name);
-      assert.ok(tool, `${name} must be registered`);
-      assert.deepStrictEqual(
-        (tool.inputSchema as { oneOf?: unknown }).oneOf,
-        branches.map((required) => ({ required })),
-        `${name} must advertise its input modes as oneOf`,
-      );
-    };
-    modeBranches('read', [['path'], ['paths']]);
-    modeBranches('stat', [['path'], ['paths']]);
-    modeBranches('edit', [['path', 'edits'], ['files']]);
-
-    // `read`'s line-mode exclusivity is published too, not just enforced in
-    // validateReadRange: `{ path, head, tail }` must fail the advertised schema.
-    const readTool = tools.find((t) => t.name === 'read');
-    assert.ok(readTool, 'read must be registered');
-    const readSchema = readTool.inputSchema as {
-      not?: { anyOf?: { required: string[] }[] };
-      dependentRequired?: Record<string, string[]>;
-    };
-    assert.strictEqual(
-      readSchema.not,
-      undefined,
-      'read no longer publishes the line-param exclusivity as a not/anyOf block',
-    );
-    assert.deepStrictEqual(
-      readSchema.dependentRequired,
-      { endLine: ['startLine'] },
-      'read must advertise that endLine needs startLine',
-    );
+    // OpenAI and Anthropic reject these top-level keys in function parameters,
+    // so no tool may publish one. The path/paths, edits/files and line-range
+    // rules are enforced by superRefine at call time instead.
+    for (const tool of tools) {
+      for (const key of ['oneOf', 'anyOf', 'allOf', 'not', 'dependentRequired']) {
+        assert.ok(
+          !(key in tool.inputSchema),
+          `${tool.name}: top-level ${key} breaks OpenAI/Anthropic function calling`,
+        );
+      }
+    }
 
     // The rule moved off the wire, so it is proven at the layer that enforces
     // it: validateReadRange rejects the pair by name and that reaches the client

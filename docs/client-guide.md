@@ -265,9 +265,11 @@ found by `resources/read`.
 - `--read-only` removes the six tools that change files from `tools/list`.
   Calling one anyway throws `Tool create not found`. Check the list rather
   than assuming.
-- Input schemas are JSON Schema draft 2020-12. `read`, `stat`, and `edit` have
-  a top-level `oneOf` (`path` or `paths`; `path`+`edits` or `files`), and
-  `read` has `dependentRequired` (`endLine` needs `startLine`).
+- Input schemas are JSON Schema draft 2020-12 with no top-level `oneOf`,
+  `anyOf`, or `allOf`, so they can go to the OpenAI and Anthropic APIs as they
+  are. Rules that span fields (`path` or `paths`; `path` with `edits`, or
+  `files`; `endLine` needs `startLine`) are checked when the tool runs and come
+  back as `Input validation error: ...`.
 - On 2026-07-28 the TypeScript SDK caches `tools/list` for the hour the
   server allows. The list only changes when the server restarts with other
   flags.
@@ -543,9 +545,8 @@ if (client.getProtocolEra() === 'modern') {
 
 ## Using the tools from a model
 
-- Pass `tools/list` to the model as function definitions. OpenAI and Anthropic
-  reject a top-level `oneOf`/`anyOf`/`allOf`/`not` in function parameters.
-  Remove those keys before sending, and leave validation to the server.
+- Pass `tools/list` to the model as function definitions. The schemas need no
+  rewriting, and the server validates every call.
 - Use `internal://instructions` as, or in, the system prompt.
 - Send the model the text blocks, including on `isError` (prefix them with
   `ERROR:` or similar). The server writes the messages so a model can recover.

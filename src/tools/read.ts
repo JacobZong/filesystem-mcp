@@ -45,40 +45,23 @@ const readRangeFields = {
   head: rangeField('Return first N lines', true),
   tail: rangeField('Return last N lines', true),
   startLine: rangeField('Start line (1-indexed)'),
-  endLine: rangeField('End line (1-indexed)'),
+  endLine: rangeField('End line (1-indexed); requires startLine'),
 };
 
 const ReadFileInputSchema = singleOrBatchPathsInput({
   includeHash: defaultFalseBoolean('Include SHA-256 hash of the returned content in the response'),
   ...readRangeFields,
-})
-  .superRefine((value, ctx) => {
-    validateReadRange(
-      {
-        head: value.head,
-        tail: value.tail,
-        startLine: value.startLine,
-        endLine: value.endLine,
-      },
-      ctx,
-    );
-  })
-  // Mirror `validateReadRange` on the wire. Without this the four line params
-  // published as four independent optional integers, so `{ path, head, tail }`
-  // passed the advertised schema and was rejected only at call time.
-  //
-  // `oneOf` is restated because `.meta()` replaces the entry
-  // `singleOrBatchPathsInput` set rather than merging into it — dropping it here
-  // would silently un-publish the path/paths rule.
-  .meta({
-    // The line-param exclusivity that used to sit here as a five-branch
-    // `not/anyOf` is one sentence in the description instead: validateReadRange
-    // rejects every conflicting combination by name at runtime, so the wire copy
-    // was paying for a second statement of a rule the model reads better in
-    // prose.
-    oneOf: [{ required: ['path'] }, { required: ['paths'] }],
-    dependentRequired: { endLine: ['startLine'] },
-  });
+}).superRefine((value, ctx) => {
+  validateReadRange(
+    {
+      head: value.head,
+      tail: value.tail,
+      startLine: value.startLine,
+      endLine: value.endLine,
+    },
+    ctx,
+  );
+});
 
 interface ReadContinuation {
   tool: 'read';
