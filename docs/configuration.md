@@ -139,6 +139,7 @@ exceptions:
 | `--allow-missing-roots`   | off         | Start even if an allowed folder does not exist yet. Env: `FS_ALLOW_MISSING_ROOTS`.                                               |
 | `--root-boundary <path>`  |             | Only allow folders inside this path. Env: `FS_ROOT_BOUNDARY`.                                                                    |
 | `--max-file-size <bytes>` | 10485760    | Largest file `read` will load, and the total content of one `create` call. 1 MiB to 100 MiB. Env: `FS_MAX_FILE_SIZE`.            |
+| `--tool-timeout <ms>`     | 5000        | Time limit for one listing, read, search, or `replace_text` call. 1000 to 600000. Env: `FS_TOOL_TIMEOUT_MS`.                     |
 | `--port <n>`              |             | Serve over HTTP on this port instead of stdio. Env: `FS_PORT`.                                                                   |
 | `--http-host <host>`      | `127.0.0.1` | Address to listen on over HTTP. Env: `FS_HTTP_HOST`.                                                                             |
 | `--api-key <key>`         |             | Require `Authorization: Bearer <key>` over HTTP. Prefer `FS_API_KEY`: other users on the machine can see command-line arguments. |
@@ -166,12 +167,13 @@ These variables control folders and access:
 
 These variables control limits and logging:
 
-| Variable           | What it does                                                          |
-| :----------------- | :-------------------------------------------------------------------- |
-| `FS_MAX_FILE_SIZE` | Same as `--max-file-size`.                                            |
-| `FS_MAX_WATCHERS`  | Most files watched for changes at once. Default 256, range 1 to 4096. |
-| `FS_LOG_LEVEL`     | Same as `--log-level`. Logs go to stderr.                             |
-| `NO_COLOR`         | Any value turns off colored output.                                   |
+| Variable             | What it does                                                          |
+| :------------------- | :-------------------------------------------------------------------- |
+| `FS_MAX_FILE_SIZE`   | Same as `--max-file-size`.                                            |
+| `FS_TOOL_TIMEOUT_MS` | Same as `--tool-timeout`.                                             |
+| `FS_MAX_WATCHERS`    | Most files watched for changes at once. Default 256, range 1 to 4096. |
+| `FS_LOG_LEVEL`       | Same as `--log-level`. Logs go to stderr.                             |
+| `NO_COLOR`           | Any value turns off colored output.                                   |
 
 These variables are for HTTP only:
 
@@ -190,18 +192,18 @@ These variables are for HTTP only:
 
 ## Limits
 
-| Limit                                                   | Value                                                      |
-| :------------------------------------------------------ | :--------------------------------------------------------- |
-| Largest file `read` loads                               | 10 MiB by default (`--max-file-size`, up to 100 MiB)       |
-| Total content of one `create` call                      | Same as the file size limit                                |
-| Total text of one batched `read`                        | 512 KiB; files past the budget are reported as skipped     |
-| Files per `create`, `move` call                         | 100                                                        |
-| Paths per `read`, `stat`, `delete` call                 | 1000                                                       |
-| Files per `edit` call                                   | 5, with up to 100 edits per file                           |
-| `find_files` / `search_text` results                    | Up to 10,000 per call, paged                               |
-| `list` entries                                          | 1000 per page by default, up to 20,000                     |
-| `list`, `stat`, `read`, search tools and `replace_text` | Time out after about 5 seconds; narrow the path or pattern |
-| Cached results and page cursors                         | Expire after about 60 seconds                              |
+| Limit                                                   | Value                                                                              |
+| :------------------------------------------------------ | :--------------------------------------------------------------------------------- |
+| Largest file `read` loads                               | 10 MiB by default (`--max-file-size`, up to 100 MiB)                               |
+| Total content of one `create` call                      | Same as the file size limit                                                        |
+| Total text of one batched `read`                        | 512 KiB; files past the budget are reported as skipped                             |
+| Files per `create`, `move` call                         | 100                                                                                |
+| Paths per `read`, `stat`, `delete` call                 | 1000                                                                               |
+| Files per `edit` call                                   | 5, with up to 100 edits per file                                                   |
+| `find_files` / `search_text` results                    | Up to 10,000 per call, paged                                                       |
+| `list` entries                                          | 1000 per page by default, up to 20,000                                             |
+| `list`, `stat`, `read`, search tools and `replace_text` | Time out after 5 seconds by default (`--tool-timeout`); narrow the path or pattern |
+| Cached results and page cursors                         | Expire after about 60 seconds                                                      |
 
 `read` handles text files and returns images and audio as media. It refuses
 other binary files and UTF-16 text files.
@@ -343,6 +345,11 @@ folder's files one by one, or using a path that does not exist yet.
 **A search misses files.** By default, searches skip hidden files,
 `.gitignore`d files, and folders like `node_modules`, `dist`, and `.git`. Ask
 for `includeHidden` or `includeIgnored`.
+
+**A search stops early with `scan stopped early: timeout`.** Narrow `path` or
+`pattern` first. On a very large folder, raise the limit, for example
+`--tool-timeout 30000`. Most clients give up on a call after 60 seconds, so stay
+below that unless your client resets its timeout on progress.
 
 **Windows paths in JSON.** Escape backslashes (`"C:\\Users\\me\\project"`)
 or use forward slashes (`"C:/Users/me/project"`).

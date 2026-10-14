@@ -382,7 +382,8 @@ pattern. The [limits table](configuration.md#limits) has the numbers.
   progress. The SDK's default request timeout is 60 seconds.
 - Abort the call's `AbortSignal` to cancel it. The SDK sends
   `notifications/cancelled` and rejects with an `AbortError`.
-- `list`, `stat` and `read` stop themselves after about 5 seconds with a
+- `list`, `stat` and `read` stop themselves after 5 seconds by default (the
+  server's `--tool-timeout` or `FS_TOOL_TIMEOUT_MS` changes this) with a
   `TIMEOUT` error. `find_files` and `search_text` stop at the same
   deadline but return what they found so far, with
   `_meta.stoppedReason: 'timeout'` (see
