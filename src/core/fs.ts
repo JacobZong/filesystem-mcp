@@ -558,7 +558,11 @@ export class GuardedFileSystem {
     const signal = options?.signal;
     // Refuse an already-cancelled call before any validation or I/O.
     signal?.throwIfAborted();
-    const { resolvedPath } = await this.pathGuard.validateExistingPathDetailed(dirPath);
+    // A late validation result is a plain object, so a stalled realpath needs no release.
+    const { resolvedPath } = await withAbort(
+      this.pathGuard.validateExistingPathDetailed(dirPath),
+      signal,
+    );
     // With procfs (COUNT_THROUGH_FD), open the directory itself with O_NOFOLLOW and check where
     // the open descriptor really is, so a directory or ancestor swapped for a symlink after
     // validation is refused. Then read entries through the descriptor, which a later swap cannot
@@ -643,7 +647,12 @@ export class GuardedFileSystem {
           });
         }
       }
-      await handle?.close();
+      // A failed close must not replace the error the count threw, so it is logged, not thrown.
+      await handle?.close().catch((closeErr: unknown) => {
+        Logger.warn(
+          `Failed to close dir descriptor for ${resolvedPath}: ${formatUnknownErrorMessage(closeErr)}`,
+        );
+      });
     }
   }
 }

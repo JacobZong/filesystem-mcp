@@ -1435,6 +1435,31 @@ describe('GuardedFileSystem.countEntries', () => {
     });
   });
 
+  it('checks the signal after the last read', async (t) => {
+    const dir = join(root, 'signal-after-read');
+    await mkdir(dir);
+    const controller = new AbortController();
+    // The last read resolves null, and the abort lands in the microtask gap before the count
+    // returns, so only the check after the loop can refuse it.
+    const drained = {
+      read: () => {
+        queueMicrotask(() => controller.abort());
+        return Promise.resolve(null);
+      },
+      close: async () => {},
+    };
+    t.mock.method(fsPromises, 'opendir', async () => drained as unknown as Dir);
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(fs.countEntries(dir, { signal: controller.signal }), {
+        name: 'AbortError',
+      });
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
   it('a stalled directory read ends at the deadline', async (t) => {
     const dir = join(root, 'stalled-read');
     await mkdir(dir);
@@ -1477,6 +1502,63 @@ describe('GuardedFileSystem.countEntries', () => {
       } finally {
         t.mock.restoreAll();
         syncBuiltinESMExports();
+      }
+    },
+  );
+
+  it('a stalled path validation ends at the deadline', async (t) => {
+    const dir = join(root, 'stalled-realpath');
+    await mkdir(dir);
+    const originalRealpath = fsPromises.realpath.bind(fsPromises);
+    // Only the directory under test hangs; every other realpath call passes through.
+    t.mock.method(fsPromises, 'realpath', (path: PathLike) =>
+      String(path) === normalizePath(dir) ? new Promise<never>(() => {}) : originalRealpath(path),
+    );
+    syncBuiltinESMExports();
+    try {
+      const started = performance.now();
+      await assert.rejects(fs.countEntries(dir, { signal: AbortSignal.timeout(200) }), {
+        name: 'TimeoutError',
+      });
+      assert.ok(performance.now() - started < 2000);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it(
+    'a descriptor close failure does not mask the original error',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async (t) => {
+      const dir = join(root, 'close-fails');
+      await mkdir(dir);
+      const originalOpen = fsPromises.open.bind(fsPromises);
+      // The real descriptor is opened, but its close rejects. The real close runs in finally.
+      let closeAttempted = false;
+      let realClose: (() => Promise<void>) | undefined;
+      t.mock.method(fsPromises, 'open', async (...args: Parameters<typeof fsPromises.open>) => {
+        const handle = await originalOpen(...args);
+        realClose = handle.close.bind(handle);
+        handle.close = () => {
+          closeAttempted = true;
+          return Promise.reject(new Error('close-fail'));
+        };
+        return handle;
+      });
+      t.mock.method(fsPromises, 'opendir', async () => {
+        throw new Error('boom');
+      });
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(fs.countEntries(dir), { message: 'boom' });
+        assert.ok(closeAttempted, 'the descriptor close must have been attempted');
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+        await realClose?.();
       }
     },
   );
