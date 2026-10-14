@@ -136,7 +136,7 @@ projects:
 For a one-click install, download
 [`filesystem-mcp.mcpb`](https://github.com/j0hanz/filesystem-mcp/releases/latest/download/filesystem-mcp.mcpb),
 open it with Claude Desktop, and pick the folders to allow. Claude Desktop's
-built-in Node.js runs it.
+built-in Node.js runs it. The extension's settings also let you turn on read-only mode and block more files.
 
 To set it up by hand, add this to `claude_desktop_config.json`
 (Settings → Developer → Edit Config):
