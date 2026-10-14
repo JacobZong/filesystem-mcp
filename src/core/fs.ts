@@ -32,7 +32,7 @@ import {
 import { detectMimeFromContent, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
-import { normalizePath, respellCaseOnlyTarget } from './path-utils.ts';
+import { isSamePath, normalizePath, respellCaseOnlyTarget } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
 import {
@@ -540,7 +540,7 @@ export class GuardedFileSystem {
       const openedPath = handle ? await this.#assertFdWithinRoots(handle, dirPath) : undefined;
       // An in-root swap passes the roots check, but the children would be filtered under the
       // validated directory's spelling, not the one actually opened.
-      if (openedPath !== undefined && openedPath !== normalizePath(resolvedPath)) {
+      if (openedPath !== undefined && !isSamePath(openedPath, resolvedPath)) {
         throw new FsError(
           ErrorCode.ACCESS_DENIED,
           'Path changed under validation and now resolves to another directory (TOCTOU).',
