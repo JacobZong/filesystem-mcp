@@ -638,7 +638,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "search_text",
       "title": "Search Content",
-      "description": "Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers and paths relative to the searched directory. Patterns match within one line. find_files matches file names.",
+      "description": "Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers and paths relative to the root, ready to pass to read or edit. Patterns match within one line. find_files matches file names.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -725,7 +725,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "find_files",
       "title": "Find Files",
-      "description": "Find files by name or glob pattern; returns file paths relative to the searched directory. A pattern without / matches file names at any depth. search_text searches contents.",
+      "description": "Find files by name or glob pattern; returns file paths relative to the root, ready to pass to read or edit. A pattern without / matches file names at any depth. search_text searches contents.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1109,7 +1109,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "search_text",
       "title": "Search Content",
-      "description": "Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers and paths relative to the searched directory. Patterns match within one line. find_files matches file names.",
+      "description": "Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers and paths relative to the root, ready to pass to read or edit. Patterns match within one line. find_files matches file names.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1196,7 +1196,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "find_files",
       "title": "Find Files",
-      "description": "Find files by name or glob pattern; returns file paths relative to the searched directory. A pattern without / matches file names at any depth. search_text searches contents.",
+      "description": "Find files by name or glob pattern; returns file paths relative to the root, ready to pass to read or edit. A pattern without / matches file names at any depth. search_text searches contents.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -2,7 +2,6 @@ import * as z from 'zod/v4';
 
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.ts';
-import { toPosixRelative } from '../core/path-utils.ts';
 import {
   CursorSchema,
   IncludeHidden,
@@ -68,7 +67,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
   name: 'find_files',
   title: 'Find Files',
   description:
-    'Find files by name or glob pattern; returns file paths relative to the searched directory. ' +
+    'Find files by name or glob pattern; returns file paths relative to the root, ready to pass to read or edit. ' +
     'A pattern without / matches file names at any depth. search_text searches contents.',
   input: SearchFilesInputSchema,
   readOnlyHint: true,
@@ -102,14 +101,21 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
           signal: ctx.signal,
         };
         const result = await searchFiles(basePath, args.pattern, searchOptions, ctx.fs.pathGuard);
+        // Relative to the root, not to basePath: `a.ts` from a search of
+        // `src` would name `<root>/a.ts` when passed back.
+        const paths = ctx.fs.pathGuard.resultPaths(result.basePath);
         return {
-          items: result.results.map((r) => ({ path: toPosixRelative(result.basePath, r.path) })),
-          metadata: { root: result.basePath, ...result.summary },
+          items: result.results.map((r) => ({ path: paths.show(r.path) })),
+          metadata: { root: paths.root, ...result.summary },
           truncated: result.summary.truncated,
         };
       },
-      externalize: (results) =>
-        putJsonResource(ctx.resourceStore, `${args.pattern} files`, results),
+      // The whole result, root included: its paths are relative to that root.
+      externalize: (results, metadata) =>
+        putJsonResource(ctx.resourceStore, `${args.pattern} files`, {
+          root: metadata.root,
+          results,
+        }),
     });
 
     const { metadata, offset } = paged;

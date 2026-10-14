@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Read Changed if you join `search_text`, `find_files` or `replace_text`
+result paths onto the folder you searched: they are now relative to the
+root, which a new or changed `root` field names.
+
 ### Security
 
 - **A glob pattern can no longer freeze the server.** `find_files`,
@@ -38,6 +42,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the server's working directory. A `create` or `edit` batch that names
   one file by both a relative and an absolute path is refused as a
   duplicate, as two spellings of one absolute path already were.
+- **Search results name files from the root, so they read back as given.**
+  `search_text`, `find_files` and `replace_text` printed paths relative to
+  the folder they searched: a search of `src` printed `a.ts`, which `read`
+  or `edit` resolved to `<root>/a.ts`, another file when the root holds
+  one. They now print paths relative to the root holding that folder
+  (`src/a.ts`), in their text and in `matches[].file`, `results[].path` and
+  diff headers. `find_files`' `root` field now names that root, as
+  `list_roots` shows it, instead of the folder searched, and `search_text`
+  and `replace_text` gain the same field. A path whose relative spelling
+  would not read back as the same file is printed absolute instead: with
+  the working directory in a subfolder of a root, with several roots and the
+  working directory outside them, under a folder granted during the
+  session, or for a name such as `~` or a blank one. `list` keeps its
+  entries relative to the listed folder, but the tree's first line now names
+  a listed subfolder the same way (`src/core`, not `core`). `find_files`'
+  cached full result (its `resourceUri`) is now the whole result, an object
+  with `root` and `results`, like `search_text`'s, instead of a bare array.
 - **Literal `search_text` is about twice as fast.** A literal pattern (the
   default, `isRegex: false`) is matched in native code instead of RE2, which
   copied every file into its heap just to rule it out. Each file also costs

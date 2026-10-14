@@ -215,7 +215,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const matches = (search._meta as { matches?: { file: string }[] }).matches ?? [];
     assert.deepStrictEqual(
       matches.map((m) => m.file),
-      ['plain.txt'],
+      ['boundary_walk/plain.txt'],
       'search_text must not match inside .env',
     );
 
@@ -225,8 +225,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     const paths =
       (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
-    assert.ok(paths.includes('plain.txt'));
-    assert.ok(!paths.includes('.env'), `find_files must not list .env: ${paths.join(',')}`);
+    assert.ok(paths.includes('boundary_walk/plain.txt'));
+    assert.ok(
+      !paths.some((path) => path.endsWith('.env')),
+      `find_files must not list .env: ${paths.join(',')}`,
+    );
 
     const listed = await harness.client.callTool({
       name: 'list',
@@ -2038,7 +2041,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     const paths =
       (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
-    assert.deepStrictEqual(paths, ['keep.txt']);
+    assert.deepStrictEqual(paths, ['scoped_ignored/keep.txt']);
 
     const searched = await harness.client.callTool({
       name: 'search_text',
@@ -2046,7 +2049,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     const files =
       (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file) ?? [];
-    assert.deepStrictEqual(files, ['keep.txt']);
+    assert.deepStrictEqual(files, ['scoped_ignored/keep.txt']);
 
     const listed = await harness.client.callTool({ name: 'list', arguments: { path: sub } });
     const names =
@@ -2067,7 +2070,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     const allPaths =
       (all._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
-    assert.deepStrictEqual(allPaths.sort(), ['drop.log', 'keep.txt']);
+    assert.deepStrictEqual(allPaths.sort(), ['scoped_ignored/drop.log', 'scoped_ignored/keep.txt']);
   });
 
   it('TC-FUNC-075: list text carries nextCursor', async () => {
@@ -2821,7 +2824,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       [...(firstStructured.results ?? []), ...(secondStructured.results ?? [])].map(
         (entry) => entry.path,
       ),
-      ['bravo.txt', 'charlie.txt'],
+      ['find_pages/bravo.txt', 'find_pages/charlie.txt'],
     );
     assert.strictEqual(
       secondStructured.resourceUri,
@@ -2850,7 +2853,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.deepStrictEqual(
       (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path),
-      ['sub/deep.ts', 'sub/top.ts', 'top.ts'],
+      ['basename_glob/sub/deep.ts', 'basename_glob/sub/top.ts', 'basename_glob/top.ts'],
     );
 
     const searched = await harness.client.callTool({
@@ -2859,7 +2862,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.deepStrictEqual(
       (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file),
-      ['sub/deep.ts'],
+      ['basename_glob/sub/deep.ts'],
     );
 
     // Naming a file must still search that file alone, not its namesake below.
@@ -2869,7 +2872,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.deepStrictEqual(
       (named._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file),
-      ['top.ts'],
+      ['basename_glob/top.ts'],
     );
   });
 
@@ -2993,7 +2996,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const matches = (result._meta as { matches?: { file: string; line: number }[] }).matches ?? [];
     assert.deepStrictEqual(
       matches.map((m) => m.file),
-      ['[slug].tsx'],
+      ['globby/[slug].tsx'],
       'exactly the named file, not the decoy',
     );
   });
@@ -3014,11 +3017,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       },
     });
     assert.notStrictEqual(result.isError, true);
-    assert.strictEqual(firstTextBlock(result).text, '.hidden.log:1: NEEDLE_SCOPE');
+    assert.strictEqual(firstTextBlock(result).text, 'explicit_scope/.hidden.log:1: NEEDLE_SCOPE');
     const matches = (result._meta as { matches: { file: string; line: number }[] }).matches;
     assert.deepStrictEqual(
       matches.map(({ file, line }) => ({ file, line })),
-      [{ file: '.hidden.log', line: 1 }],
+      [{ file: 'explicit_scope/.hidden.log', line: 1 }],
     );
   });
 
@@ -3033,7 +3036,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
     const paths =
       (result._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
-    assert.deepStrictEqual(paths, ['docs/v1..2.md']);
+    assert.deepStrictEqual(paths, ['globby/docs/v1..2.md']);
   });
 
   it('search_text: an empty-line pattern sees no phantom line after a trailing newline', async () => {
@@ -3054,7 +3057,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     };
     assert.deepStrictEqual(
       structured.matches?.map((m) => `${m.file}:${String(m.line)}`),
-      ['blank.txt:2'],
+      ['phantom_line/blank.txt:2'],
     );
     assert.strictEqual(structured.totalMatches, 1);
   });
@@ -3200,23 +3203,23 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.deepStrictEqual(
       structured.matches?.map((m) => [m.file, m.line, m.before, m.after]),
       [
-        ['a.txt', 2, ['import x'], ['const y']],
-        ['a.txt', 4, ['const y'], ['}']],
-        ['b.txt', 2, ['foo'], ['bar']],
+        ['grep_context/a.txt', 2, ['import x'], ['const y']],
+        ['grep_context/a.txt', 4, ['const y'], ['}']],
+        ['grep_context/b.txt', 2, ['foo'], ['bar']],
       ],
     );
     assert.ok(
       (firstTextBlock(result).text ?? '').startsWith(
         [
-          'a.txt-1- import x',
-          'a.txt:2: NEEDLE one',
-          'a.txt-3- const y',
-          'a.txt:4: NEEDLE two',
-          'a.txt-5- }',
+          'grep_context/a.txt-1- import x',
+          'grep_context/a.txt:2: NEEDLE one',
+          'grep_context/a.txt-3- const y',
+          'grep_context/a.txt:4: NEEDLE two',
+          'grep_context/a.txt-5- }',
           '--',
-          'b.txt-1- foo',
-          'b.txt:2: NEEDLE',
-          'b.txt-3- bar',
+          'grep_context/b.txt-1- foo',
+          'grep_context/b.txt:2: NEEDLE',
+          'grep_context/b.txt-3- bar',
         ].join('\n'),
       ),
       firstTextBlock(result).text,
@@ -3252,7 +3255,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
     assert.strictEqual(
       firstTextBlock(result).text,
-      ['c.txt-1- x', 'c.txt:2: NEEDLE a', 'c.txt:3: NEEDLE b'].join('\n'),
+      [
+        'grep_context_adjacent/c.txt-1- x',
+        'grep_context_adjacent/c.txt:2: NEEDLE a',
+        'grep_context_adjacent/c.txt:3: NEEDLE b',
+      ].join('\n'),
     );
   });
 
@@ -3267,10 +3274,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         arguments: { path: dir, searchPattern, isRegex, caseSensitive },
       });
       return (
-        (r._meta as { matches?: { file: string; line: number; column: number }[] }).matches ?? []
-      )
-        .map((m) => `${m.file}:${m.line}:${m.column}`)
-        .sort();
+        ((r._meta as { matches?: { file: string; line: number; column: number }[] }).matches ?? [])
+          // Paths are root-relative; this test is about matching, so compare names.
+          .map((m) => `${m.file.replace(/^prefilter_semantics\//u, '')}:${m.line}:${m.column}`)
+          .sort()
+      );
     };
 
     assert.deepStrictEqual(await run('^import', true), ['lf.txt:2:0']);
@@ -3522,7 +3530,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         name: 'search_text',
         arguments: { path: dir, searchPattern: 'BIGNEEDLE' },
       });
-      assert.strictEqual(firstTextBlock(beside).text, `small.txt:1: BIGNEEDLE\n\n${skipLine}`);
+      assert.strictEqual(
+        firstTextBlock(beside).text,
+        `skipped_big/small.txt:1: BIGNEEDLE\n\n${skipLine}`,
+      );
     });
   });
 
@@ -3580,7 +3591,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       name: 'search_text',
       arguments: { path: join(tmpDir, 'search_bin'), searchPattern: 'BINNEEDLE' },
     });
-    assert.strictEqual(firstTextBlock(result).text, 'text.txt:1: BINNEEDLE');
+    assert.strictEqual(firstTextBlock(result).text, 'search_bin/text.txt:1: BINNEEDLE');
     assert.strictEqual((result._meta as { filesScanned?: number }).filesScanned, 2);
     assert.strictEqual((result._meta as { skippedBinary?: number }).skippedBinary, 1);
   });

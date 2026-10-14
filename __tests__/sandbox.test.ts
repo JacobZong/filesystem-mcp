@@ -425,16 +425,18 @@ async function stress(client: Client, root: string) {
   }
   assert.equal(findCursor, undefined);
   assert.equal(searchCursor, undefined);
-  assert.deepEqual(paths, names);
+  // Result paths are relative to the root, so a scoped search names its folder.
+  const underRoot = (name: string): string => `many/${name}`;
+  assert.deepEqual(paths, names.map(underRoot));
   assert.deepEqual(
     matches.map(({ file, line, content }) => ({ file, line, content })),
-    names.map((file) => ({ file, line: 1, content: `marker ${file}` })),
+    names.map((name) => ({ file: underRoot(name), line: 1, content: `marker ${name}` })),
   );
   const currentNames = [...names.slice(0, -1), 'late.txt'];
   const fresh = metadata<Found>(await call(client, 'find_files', { ...findArgs, maxResults: 100 }));
   assert.deepEqual(
     fresh.results.map((item) => item.path),
-    currentNames,
+    currentNames.map(underRoot),
   );
   assert.deepEqual((await readdir(directory)).sort(), currentNames);
   for (const name of currentNames) {

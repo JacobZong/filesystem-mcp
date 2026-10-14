@@ -5,7 +5,7 @@ import * as z from 'zod/v4';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { formatCount, pageTrailer, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
-import { toPosixRelative } from '../core/path-utils.ts';
+import type { ResultPaths } from '../core/path.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
@@ -30,8 +30,8 @@ import { defineTool, type ToolCtx } from './define.ts';
 // Type Definitions
 type SearchResultValue = Awaited<ReturnType<typeof searchContent>>;
 type SearchMatchPayload = SearchResultValue['matches'][number];
-/** The engine's own summary is the page metadata; nothing is copied out of it. */
-type SearchContentPageMetadata = SearchResultValue['summary'];
+/** The engine's own summary, plus the root the match paths are relative to. */
+type SearchContentPageMetadata = SearchResultValue['summary'] & { readonly root: string };
 
 const GrepInputSchema = z.strictObject({
   path: OptionalPath.describe(
@@ -69,6 +69,8 @@ const GrepInputSchema = z.strictObject({
 });
 
 interface SearchOutput {
+  /** The root `matches[].file` is relative to; a file that would not read back from it is absolute. */
+  root: string;
   matches: SearchMatchPayload[];
   totalMatches?: number;
   filesMatched?: number;
@@ -138,6 +140,7 @@ function searchContentOutput(
   resourceUri: string | undefined,
 ): SearchOutput {
   return {
+    root: metadata.root,
     matches: [...matches],
     totalMatches: metadata.matchingLines,
     filesScanned: metadata.filesScanned,
@@ -152,14 +155,14 @@ function searchContentOutput(
   };
 }
 
-function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
+function buildSortedPayloads(result: SearchResultValue, paths: ResultPaths): SearchMatchPayload[] {
   const relativeByFile = new Map<string, string>();
 
   const getRelativeFile = (file: string): string => {
     const cached = relativeByFile.get(file);
     if (cached !== undefined) return cached;
 
-    const rel = toPosixRelative(result.basePath, file);
+    const rel = paths.show(file);
     relativeByFile.set(file, rel);
     return rel;
   };
@@ -178,7 +181,7 @@ function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
   return payloads;
 }
 
-/** Explicit files bypass glob filtering; their parent anchors the relative result paths. */
+/** Explicit files bypass glob filtering; their parent is the directory walked. */
 async function resolveSearchScope(
   path: string | undefined,
   ctx: ToolCtx,
@@ -206,7 +209,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   title: 'Search Content',
   description:
     'Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers ' +
-    'and paths relative to the searched directory. Patterns match within one line. find_files matches file names.',
+    'and paths relative to the root, ready to pass to read or edit. Patterns match within one line. find_files matches file names.',
   input: GrepInputSchema,
   readOnlyHint: true,
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
@@ -250,9 +253,12 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
             ctx.fs.pathGuard,
           );
 
+          // Relative to the root, not to basePath: `a.ts` from a search of
+          // `src` would name `<root>/a.ts` when passed back.
+          const paths = ctx.fs.pathGuard.resultPaths(basePath);
           return {
-            items: buildSortedPayloads(result),
-            metadata: result.summary,
+            items: buildSortedPayloads(result, paths),
+            metadata: { ...result.summary, root: paths.root },
             truncated: result.summary.truncated,
           };
         },

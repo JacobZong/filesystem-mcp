@@ -353,7 +353,8 @@ The basics:
 - **Paths.** A relative path resolves against the server's working directory
   when that is inside a root, and against the root otherwise. With several
   roots, it must exist under exactly one of them. Absolute paths are never
-  ambiguous.
+  ambiguous. Search results are printed relative to the root, so a result
+  can be passed straight back.
 - **Confirmations.** Overwrites, recursive deletes, and paths outside the
   roots are questions for the user. Declare the `elicitation` capability and
   answer them in a handler, or, on the 2026-07-28 protocol, take them as data
