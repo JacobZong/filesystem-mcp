@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { constants, existsSync } from 'node:fs';
 import type { Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
@@ -27,7 +28,6 @@ import {
   isFsError,
   isNodeError,
   isNotFoundErrno,
-  rethrowIfAborted,
 } from './errors.ts';
 import { detectMimeFromContent, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
@@ -40,6 +40,7 @@ import {
   APPEND_NOFOLLOW,
   assertFileStats,
   createTooLargeError,
+  O_NOFOLLOW,
   READ_NOFOLLOW,
   readFileWithStats,
 } from './read.ts';
@@ -47,6 +48,13 @@ import { getMaxTextFileSize } from './util.ts';
 
 export type { FileType };
 export type { Stats };
+
+// Directory open for countEntries. O_NOFOLLOW refuses a symlink named as the
+// directory; Linux only, like the descriptor re-check it feeds.
+const DIR_NOFOLLOW = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW;
+// The descriptor re-check and the read through /proc/self/fd need Linux with procfs mounted,
+// as the read path's re-check does; elsewhere the count reads the directory by path.
+const COUNT_THROUGH_FD = process.platform === 'linux' && existsSync('/proc/self/fd');
 
 // ─── Domain primitives ────────────────────────────────────────────────────────
 
@@ -514,36 +522,41 @@ export class GuardedFileSystem {
    * Direct children of a directory, leaving out entries the guard treats as
    * sensitive so the count never reveals what listings hide. Hidden and
    * ignored entries count: this answers "is it empty?", not "what would list show?".
-   * A symlinked child is resolved, so a link to a secret or outside target is not counted.
+   * A symlinked child counts only when list would show it.
    */
   async countEntries(dirPath: string, options?: { signal?: AbortSignal }): Promise<number> {
     const { resolvedPath } = await this.pathGuard.validateExistingPathDetailed(dirPath);
-    let count = 0;
-    for await (const entry of await fsOpendir(resolvedPath)) {
-      options?.signal?.throwIfAborted();
-      const childPath = join(dirPath, entry.name);
-      if (this.pathGuard.isSensitive(childPath)) continue;
-      // list walks the real directory, so it checks every child, links
-      // included, under its real spelling: a deny rule naming the real
-      // directory hides the child under an alias too.
-      if (this.pathGuard.isSensitive(join(resolvedPath, entry.name))) continue;
-      if (entry.isSymbolicLink()) {
-        // Same test as list's isEntryAccessible: a link that escapes the roots,
-        // dangles, or points at a secret file is hidden there, so it is not counted.
-        try {
-          const { requestedPath, resolvedPath: target } =
-            await this.pathGuard.validateExistingPathDetailed(childPath);
-          if (this.pathGuard.isSensitive(requestedPath) || this.pathGuard.isSensitive(target)) {
-            continue;
-          }
-        } catch (error) {
-          rethrowIfAborted(error);
+    // With procfs (COUNT_THROUGH_FD), open the directory itself with O_NOFOLLOW and check where
+    // the open descriptor really is, so a directory or ancestor swapped for a symlink after
+    // validation is refused. Then read entries through the descriptor, which a later swap cannot
+    // redirect.
+    const handle = COUNT_THROUGH_FD ? await fsOpen(resolvedPath, DIR_NOFOLLOW) : undefined;
+    try {
+      if (handle) await this.#assertFdWithinRoots(handle, dirPath);
+      const readPath = handle ? `/proc/self/fd/${String(handle.fd)}` : resolvedPath;
+      let count = 0;
+      for await (const entry of await fsOpendir(readPath)) {
+        options?.signal?.throwIfAborted();
+        if (this.pathGuard.isSensitive(join(dirPath, entry.name))) continue;
+        // list walks the real directory, so it checks every child, links
+        // included, under its real spelling: a deny rule naming the real
+        // directory hides the child under an alias too.
+        if (this.pathGuard.isSensitive(join(resolvedPath, entry.name))) continue;
+        // A link counts only when list would show it: same rule, same error policy.
+        if (
+          entry.isSymbolicLink() &&
+          !(await this.pathGuard.isEntryAccessible(join(resolvedPath, entry.name)))
+        ) {
           continue;
         }
+        count += 1;
       }
-      count += 1;
+      // A deadline that fired during the last read still ends the call, even with no entries left.
+      options?.signal?.throwIfAborted();
+      return count;
+    } finally {
+      await handle?.close();
     }
-    return count;
   }
 }
 

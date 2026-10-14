@@ -20,6 +20,7 @@ const { O_NOFOLLOW = 0, O_NONBLOCK = 0 } = constants as {
   O_NOFOLLOW?: number;
   O_NONBLOCK?: number;
 };
+export { O_NOFOLLOW };
 export const READ_NOFOLLOW = constants.O_RDONLY | O_NOFOLLOW;
 // O_NONBLOCK: an append to a symlink-swapped FIFO fails fast instead of hanging.
 export const APPEND_NOFOLLOW = constants.O_WRONLY | constants.O_APPEND | O_NOFOLLOW | O_NONBLOCK;

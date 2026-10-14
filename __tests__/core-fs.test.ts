@@ -3,6 +3,7 @@ import type { PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
   rename,
@@ -12,11 +13,12 @@ import fsPromises, {
   writeFile,
 } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { after, before, describe, it, mock } from 'node:test';
 
-import { ErrorCode, isFsError, Problem } from '../src/core/errors.ts';
+import { ErrorCode, isFsError, isNodeError, Problem } from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
@@ -1229,5 +1231,185 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
         );
       });
     });
+  });
+});
+
+describe('GuardedFileSystem.countEntries', () => {
+  let root: string;
+  let ctx: FilesystemServerContext;
+  let fs: GuardedFileSystem;
+  // O_NOFOLLOW refuses a symlink named as the directory before the descriptor check runs.
+  // Linux reports ENOTDIR for it (O_DIRECTORY is checked first); ELOOP is accepted as well.
+  const refusedSymlinkOpen = (error: unknown) =>
+    isNodeError(error) && ['ENOTDIR', 'ELOOP'].includes(error.code ?? '');
+
+  before(async () => {
+    root = await createTestRoot();
+    ctx = await createTestServer([root]);
+    fs = new GuardedFileSystem(ctx.pathGuard);
+  });
+
+  after(async () => {
+    if (ctx) {
+      ctx.disposeRuntimeState();
+      await ctx.mcp.close();
+    }
+    if (root) {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it(
+    'refuses a directory swapped for a symlink after validation',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async () => {
+      const target = join(root, 'target');
+      await writeTestFile(target, 'inside.txt', 'inside');
+      const outside = await mkdtemp(join(tmpdir(), 'fsmcp-outside-'));
+      const guard = ctx.pathGuard;
+      const validate = guard.validateExistingPathDetailed.bind(guard);
+      let swapped = false;
+      guard.validateExistingPathDetailed = async (requestedPath: string) => {
+        const details = await validate(requestedPath);
+        if (requestedPath === target && !swapped) {
+          swapped = true;
+          await rename(target, `${target}.bak`);
+          await symlink(outside, target, 'dir');
+        }
+        return details;
+      };
+      try {
+        for (const name of ['a.txt', 'b.txt', 'c.txt']) await writeTestFile(outside, name, name);
+        await assert.rejects(fs.countEntries(target), refusedSymlinkOpen);
+      } finally {
+        Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+        await cleanupTestRoot(outside);
+      }
+    },
+  );
+
+  it(
+    'refuses a directory swapped for a symlink to another directory inside the roots',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async () => {
+      const target2 = join(root, 'target2');
+      await writeTestFile(target2, 'inside.txt', 'inside');
+      const other = join(root, 'other');
+      await writeTestFile(other, 'a.txt', 'a');
+      await writeTestFile(other, 'b.txt', 'b');
+      const guard = ctx.pathGuard;
+      const validate = guard.validateExistingPathDetailed.bind(guard);
+      let swapped = false;
+      guard.validateExistingPathDetailed = async (requestedPath: string) => {
+        const details = await validate(requestedPath);
+        if (requestedPath === target2 && !swapped) {
+          swapped = true;
+          await rename(target2, `${target2}.bak`);
+          await symlink(other, target2, 'dir');
+        }
+        return details;
+      };
+      try {
+        await assert.rejects(fs.countEntries(target2), refusedSymlinkOpen);
+      } finally {
+        Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+      }
+    },
+  );
+
+  it(
+    'refuses an ancestor swapped for a symlink after validation',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async () => {
+      const dir = join(root, 'anc', 'dir');
+      await writeTestFile(dir, 'inside.txt', 'inside');
+      const outside = await mkdtemp(join(tmpdir(), 'fsmcp-outside-'));
+      const guard = ctx.pathGuard;
+      const validate = guard.validateExistingPathDetailed.bind(guard);
+      let swapped = false;
+      guard.validateExistingPathDetailed = async (requestedPath: string) => {
+        const details = await validate(requestedPath);
+        if (requestedPath === dir && !swapped) {
+          swapped = true;
+          await rename(join(root, 'anc'), join(root, 'anc.bak'));
+          await symlink(outside, join(root, 'anc'), 'dir');
+        }
+        return details;
+      };
+      try {
+        for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+          await writeTestFile(join(outside, 'dir'), name, name);
+        }
+        await assert.rejects(
+          fs.countEntries(dir),
+          (error) => isFsError(error) && error.code === ErrorCode.ACCESS_DENIED,
+        );
+      } finally {
+        Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+        await cleanupTestRoot(outside);
+      }
+    },
+  );
+
+  it('propagates an unexpected error from a symlinked entry', async (t) => {
+    const dir = join(root, 'links');
+    await writeTestFile(dir, 'a.txt', 'a');
+    await writeTestFile(dir, 'b.txt', 'b');
+    const link = join(dir, 'link.txt');
+    if (
+      !(await trySymlink(join(dir, 'a.txt'), link, () => t.skip('symlink not permitted'), 'file'))
+    )
+      return;
+    const guard = ctx.pathGuard;
+    const validate = guard.validateExistingPathDetailed.bind(guard);
+    let injected: NodeJS.ErrnoException | undefined;
+    guard.validateExistingPathDetailed = async (requestedPath: string) => {
+      if (injected && requestedPath.endsWith('link.txt')) throw injected;
+      return validate(requestedPath);
+    };
+    try {
+      injected = Object.assign(new Error('EIO: i/o error'), {
+        code: 'EIO',
+        errno: -5,
+        syscall: 'realpath',
+      });
+      await assert.rejects(fs.countEntries(dir));
+
+      // A dangling link is skipped, as list skips it.
+      injected = Object.assign(new Error('ENOENT: no such file or directory'), {
+        code: 'ENOENT',
+        errno: -2,
+        syscall: 'realpath',
+      });
+      assert.strictEqual(await fs.countEntries(dir), 2);
+    } finally {
+      Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+    }
+  });
+
+  it('checks the signal after the last entry', async () => {
+    const emptyDir = join(root, 'empty');
+    await mkdir(emptyDir);
+    await assert.rejects(fs.countEntries(emptyDir, { signal: AbortSignal.abort() }), {
+      name: 'AbortError',
+    });
+  });
+
+  it('counts regular entries of a readable directory without resolving each one', async () => {
+    const dir = join(root, 'readonly');
+    await writeTestFile(dir, 'one.txt', '1');
+    await writeTestFile(dir, 'two.txt', '2');
+    await chmod(dir, 0o444);
+    try {
+      assert.strictEqual(await fs.countEntries(dir), 2);
+    } finally {
+      await chmod(dir, 0o755);
+    }
   });
 });

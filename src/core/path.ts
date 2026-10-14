@@ -164,11 +164,15 @@ export async function resolveAllowedDirectoriesState(
 /**
  * TOCTOU note: validation returns a plain string and the fs operation is a
  * later syscall, so a symlink swapped in between could redirect it. Reads and
- * appends in core/fs.ts open with O_NOFOLLOW (final component)
- * and re-check the fd's real path on Linux (ancestor swap). Residual: write
- * paths that resolve a parent by name (`rename`, `mkdir`, `rm`, `cp`) would
- * need openat()-relative-to-dirfd, which Node lacks; non-Linux skips the fd
- * re-check.
+ * appends in core/fs.ts open with O_NOFOLLOW (final component) and re-check the
+ * fd's real path on Linux (ancestor swap). stat's directory count opens and
+ * re-checks the directory, and reads entries through that descriptor, only on
+ * Linux with procfs; elsewhere it reads the directory by path, so the swap
+ * window stays there, like the read path's non-Linux residual. Residuals: the
+ * directory walker behind list and the search tools (core/glob.ts) still
+ * resolves each entry by path; write paths that resolve a parent by name
+ * (`rename`, `mkdir`, `rm`, `cp`) would need openat()-relative-to-dirfd, which
+ * Node lacks; non-Linux skips the fd re-check.
  */
 export class PathGuard {
   private allowedDirectoriesState: string[] | undefined;
