@@ -777,7 +777,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld: type, size (files only; use list for directory contents), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist.",
+      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1219,7 +1219,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "stat",
       "title": "Get File Info",
-      "description": "Get metadata without reading contents, like ls -ld: type, size (files only; use list for directory contents), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist.",
+      "description": "Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. Also checks whether paths exist.",
       "inputSchema": {
         "type": "object",
         "properties": {
