@@ -98,13 +98,17 @@ export class GuardedFileSystem {
    * for a symlink after validation still passes. Re-read the open descriptor's
    * real path (Linux `/proc/self/fd`; skipped elsewhere) and require it to stay
    * inside the roots. Run before any byte is read or written through `handle`.
+   * Resolves to the normalized real path checked, or undefined when /proc is unreadable.
    */
-  async #assertFdWithinRoots(handle: FileHandle, requestedPath: string): Promise<void> {
+  async #assertFdWithinRoots(
+    handle: FileHandle,
+    requestedPath: string,
+  ): Promise<string | undefined> {
     let fdPath: string;
     try {
       fdPath = await fsReadlink(`/proc/self/fd/${String(handle.fd)}`);
     } catch {
-      return;
+      return undefined;
     }
     // A replaced target reads back as "<path> (deleted)".
     const inRoots =
@@ -119,6 +123,7 @@ export class GuardedFileSystem {
         requestedPath,
       );
     }
+    return normalizePath(fdPath);
   }
 
   /** The one read open: O_NOFOLLOW, then the descriptor re-check above. */
@@ -532,7 +537,16 @@ export class GuardedFileSystem {
     // redirect.
     const handle = COUNT_THROUGH_FD ? await fsOpen(resolvedPath, DIR_NOFOLLOW) : undefined;
     try {
-      if (handle) await this.#assertFdWithinRoots(handle, dirPath);
+      const openedPath = handle ? await this.#assertFdWithinRoots(handle, dirPath) : undefined;
+      // An in-root swap passes the roots check, but the children would be filtered under the
+      // validated directory's spelling, not the one actually opened.
+      if (openedPath !== undefined && openedPath !== normalizePath(resolvedPath)) {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Path changed under validation and now resolves to another directory (TOCTOU).',
+          dirPath,
+        );
+      }
       const readPath = handle ? `/proc/self/fd/${String(handle.fd)}` : resolvedPath;
       let count = 0;
       for await (const entry of await fsOpendir(readPath)) {

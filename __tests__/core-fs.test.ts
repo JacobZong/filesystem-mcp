@@ -1357,6 +1357,40 @@ describe('GuardedFileSystem.countEntries', () => {
     },
   );
 
+  it(
+    'refuses an ancestor swapped for a symlink to another directory inside the roots',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async () => {
+      // Names differ from the test above, whose swapped ancestor is left behind as a dangling link.
+      const dir = join(root, 'swap-anc', 'dir');
+      await writeTestFile(dir, 'inside.txt', 'inside');
+      const other = join(root, 'swap-other');
+      for (const name of ['a.txt', 'b.txt']) await writeTestFile(join(other, 'dir'), name, name);
+      const guard = ctx.pathGuard;
+      const validate = guard.validateExistingPathDetailed.bind(guard);
+      let swapped = false;
+      guard.validateExistingPathDetailed = async (requestedPath: string) => {
+        const details = await validate(requestedPath);
+        if (requestedPath === dir && !swapped) {
+          swapped = true;
+          await rename(join(root, 'swap-anc'), join(root, 'swap-anc.bak'));
+          await symlink(other, join(root, 'swap-anc'), 'dir');
+        }
+        return details;
+      };
+      try {
+        await assert.rejects(
+          fs.countEntries(dir),
+          (error) => isFsError(error) && error.code === ErrorCode.ACCESS_DENIED,
+        );
+      } finally {
+        Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+      }
+    },
+  );
+
   it('propagates an unexpected error from a symlinked entry', async (t) => {
     const dir = join(root, 'links');
     await writeTestFile(dir, 'a.txt', 'a');
