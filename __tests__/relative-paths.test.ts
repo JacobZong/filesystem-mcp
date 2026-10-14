@@ -311,6 +311,25 @@ describe('relative paths', () => {
       assert.match(firstTextBlock(replaced).text ?? '', /--- src\/core\/x\.ts/u);
     });
 
+    it("find_files' cached full result names the root its paths are relative to", async () => {
+      const found = await harness.client.callTool({
+        name: 'find_files',
+        arguments: { path: 'src', pattern: '*.ts', maxResults: 1 },
+      });
+      const { resourceUri } = found._meta as { resourceUri?: string };
+      assert.ok(resourceUri, 'a split result is cached');
+      const { contents } = await harness.client.readResource({ uri: resourceUri });
+      const cached = JSON.parse((contents[0] as { text: string }).text) as {
+        root: string;
+        results: { path: string }[];
+      };
+      assert.strictEqual(cached.root, normalizePath(root));
+      assert.deepStrictEqual(
+        cached.results.map((r) => r.path),
+        ['src/a.ts', 'src/core/x.ts'],
+      );
+    });
+
     it('list names a listed subfolder by its path from the root', async () => {
       const listed = await harness.client.callTool({
         name: 'list',

@@ -110,8 +110,12 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
           truncated: result.summary.truncated,
         };
       },
-      externalize: (results) =>
-        putJsonResource(ctx.resourceStore, `${args.pattern} files`, results),
+      // The whole result, root included: its paths are relative to that root.
+      externalize: (results, metadata) =>
+        putJsonResource(ctx.resourceStore, `${args.pattern} files`, {
+          root: metadata.root,
+          results,
+        }),
     });
 
     const { metadata, offset } = paged;

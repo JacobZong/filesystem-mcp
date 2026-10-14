@@ -56,7 +56,9 @@ root, which a new or changed `root` field names.
   working directory outside them, under a folder granted during the
   session, or for a name such as `~` or a blank one. `list` keeps its
   entries relative to the listed folder, but the tree's first line now names
-  a listed subfolder the same way (`src/core`, not `core`).
+  a listed subfolder the same way (`src/core`, not `core`). `find_files`'
+  cached full result (its `resourceUri`) is now the whole result, an object
+  with `root` and `results`, like `search_text`'s, instead of a bare array.
 - **Literal `search_text` is about twice as fast.** A literal pattern (the
   default, `isRegex: false`) is matched in native code instead of RE2, which
   copied every file into its heap just to rule it out. Each file also costs
