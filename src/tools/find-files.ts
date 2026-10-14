@@ -14,11 +14,7 @@ import {
 import { searchFiles } from '../core/search.ts';
 import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
-import {
-  DEFAULT_SEARCH_RESULTS,
-  DEFAULT_SEARCH_TIMEOUT_MS,
-  MAX_SEARCH_RESULTS,
-} from '../core/util.ts';
+import { DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS } from '../core/util.ts';
 import { defineTool } from './define.ts';
 
 // ---------------------------------------------------------------------------
@@ -71,7 +67,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
     'A pattern without / matches file names at any depth. search_text searches contents.',
   input: SearchFilesInputSchema,
   readOnlyHint: true,
-  timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
+  deadline: true,
   progress: (args) => ({
     label: 'Find',
     subject: truncateProgressPattern(args.pattern),

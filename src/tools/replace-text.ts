@@ -35,7 +35,6 @@ import {
 } from '../core/search.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
-  DEFAULT_SEARCH_TIMEOUT_MS,
   escapeRegExp,
   getMaxTextFileSize,
   MAX_SEARCH_RESULTS,
@@ -609,7 +608,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     'and ^ and $ anchor to file start and end. edit replaces one unique exact match.',
   input: SearchAndReplaceInputSchema,
   readOnlyHint: false,
-  timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
+  deadline: true,
   progress: (args) => {
     const dryLabel = args.dryRun ? ' [dry run]' : '';
     return {

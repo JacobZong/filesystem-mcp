@@ -18,12 +18,7 @@ import {
 } from '../core/schema.ts';
 import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
-import {
-  DEFAULT_SEARCH_TIMEOUT_MS,
-  DEFAULT_TREE_ENTRIES,
-  MAX_LIST_ENTRIES,
-  MAX_TREE_DEPTH,
-} from '../core/util.ts';
+import { DEFAULT_TREE_ENTRIES, MAX_LIST_ENTRIES, MAX_TREE_DEPTH } from '../core/util.ts';
 import { defineTool } from './define.ts';
 
 interface CollectedEntry {
@@ -264,7 +259,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
     'stat returns sizes and dates.',
   input: ListInputSchema,
   readOnlyHint: true,
-  timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
+  deadline: true,
   defaultErrorCode: ErrorCode.NOT_DIRECTORY,
   progress: (args) => ({
     label: 'List',

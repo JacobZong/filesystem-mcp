@@ -18,7 +18,6 @@ import {
 } from '../core/schema.ts';
 import {
   DEFAULT_CONTINUATION_CHUNK_SIZE,
-  DEFAULT_SEARCH_TIMEOUT_MS,
   getMaxTextFileSize,
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
@@ -312,7 +311,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     'Images and audio return as media; other binary files are rejected.',
   input: ReadFileInputSchema,
   readOnlyHint: true,
-  timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
+  deadline: true,
   defaultErrorCode: ErrorCode.NOT_FILE,
   progress: (args) => {
     const isBatch = args.paths !== undefined;

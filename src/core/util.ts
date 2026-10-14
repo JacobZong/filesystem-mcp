@@ -216,7 +216,20 @@ export function jsonBytesOver(value: unknown, limit: number): number | undefined
 /** Default line chunk size for read continuation when no explicit range was given. */
 export const DEFAULT_CONTINUATION_CHUNK_SIZE = 200;
 
-export const DEFAULT_SEARCH_TIMEOUT_MS = 5000;
+/**
+ * Deadline for one call of a tool that walks or reads the disk (list, stat,
+ * read, find_files, search_text, replace_text). Read per call, so the
+ * `--tool-timeout` flag applied by cli.ts after module load still counts.
+ */
+export function getToolTimeoutMs(): number {
+  return parseIntSetting(
+    'FS_TOOL_TIMEOUT_MS',
+    cli.toolTimeout ?? process.env['FS_TOOL_TIMEOUT_MS'],
+    5000,
+    1000,
+    600_000,
+  );
+}
 
 export const MAX_TREE_DEPTH = 50;
 export const DEFAULT_TREE_ENTRIES = 1000;

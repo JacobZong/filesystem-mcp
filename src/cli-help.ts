@@ -49,6 +49,10 @@ const OPTIONS_HELP: HelpRow[] = [
     desc: 'Maximum file size for reads and for one create call, in bytes; the per-message wire limit is 3 × this + 1 MiB (env: FS_MAX_FILE_SIZE)',
   },
   {
+    flags: '--tool-timeout <ms>',
+    desc: 'Time limit for one list, stat, read, search or replace_text call, in ms (default 5000, 1000-600000) (env: FS_TOOL_TIMEOUT_MS)',
+  },
+  {
     flags: '--walk-cwd',
     desc: 'Walk up from CWD to find a project root; implies --allow-cwd (env: FS_ALLOW_CWD_WALK)',
   },
@@ -86,6 +90,10 @@ const ENV_HELP: HelpRow[] = [
   {
     flags: 'FS_MAX_FILE_SIZE',
     desc: 'Maximum file size for reads and for one create call, in bytes; sizes the wire limit (3 × this + 1 MiB)',
+  },
+  {
+    flags: 'FS_TOOL_TIMEOUT_MS',
+    desc: 'Time limit for one list, stat, read, search or replace_text call, in ms (default 5000, 1000-600000)',
   },
   {
     flags: 'FS_ALLOWED_DIRS',

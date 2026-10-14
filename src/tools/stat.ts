@@ -5,7 +5,6 @@ import type { GuardedFileSystem, Stats } from '../core/fs.ts';
 import { detectMimeType } from '../core/mime.ts';
 import { type EntryType, resolveEntryType } from '../core/path-utils.ts';
 import { mapSingleOrBatchPaths, singleOrBatchPathsInput } from '../core/schema.ts';
-import { DEFAULT_SEARCH_TIMEOUT_MS } from '../core/util.ts';
 import type { BatchResult } from './batch.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import type { ToolCtx } from './define.ts';
@@ -147,7 +146,7 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
     'Also checks whether paths exist.',
   input: StatInputSchema,
   readOnlyHint: true,
-  timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
+  deadline: true,
   defaultErrorCode: ErrorCode.NOT_FOUND,
   progress: (args) => {
     if (args.paths !== undefined) {

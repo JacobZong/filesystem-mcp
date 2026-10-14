@@ -93,6 +93,25 @@ describe('CLI (real subprocess)', () => {
     assert.deepStrictEqual(config.policy.builtinDeny, []);
   });
 
+  it('--tool-timeout and FS_TOOL_TIMEOUT_MS set the per-call deadline in --print-config', async () => {
+    const deadlineMs = async (
+      args: readonly string[],
+      env: Record<string, string | undefined> = {},
+    ): Promise<number> => {
+      const { code, stdout, stderr } = await runCli(['--print-config', ...args, root], env);
+      assert.strictEqual(code, 0, stderr);
+      return (JSON.parse(stdout) as { limits: { toolTimeoutMs: number } }).limits.toolTimeoutMs;
+    };
+    assert.strictEqual(await deadlineMs([]), 5000);
+    assert.strictEqual(await deadlineMs(['--tool-timeout', '20000']), 20000);
+    assert.strictEqual(await deadlineMs([], { FS_TOOL_TIMEOUT_MS: '15000' }), 15000);
+    assert.strictEqual(
+      await deadlineMs(['--tool-timeout', '20000'], { FS_TOOL_TIMEOUT_MS: '15000' }),
+      20000,
+    );
+    assert.strictEqual(await deadlineMs([], { FS_TOOL_TIMEOUT_MS: '50' }), 5000);
+  });
+
   it('--print-config reports both protocol eras and the pinned SDK versions', async () => {
     const { code, stdout, stderr } = await runCli(['--print-config', root]);
     assert.strictEqual(code, 0, stderr);
