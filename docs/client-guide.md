@@ -321,6 +321,9 @@ Notes on individual tools:
   with `Binary file detected.`
 - `read` and `create` add a `resource_link` block per file, pointing at its
   `filesystem-mcp://file/...` resource.
+- `stat` on a folder has no `size`; its `entryCount` is the number of entries
+  directly inside it, hidden ones included and secret files left out. `0` means
+  the folder is empty.
 - A dry run of `edit` or `replace_text` returns a unified diff as its text.
   A dry run of `patch` returns the patched file as its text; the diff it
   applied is in `_meta.diff`.

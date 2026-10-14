@@ -17,7 +17,7 @@ import {
   unlink as fsUnlink,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -507,6 +507,21 @@ export class GuardedFileSystem {
         );
       });
     }
+  }
+
+  /**
+   * Direct children of a directory, leaving out entries the guard treats as
+   * sensitive so the count never reveals what listings hide. Hidden and
+   * ignored entries count: this answers "is it empty?", not "what would list show?".
+   */
+  async countEntries(dirPath: string, options?: { signal?: AbortSignal }): Promise<number> {
+    const { resolvedPath } = await this.pathGuard.validateExistingPathDetailed(dirPath);
+    let count = 0;
+    for await (const entry of await fsOpendir(resolvedPath)) {
+      options?.signal?.throwIfAborted();
+      if (!this.pathGuard.isSensitive(join(dirPath, entry.name))) count += 1;
+    }
+    return count;
   }
 }
 
