@@ -11,7 +11,9 @@ import {
   FsError,
   isFsError,
   isNotFoundErrno,
+  isSkippableErrno,
   rethrowIfAborted,
+  SKIPPABLE_FS_CODES,
 } from './errors.ts';
 import { Logger } from './observability.ts';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.ts';
@@ -279,6 +281,29 @@ export class PathGuard {
 
   isSensitive(filePath: string): boolean {
     return this.sensitive.isSensitive(filePath);
+  }
+
+  /**
+   * True when a walked entry is inside the allowed directories and not sensitive,
+   * on both its requested and resolved paths. Every entry is realpath-resolved: a
+   * symlinked ancestor pointing outside the sandbox would otherwise pass the
+   * lexical check (fs.glob follows symlinks and yields external entries as
+   * non-symlink dirents). Escapes and sensitive targets throw ACCESS_DENIED and
+   * skippable errors filter the entry; anything else is fatal. The accepted
+   * TOCTOU window is documented on this class.
+   */
+  async isEntryAccessible(entryPath: string): Promise<boolean> {
+    try {
+      const { requestedPath, resolvedPath } = await this.validateExistingPathDetailed(entryPath);
+      return !this.isSensitive(requestedPath) && !this.isSensitive(resolvedPath);
+    } catch (error) {
+      if (isFsError(error)) {
+        if (SKIPPABLE_FS_CODES.has(error.code)) return false;
+        throw error;
+      }
+      if (isSkippableErrno(error)) return false;
+      throw error;
+    }
   }
 
   async validateExistingPath(requestedPath: string): Promise<string> {

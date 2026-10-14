@@ -3,7 +3,7 @@ import { basename, posix } from 'node:path';
 import * as z from 'zod/v4';
 
 import { pageQueryKey, paginate } from '../core/cursor.ts';
-import { ErrorCode, isFsError, isSkippableErrno, SKIPPABLE_FS_CODES } from '../core/errors.ts';
+import { ErrorCode } from '../core/errors.ts';
 import { pageTrailer } from '../core/fmt.ts';
 import { globEntries } from '../core/glob.ts';
 import { type EntryType, resolveEntryType, toPosixRelative } from '../core/path-utils.ts';
@@ -65,29 +65,6 @@ function compareEntries(a: CollectedEntry, b: CollectedEntry): number {
   return a.name.localeCompare(b.name);
 }
 
-/**
- * True when a walked entry is inside the allowed directories and not sensitive,
- * on both its requested and resolved paths. Every entry is realpath-resolved: a
- * symlinked ancestor pointing outside the sandbox would otherwise pass the
- * lexical check (fs.glob follows symlinks and yields external entries as
- * non-symlink dirents). Escapes and sensitive targets throw ACCESS_DENIED and
- * skippable errors filter the entry; anything else is fatal. The accepted
- * TOCTOU window is documented on PathGuard.
- */
-async function isEntryAccessible(guard: PathGuard, entryPath: string): Promise<boolean> {
-  try {
-    const { requestedPath, resolvedPath } = await guard.validateExistingPathDetailed(entryPath);
-    return !guard.isSensitive(requestedPath) && !guard.isSensitive(resolvedPath);
-  } catch (error) {
-    if (isFsError(error)) {
-      if (SKIPPABLE_FS_CODES.has(error.code)) return false;
-      throw error;
-    }
-    if (isSkippableErrno(error)) return false;
-    throw error;
-  }
-}
-
 async function collect(rootPath: string, options: CollectOptions): Promise<CollectResult> {
   const entries: CollectedEntry[] = [];
   let scanned = 0;
@@ -118,7 +95,7 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
     const relPath = toPosixRelative(rootPath, entry.path);
     const name = basename(relPath);
 
-    const accessible = await isEntryAccessible(options.pathGuard, entry.path);
+    const accessible = await options.pathGuard.isEntryAccessible(entry.path);
     if (!accessible) continue;
 
     totalEntries++;
