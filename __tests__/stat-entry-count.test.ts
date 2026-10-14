@@ -8,6 +8,7 @@ import {
   cleanupTestRoot,
   createTestClientPair,
   createTestRoot,
+  firstTextBlock,
   type TestClientContext,
   trySymlink,
   withEnv,
@@ -125,6 +126,42 @@ describe('stat entryCount for a directory', () => {
       assert.ok(!('entryCount' in value), 'a failed count must not report an entryCount');
     } finally {
       GuardedFileSystem.prototype.countEntries = original;
+    }
+  });
+
+  it('does not count a secret under a directory alias when the deny rule names its real path', async (t) => {
+    const real = join(root, 'real', 'sub');
+    await mkdir(real, { recursive: true });
+    await writeFile(join(real, 'secret.txt'), 'shh');
+    await writeFile(join(real, 'visible.txt'), 'hi');
+    const skip = () => t.skip('symlink not permitted');
+    if (!(await trySymlink(join(root, 'real'), join(root, 'alias'), skip))) return;
+    // A symlink whose own real location is denied: list walks the real
+    // directory, so it hides the link even though its target is visible.
+    if (!(await trySymlink(join(real, 'visible.txt'), join(real, 'link.txt'), skip))) return;
+
+    // A separate server, so the deny rule applies here and not to the harness above.
+    const denied = await withEnv({ FS_DENYLIST: 'real/sub/secret.txt,real/sub/link.txt' }, () =>
+      createTestClientPair([root]),
+    );
+    try {
+      const alias = join(root, 'alias', 'sub');
+      const list = await denied.client.callTool({ name: 'list', arguments: { path: alias } });
+      const listed = firstTextBlock(list).text ?? '';
+      assert.match(listed, /visible\.txt/u);
+      assert.doesNotMatch(listed, /secret\.txt/u);
+      assert.doesNotMatch(listed, /link\.txt/u);
+
+      const viaAlias = await denied.client.callTool({ name: 'stat', arguments: { path: alias } });
+      const viaReal = await denied.client.callTool({ name: 'stat', arguments: { path: real } });
+      const count = (result: typeof viaAlias) =>
+        (result.structuredContent as { results: { value?: StatValue }[] }).results[0]?.value
+          ?.entryCount;
+      // secret.txt and link.txt are hidden under both spellings, so only visible.txt counts.
+      assert.strictEqual(count(viaAlias), 1);
+      assert.strictEqual(count(viaReal), 1);
+    } finally {
+      await denied.close();
     }
   });
 });

@@ -523,6 +523,10 @@ export class GuardedFileSystem {
       options?.signal?.throwIfAborted();
       const childPath = join(dirPath, entry.name);
       if (this.pathGuard.isSensitive(childPath)) continue;
+      // list walks the real directory, so it checks every child, links
+      // included, under its real spelling: a deny rule naming the real
+      // directory hides the child under an alias too.
+      if (this.pathGuard.isSensitive(join(resolvedPath, entry.name))) continue;
       if (entry.isSymbolicLink()) {
         // Same test as list's isEntryAccessible: a link that escapes the roots,
         // dangles, or points at a secret file is hidden there, so it is not counted.
