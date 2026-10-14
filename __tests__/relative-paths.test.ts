@@ -347,6 +347,105 @@ describe('relative paths', () => {
       assert.strictEqual(paths.show(join(root, 'src', 'a.ts')), 'src/a.ts');
     });
 
+    it(
+      'keeps a backslash in a POSIX name, so the printed path names that file, not a/b',
+      {
+        skip: process.platform === 'win32' && 'backslash is a separator on Windows',
+      },
+      async () => {
+        await writeTestFile(root, 'bs/a\\b.txt', 'BACKSLASH_NEEDLE\n');
+        await writeTestFile(root, 'bs/a/b.txt', 'other\n');
+        const result = await harness.client.callTool({
+          name: 'search_text',
+          arguments: { path: 'bs', searchPattern: 'BACKSLASH_NEEDLE' },
+        });
+        const { matches } = result._meta as { matches: { file: string }[] };
+        assert.deepStrictEqual(
+          matches.map((m) => m.file),
+          ['bs/a\\b.txt'],
+        );
+        const read = await harness.client.callTool({
+          name: 'read',
+          arguments: { path: matches[0]?.file },
+        });
+        assert.match(firstTextBlock(read).text ?? '', /BACKSLASH_NEEDLE/u);
+      },
+    );
+
+    it(
+      'prints a blank name absolute, since a blank path is refused',
+      {
+        skip: process.platform === 'win32' && 'Windows has no blank file names',
+      },
+      async () => {
+        await writeTestFile(root, 'blank/ ', 'BLANK_NEEDLE\n');
+        const found = await harness.client.callTool({
+          name: 'find_files',
+          arguments: { path: 'blank', pattern: '*' },
+        });
+        const { results } = found._meta as { results: { path: string }[] };
+        assert.deepStrictEqual(
+          results.map((r) => r.path),
+          ['blank/ '],
+          'a name with a non-blank folder reads back as given',
+        );
+        const paths = (await makeGuard([root])).resultPaths(root);
+        assert.strictEqual(paths.show(join(root, ' ')), join(root, ' '));
+      },
+    );
+
+    it('names the root as configured, not its realpath, in every tool', async (t) => {
+      const real = join(base, 'real-root');
+      const link = join(base, 'link-root');
+      await writeTestFile(real, 'src/r.ts', 'ALIAS_NEEDLE\n');
+      if (!(await trySymlink(real, link, () => t.skip('symlink not permitted')))) return;
+      const pair = await createTestClientPair([link]);
+      try {
+        const rootOf = async (name: string, args: Record<string, unknown>) =>
+          ((await pair.client.callTool({ name, arguments: args }))._meta as { root?: string }).root;
+        const replace = { searchPattern: 'ALIAS_NEEDLE', replacement: 'X', dryRun: true };
+        for (const [name, args] of [
+          ['search_text', { searchPattern: 'ALIAS_NEEDLE' }],
+          ['search_text', { path: 'src', searchPattern: 'ALIAS_NEEDLE' }],
+          ['find_files', { path: 'src', pattern: '*.ts' }],
+          ['replace_text', replace],
+          ['replace_text', { ...replace, path: 'src' }],
+        ] as const) {
+          assert.strictEqual(
+            await rootOf(name, args),
+            normalizePath(link),
+            `${name} ${JSON.stringify(args)}`,
+          );
+        }
+      } finally {
+        await pair.close();
+      }
+    });
+
+    it('prints absolute paths with several roots, where a shared name would read back as ambiguous', async () => {
+      await writeTestFile(root, 'shared/package.json', '{"SHARED_NEEDLE": 1}\n');
+      await writeTestFile(second, 'shared/package.json', '{"SHARED_NEEDLE": 2}\n');
+      const pair = await createTestClientPair([root, second]);
+      try {
+        const result = await pair.client.callTool({
+          name: 'search_text',
+          arguments: { path: join(root, 'shared'), searchPattern: 'SHARED_NEEDLE' },
+        });
+        const { matches } = result._meta as { matches: { file: string }[] };
+        assert.deepStrictEqual(
+          matches.map((m) => m.file),
+          [under(root, 'shared/package.json')],
+        );
+        const read = await pair.client.callTool({
+          name: 'read',
+          arguments: { path: matches[0]?.file },
+        });
+        assert.match(firstTextBlock(read).text ?? '', /"SHARED_NEEDLE": 1/u);
+      } finally {
+        await pair.close();
+      }
+    });
+
     it('prints absolute paths for a folder the user granted during the session', async () => {
       const granted = join(base, 'granted-results');
       await writeTestFile(granted, 'g.txt', 'GRANTED_NEEDLE\n');
@@ -365,6 +464,14 @@ describe('relative paths', () => {
           matches.map((m) => normalizePath(m.file)),
           [normalizePath(join(granted, 'g.txt'))],
         );
+        // A bare `sub` would name the root's sub, not the granted one.
+        await writeTestFile(granted, 'sub/h.txt', 'h\n');
+        const listed = await pair.client.callTool({
+          name: 'list',
+          arguments: { path: join(granted, 'sub') },
+        });
+        const header = (firstTextBlock(listed).text ?? '').split('\n')[0] ?? '';
+        assert.strictEqual(normalizePath(header), normalizePath(join(granted, 'sub')));
       } finally {
         await pair.close();
       }

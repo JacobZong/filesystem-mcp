@@ -1,7 +1,7 @@
 import type { Stats } from 'node:fs';
 import { lstat, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import { cli } from './config.ts';
@@ -43,9 +43,17 @@ export interface ValidatedPathDetails {
 
 /** How one walk prints the paths it found; see `PathGuard.resultPaths`. */
 export interface ResultPaths {
-  /** The root the relative paths are relative to; the walked directory when there is none. */
+  /** The root the relative paths are relative to, as configured; the walked directory when there is none. */
   readonly root: string;
+  /** The walked directory is that root itself. */
+  readonly atRoot: boolean;
   show(absolutePath: string): string;
+}
+
+/** A root and every spelling that names it: as configured, and its realpath when that differs. */
+interface RootSpellings {
+  readonly root: string;
+  readonly spellings: readonly string[];
 }
 
 export interface ServerOptions {
@@ -131,20 +139,24 @@ async function resolveRealPath(normalized: string, signal?: AbortSignal): Promis
   }
 }
 
+async function resolveRootSpellings(
+  dirs: readonly string[],
+  signal?: AbortSignal,
+): Promise<RootSpellings[]> {
+  const roots = normalizeAllowedDirectories(dirs);
+  const reals = await Promise.all(roots.map((dir) => resolveRealPath(dir, signal)));
+  return roots.map((root, i) => {
+    const real = reals[i];
+    return { root, spellings: real && !isSamePath(real, root) ? [root, real] : [root] };
+  });
+}
+
 export async function resolveAllowedDirectoriesState(
   dirs: readonly string[],
   signal?: AbortSignal,
 ): Promise<string[]> {
-  const primary = normalizeAllowedDirectories(dirs);
-  const reals = await Promise.all(primary.map((dir) => resolveRealPath(dir, signal)));
-  return [
-    ...new Set(
-      primary.flatMap((dir, i) => {
-        const real = reals[i];
-        return real && !isSamePath(real, dir) ? [dir, real] : [dir];
-      }),
-    ),
-  ];
+  const entries = await resolveRootSpellings(dirs, signal);
+  return [...new Set(entries.flatMap((entry) => entry.spellings))];
 }
 
 /**
@@ -183,8 +195,12 @@ export class PathGuard {
    * neither in a later round of the same call nor in a later call.
    */
   private accessGrants: string[] = [];
-  /** Where relative paths resolve: the roots minus `accessGrants`, alone and with realpath aliases. */
-  private relativeBases: { roots: string[]; expanded: string[] } | undefined;
+  /**
+   * Where relative paths resolve: the roots minus `accessGrants`, each with
+   * its spellings, plus every spelling flattened for containment.
+   */
+  private relativeBases:
+    { entries: readonly RootSpellings[]; roots: string[]; expanded: string[] } | undefined;
   private rootBoundaries: string[] = [];
 
   private readonly options: ServerOptions | undefined;
@@ -196,19 +212,28 @@ export class PathGuard {
   /**
    * `expanded` is the containment set (each root plus its realpath alias);
    * `roots` is what a caller choosing "the root" sees, one entry per root.
-   * `relativeBases` is the same pair for the roots relative paths resolve
-   * against; every root, unless some were access grants.
+   * `relativeBases` lists the roots relative paths resolve against, with
+   * their spellings; without it, every root, each spelled only as given.
    */
   initialize(
     expanded: readonly string[],
     roots: readonly string[] = expanded,
-    relativeBases: { roots: readonly string[]; expanded: readonly string[] } = { roots, expanded },
+    relativeBases?: readonly RootSpellings[],
   ): void {
     this.allowedDirectoriesState = normalizeAllowedDirectories(expanded);
     this.rootsState = normalizeAllowedDirectories(roots);
+    const entries = (
+      relativeBases ?? this.rootsState.map((root) => ({ root, spellings: [root] }))
+    ).map((entry) => ({
+      root: normalizeAllowedDirectory(entry.root),
+      spellings: normalizeAllowedDirectories(entry.spellings),
+    }));
     this.relativeBases = {
-      roots: normalizeAllowedDirectories(relativeBases.roots),
-      expanded: normalizeAllowedDirectories(relativeBases.expanded),
+      entries,
+      roots: entries.map((entry) => entry.root),
+      expanded: relativeBases
+        ? normalizeAllowedDirectories(entries.flatMap((entry) => entry.spellings))
+        : this.allowedDirectoriesState,
     };
   }
 
@@ -666,45 +691,64 @@ export class PathGuard {
    * pass each one straight back: relative to the root holding `walkedDir`
    * when `resolveRelativePaths` maps that spelling back to the same path,
    * absolute otherwise. A scoped search of `src` prints `src/a.ts`, not
-   * `a.ts`, which would name `<root>/a.ts`. The absolute fallback covers a
-   * working directory in a subfolder of a root (relative paths resolve
-   * there), a directory under an access grant only (relative paths never
-   * resolve there), and names such as `~` that would not read back as given.
+   * `a.ts`, which would name `<root>/a.ts`. `root` is the root as configured,
+   * as `list_roots` shows it, even when the walk went through its realpath.
+   *
+   * The absolute fallback covers a working directory in a subfolder of a root
+   * (relative paths resolve there), a directory under an access grant only
+   * (relative paths never resolve there), several roots with the working
+   * directory outside them (a name two roots share would read back as
+   * ambiguous, and which names are shared can change between the print and
+   * the read), and a name that would not read back as given: `~`, blank, or a
+   * POSIX name holding a backslash.
    */
   resultPaths(walkedDir: string): ResultPaths {
     const walked = normalizePath(walkedDir);
     const bases = this.relativeBases;
-    let base: string | undefined;
-    for (const dir of bases?.expanded ?? []) {
-      if (isPathInsideDirectory(dir, walked) && (base === undefined || dir.length > base.length)) {
-        base = dir;
+    let found: { root: string; spelling: string } | undefined;
+    for (const entry of bases?.entries ?? []) {
+      for (const spelling of entry.spellings) {
+        if (
+          isPathInsideDirectory(spelling, walked) &&
+          (found === undefined || spelling.length > found.spelling.length)
+        ) {
+          found = { root: entry.root, spelling };
+        }
       }
     }
-    if (base === undefined || bases === undefined) {
-      return { root: walked, show: (absolutePath) => absolutePath };
+    if (found === undefined || bases === undefined) {
+      return { root: walked, atRoot: false, show: (absolutePath) => absolutePath };
     }
-    const root = base;
+    const { root, spelling } = found;
     const allowed = bases.expanded;
+    const severalRoots = bases.roots.length > 1;
     return {
       root,
+      atRoot: isSamePath(spelling, walked),
       show: (absolutePath) => {
-        const rel = toPosixRelative(root, absolutePath);
+        // Windows separators become `/`, which every tool accepts there; on
+        // POSIX a backslash is part of a name and must stay one.
+        const rel = IS_WINDOWS
+          ? toPosixRelative(spelling, absolutePath)
+          : relative(spelling, absolutePath);
         if (
-          rel === '' ||
+          rel.trim().length === 0 ||
           rel === '..' ||
           rel.startsWith('../') ||
           isAbsolute(rel) ||
           isWindowsDriveRelativePath(rel) ||
-          expandHome(rel) !== rel
+          expandHome(rel) !== rel ||
+          !isSamePath(resolve(spelling, rel), absolutePath)
         ) {
           return absolutePath;
         }
         // Mirrors resolveRelativePaths: a spelling that lands inside a root
         // from the working directory resolves there, so it must land here.
         const fromCwd = normalizePath(rel);
-        return isPathWithinDirectories(fromCwd, allowed) && !isSamePath(fromCwd, absolutePath)
-          ? absolutePath
-          : rel;
+        if (isPathWithinDirectories(fromCwd, allowed)) {
+          return isSamePath(fromCwd, absolutePath) ? rel : absolutePath;
+        }
+        return severalRoots ? absolutePath : rel;
       },
     };
   }
@@ -930,20 +974,19 @@ export class PathGuard {
     }
 
     const combined = [...baseline, ...grantsToInclude];
-    const nextState = await resolveAllowedDirectoriesState(combined, signal);
+    const spellings = await resolveRootSpellings(combined, signal);
+    const nextState = [...new Set(spellings.flatMap((entry) => entry.spellings))];
+    // A configured root stays a base even when it was also granted.
     const accessGrants = this.accessGrants;
-    const bases = [
-      ...baseline,
-      ...grantsToInclude.filter((dir) => !accessGrants.some((grant) => isSamePath(grant, dir))),
-    ];
-    const nextBases =
-      bases.length === combined.length
-        ? nextState
-        : await resolveAllowedDirectoriesState(bases, signal);
+    const bases = spellings.filter(
+      (entry) =>
+        baseline.some((dir) => isSamePath(dir, entry.root)) ||
+        !accessGrants.some((grant) => isSamePath(grant, entry.root)),
+    );
     // Commit boundaries and the allowed set together, after every await has
     // resolved, so a rejecting recompute leaves the guard's previous,
     // consistent view intact.
     this.rootBoundaries = boundaries;
-    this.initialize(nextState, combined, { roots: bases, expanded: nextBases });
+    this.initialize(nextState, combined, bases);
   }
 }

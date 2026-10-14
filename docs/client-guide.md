@@ -215,14 +215,17 @@ home directory of the user running the server.
 
 **Result paths read back as given.** `search_text`, `find_files` and
 `replace_text` print each path relative to the root that holds the folder
-they searched, whatever that folder was, and name that root in a `root`
-field. A search of `src` prints `src/a.ts`, which `read` and `edit` take
-as it is. A path whose relative spelling would name another file is printed
-absolute instead: everything when the working directory is a subfolder of a
-root, everything under a folder granted during the session, and a name such
-as `~`. `list` draws a tree of names and keeps `relativePath` relative to its
-`path`; the tree's first line names a listed subfolder from the root
-(`src/core`).
+they searched, whatever that folder was, and name that root, as
+`list_roots` shows it, in a `root` field. A search of `src` prints
+`src/a.ts`, which `read` and `edit` take as it is. A path whose relative
+spelling would not read back as the same file is printed absolute instead:
+everything when the working directory is a subfolder of a root, everything
+when there are several roots and the working directory is outside them (a
+name two roots share would read back as ambiguous), everything under a
+folder granted during the session, and a name such as `~` or a blank one. On
+macOS and Linux a backslash in a name stays a backslash. `list` draws a tree
+of names and keeps `relativePath` relative to its `path`; the tree's first
+line names a listed subfolder the same way (`src/core`).
 
 **Access grants.** A tool call with a path outside the roots does not touch
 the filesystem. It asks the user first (see [Confirmations](#confirmations)),

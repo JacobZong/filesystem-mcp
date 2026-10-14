@@ -151,6 +151,25 @@ try {
   assert.equal(read.contents[0].blob, PNG);
   read = await app.api('read', { uri: uri(join(dir, '.env')) });
   assert.equal(read.httpStatus, 500);
+
+  // Search a subfolder and open a match the way the page does: the match
+  // path is relative to the root the result names, so it is joined there.
+  await call(
+    app.api,
+    'create',
+    { files: [{ path: join(dir, 'sub', 'b.txt'), content: 'NEEDLE\n' }] },
+    () => ({}),
+  );
+  const { result: found } = await call(
+    app.api,
+    'search_text',
+    { path: join(dir, 'sub'), searchPattern: 'NEEDLE' },
+    () => ({}),
+  );
+  const [match] = found._meta.matches;
+  assert.equal(match.file, 'sub/b.txt');
+  read = await app.api('read', { uri: uri(join(found._meta.root, match.file)) });
+  assert.equal(read.contents[0].text, 'NEEDLE\n');
 } finally {
   app.stop();
 }

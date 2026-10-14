@@ -48,14 +48,15 @@ root, which a new or changed `root` field names.
   or `edit` resolved to `<root>/a.ts`, another file when the root holds
   one. They now print paths relative to the root holding that folder
   (`src/a.ts`), in their text and in `matches[].file`, `results[].path` and
-  diff headers. `find_files`' `root` field now names that root instead of
-  the folder searched, and `search_text` and `replace_text` gain the same
-  field. A path whose relative spelling would name another file is printed
-  absolute instead: with the working directory in a subfolder of a root,
-  under a folder granted during the session, or for a name such as `~`.
-  `list` keeps its entries relative to the listed folder, but the tree's
-  first line now names a listed subfolder from the root (`src/core`, not
-  `core`).
+  diff headers. `find_files`' `root` field now names that root, as
+  `list_roots` shows it, instead of the folder searched, and `search_text`
+  and `replace_text` gain the same field. A path whose relative spelling
+  would not read back as the same file is printed absolute instead: with
+  the working directory in a subfolder of a root, with several roots and the
+  working directory outside them, under a folder granted during the
+  session, or for a name such as `~` or a blank one. `list` keeps its
+  entries relative to the listed folder, but the tree's first line now names
+  a listed subfolder the same way (`src/core`, not `core`).
 - **Literal `search_text` is about twice as fast.** A literal pattern (the
   default, `isRegex: false`) is matched in native code instead of RE2, which
   copied every file into its heap just to rule it out. Each file also costs
