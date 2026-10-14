@@ -177,8 +177,9 @@ async def main() -> str | None:
     # back to the 2025 handshake for older servers; "legacy" skips the probe.
     mode = "legacy" if args.legacy else "auto"
     async with Client(transport(args), mode=mode, elicitation_callback=confirm) as client:
-        # The server resolves a relative path against its cwd, not its root,
-        # so over HTTP the script anchors dir (and with it --out) to the root.
+        # The server resolves a relative path against its cwd while that is in
+        # a root, which a client over HTTP cannot know, so the script anchors
+        # dir (and with it --out) to the root.
         if args.url and not (args.dir and os_path(args.dir).isabs(args.dir)):
             root, error = await only_root(client)
             if root is None:
@@ -193,7 +194,10 @@ async def main() -> str | None:
         # a path that still contains "..".
         out = args.out and osp.normpath(osp.join(args.dir, args.out))
         if out:  # a previous report is not a source of TODOs
-            matches = [m for m in matches if osp.normpath(osp.join(args.dir, m["file"])) != out]
+            # Match paths are relative to meta["root"], or absolute, which
+            # join keeps as it is.
+            base = meta.get("root", args.dir)
+            matches = [m for m in matches if osp.normpath(osp.join(base, m["file"])) != out]
         report = render(args.dir, matches, meta)
         if not out:
             sys.stdout.write(report)

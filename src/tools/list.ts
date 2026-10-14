@@ -6,7 +6,12 @@ import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { ErrorCode, isFsError, isSkippableErrno, SKIPPABLE_FS_CODES } from '../core/errors.ts';
 import { pageTrailer } from '../core/fmt.ts';
 import { globEntries } from '../core/glob.ts';
-import { type EntryType, resolveEntryType, toPosixRelative } from '../core/path-utils.ts';
+import {
+  type EntryType,
+  isSamePath,
+  resolveEntryType,
+  toPosixRelative,
+} from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import {
   CursorSchema,
@@ -160,6 +165,16 @@ const ELBOW = '└── ';
 const PIPE = '│   ';
 const INDENT = '    ';
 
+/**
+ * The tree's first line names the listed folder the way the caller passes it
+ * back: `src/core`, not `core`, which would name `<root>/core`. A root keeps
+ * its own name.
+ */
+function treeHeader(pathGuard: PathGuard, dir: string): string {
+  const paths = pathGuard.resultPaths(dir);
+  return isSamePath(paths.root, dir) ? basename(dir) : paths.show(dir);
+}
+
 function renderMarkdown(rootName: string, page: readonly CollectedEntry[]): string {
   if (page.length === 0) return rootName;
 
@@ -295,7 +310,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
         // The stored tree is the whole collected set, bounded by the hard cap.
         const fullOutput = {
           entries,
-          markdown: renderMarkdown(name, entries),
+          markdown: renderMarkdown(treeHeader(ctx.fs.pathGuard, metadata.path), entries),
           totalEntries: metadata.totalEntries,
           totalFiles: metadata.totalFiles,
           totalDirectories: metadata.totalDirectories,
@@ -316,7 +331,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
     // the text too — paging needs no second lookup. `pageTrailer` is the one
     // owner of that line, and it owes it on the last page as much as the first.
     const text =
-      renderMarkdown(basename(paged.metadata.path), [...paged.page]) +
+      renderMarkdown(treeHeader(ctx.fs.pathGuard, paged.metadata.path), [...paged.page]) +
       pageTrailer({
         offset: paged.offset,
         shown: structured.entryCount,

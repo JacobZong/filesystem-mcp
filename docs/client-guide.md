@@ -205,15 +205,24 @@ the roots you configured and the ones your client declared count here, not a
 folder granted during the session, so approving a grant never changes what a
 relative path names. A relative path that exists under several roots, or
 under none of several, is refused with `INVALID_INPUT`, and the error names
-the roots. When the working directory is a root or outside every root, the
-paths `search_text` and `find_files` print for a search of the root can be
-passed straight back to `read` or `edit`. When it is a subfolder of a root,
-as with `--walk-cwd`, relative paths resolve against that subfolder, so send
-absolute paths. With no configured or declared roots, a relative path still
+the roots. When it is a subfolder of a root, as with `--walk-cwd`, relative
+paths resolve against that subfolder, so send absolute paths. With no
+configured or declared roots, a relative path still
 resolves against the working directory, and so becomes a request to grant
 access there, which a client that approves grants automatically would accept.
 Absolute paths built from `list_roots` are never ambiguous. `~` expands to the
 home directory of the user running the server.
+
+**Result paths read back as given.** `search_text`, `find_files` and
+`replace_text` print each path relative to the root that holds the folder
+they searched, whatever that folder was, and name that root in a `root`
+field. A search of `src` prints `src/a.ts`, which `read` and `edit` take
+as it is. A path whose relative spelling would name another file is printed
+absolute instead: everything when the working directory is a subfolder of a
+root, everything under a folder granted during the session, and a name such
+as `~`. `list` draws a tree of names and keeps `relativePath` relative to its
+`path`; the tree's first line names a listed subfolder from the root
+(`src/core`).
 
 **Access grants.** A tool call with a path outside the roots does not touch
 the filesystem. It asks the user first (see [Confirmations](#confirmations)),
@@ -281,16 +290,16 @@ So read `result.structuredContent ?? result._meta` (Python:
 
 What is where:
 
-| Tool                             | Data                                                                                                     |
-| :------------------------------- | :------------------------------------------------------------------------------------------------------- |
-| `list`                           | `path`, `entries[]` (`name`, `relativePath`, `type`), `totalEntries`, `nextCursor`                       |
-| `find_files`                     | `root`, `results[]` (`path`, relative to `root`), `totalMatches`, `filesScanned`, `nextCursor`           |
-| `search_text`                    | `matches[]` (`file`, `line`, `column`, `content`, `before`, `after`), `totalMatches`, `nextCursor`       |
-| `stat`, `read`, `edit`, `delete` | `results[]`, each `{ path, value }` or `{ path, error }`, and `summary` (`total`, `succeeded`, `failed`) |
-| `replace_text`                   | `results[]`, `summary`, `totalMatches`, `filesScanned`, and `diff` with `returnDiff: true`               |
-| `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...) and `failures[]`                 |
-| `move`                           | `moves[]` (`from`, `to`) and `failures[]`                                                                |
-| `diff`, `patch`                  | `a`/`b` or `path`, `linesAdded`, `linesRemoved`; a `patch` dry run also has `diff`                       |
+| Tool                             | Data                                                                                                                           |
+| :------------------------------- | :----------------------------------------------------------------------------------------------------------------------------- |
+| `list`                           | `path`, `entries[]` (`name`, `relativePath`, `type`), `totalEntries`, `nextCursor`                                             |
+| `find_files`                     | `root`, `results[]` (`path`, relative to `root`), `totalMatches`, `filesScanned`, `nextCursor`                                 |
+| `search_text`                    | `root`, `matches[]` (`file`, relative to `root`, `line`, `column`, `content`, `before`, `after`), `totalMatches`, `nextCursor` |
+| `stat`, `read`, `edit`, `delete` | `results[]`, each `{ path, value }` or `{ path, error }`, and `summary` (`total`, `succeeded`, `failed`)                       |
+| `replace_text`                   | `root`, `results[]` (`path` relative to `root`), `summary`, `totalMatches`, `filesScanned`, and `diff` with `returnDiff: true` |
+| `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...) and `failures[]`                                       |
+| `move`                           | `moves[]` (`from`, `to`) and `failures[]`                                                                                      |
+| `diff`, `patch`                  | `a`/`b` or `path`, `linesAdded`, `linesRemoved`; a `patch` dry run also has `diff`                                             |
 
 Notes on individual tools:
 

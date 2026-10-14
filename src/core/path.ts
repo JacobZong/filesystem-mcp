@@ -25,6 +25,7 @@ import {
   isWindowsDriveRelativePath,
   normalizeAllowedDirectory,
   normalizePath,
+  toPosixRelative,
 } from './path-utils.ts';
 import { SensitiveMatcher } from './sensitive.ts';
 import { parseTrueEnvFlag, ROOTS_TIMEOUT_MS } from './util.ts';
@@ -38,6 +39,13 @@ export interface ValidatedPathDetails {
   requestedPath: string;
   resolvedPath: string;
   isSymlink: boolean;
+}
+
+/** How one walk prints the paths it found; see `PathGuard.resultPaths`. */
+export interface ResultPaths {
+  /** The root the relative paths are relative to; the walked directory when there is none. */
+  readonly root: string;
+  show(absolutePath: string): string;
 }
 
 export interface ServerOptions {
@@ -594,8 +602,8 @@ export class PathGuard {
    * a root. When it does not — a desktop host starts the server outside the
    * project, and an HTTP client never shares its working directory — it
    * resolves against the roots: the one root, or with several, the one it
-   * exists under. A search of the root reports paths relative to it, so this
-   * is what lets one tool's output feed the next.
+   * exists under. Searches print paths relative to the root (`resultPaths`),
+   * so this is what lets one tool's output feed the next.
    *
    * "Roots" here are the configured ones and those a client declared, never an
    * access grant (see `accessGrants`). Absolute, `~` and drive-relative paths
@@ -651,6 +659,54 @@ export class PathGuard {
         : `Relative path exists under more than one root: ${existing.join(', ')}. Pass the absolute path you mean.`,
       requested,
     );
+  }
+
+  /**
+   * How a tool prints the paths a walk of `walkedDir` found, so the caller can
+   * pass each one straight back: relative to the root holding `walkedDir`
+   * when `resolveRelativePaths` maps that spelling back to the same path,
+   * absolute otherwise. A scoped search of `src` prints `src/a.ts`, not
+   * `a.ts`, which would name `<root>/a.ts`. The absolute fallback covers a
+   * working directory in a subfolder of a root (relative paths resolve
+   * there), a directory under an access grant only (relative paths never
+   * resolve there), and names such as `~` that would not read back as given.
+   */
+  resultPaths(walkedDir: string): ResultPaths {
+    const walked = normalizePath(walkedDir);
+    const bases = this.relativeBases;
+    let base: string | undefined;
+    for (const dir of bases?.expanded ?? []) {
+      if (isPathInsideDirectory(dir, walked) && (base === undefined || dir.length > base.length)) {
+        base = dir;
+      }
+    }
+    if (base === undefined || bases === undefined) {
+      return { root: walked, show: (absolutePath) => absolutePath };
+    }
+    const root = base;
+    const allowed = bases.expanded;
+    return {
+      root,
+      show: (absolutePath) => {
+        const rel = toPosixRelative(root, absolutePath);
+        if (
+          rel === '' ||
+          rel === '..' ||
+          rel.startsWith('../') ||
+          isAbsolute(rel) ||
+          isWindowsDriveRelativePath(rel) ||
+          expandHome(rel) !== rel
+        ) {
+          return absolutePath;
+        }
+        // Mirrors resolveRelativePaths: a spelling that lands inside a root
+        // from the working directory resolves there, so it must land here.
+        const fromCwd = normalizePath(rel);
+        return isPathWithinDirectories(fromCwd, allowed) && !isSamePath(fromCwd, absolutePath)
+          ? absolutePath
+          : rel;
+      },
+    };
   }
 
   isAllowedRoot(normalizedPath: string): boolean {

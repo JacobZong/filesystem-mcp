@@ -13,7 +13,7 @@ import { buildWrittenFileMeta } from '../core/file-uri.ts';
 import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
-import { toPosixRelative } from '../core/path-utils.ts';
+import type { ResultPaths } from '../core/path.ts';
 import { createTooLargeError, readFileBufferWithLimit } from '../core/read.ts';
 import {
   defaultFalseBoolean,
@@ -90,6 +90,8 @@ const SearchAndReplaceInputSchema = z.strictObject({
 });
 
 type SearchAndReplaceOutput = BatchResult<{ matches: number }> & {
+  /** The root `results[].path` is relative to; a path that would not read back from it is absolute. */
+  root: string;
   totalMatches: number;
   filesScanned: number;
   skippedBinary?: number;
@@ -115,13 +117,13 @@ function recordFailure(summary: ReplaceSummary, entryPath: string, error: unknow
   summary.failedFiles++;
   if (summary.failures.length >= MAX_FAILURES) return;
   summary.failures.push({
-    path: toPosixRelative(summary.root, entryPath),
+    path: summary.paths.show(entryPath),
     error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, entryPath),
   });
 }
 
 function recordChangedFile(summary: ReplaceSummary, plan: ReplacementPlan, filePath: string): void {
-  const relativePath = toPosixRelative(summary.root, filePath);
+  const relativePath = summary.paths.show(filePath);
   // The first changed file is the one the resource_link points at; keep what
   // was written so the link needs no read-back.
   summary.primary ??= { path: filePath, content: plan.updatedContent };
@@ -370,7 +372,7 @@ function maybeAppendPatchDiff(
     summary.diffTruncated = true;
     return;
   }
-  const header = toPosixRelative(summary.root, params.filePath);
+  const header = summary.paths.show(params.filePath);
   const patch = unifiedPatch(header, params.originalContent, params.updatedContent);
   if (patch === undefined) {
     summary.diffTruncated = true;
@@ -384,7 +386,8 @@ function maybeAppendPatchDiff(
 }
 
 interface ReplaceSummary {
-  root: string;
+  /** How changed files, failures and diff headers name a path: relative to the root. */
+  paths: ResultPaths;
   totalMatches: number;
   filesChanged: number;
   failedFiles: number;
@@ -400,9 +403,9 @@ interface ReplaceSummary {
   stoppedReason?: StoppedReason;
 }
 
-function createReplaceSummary(root: string): ReplaceSummary {
+function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
   return {
-    root,
+    paths,
     totalMatches: 0,
     filesChanged: 0,
     failedFiles: 0,
@@ -464,6 +467,7 @@ function buildSearchAndReplaceStructuredResult(
     ...summary.failures.map((f) => ({ path: f.path, error: f.error })),
   ];
   return {
+    root: summary.paths.root,
     results,
     // `failedFiles` counts every failure; `failures` itself is capped at
     // MAX_FAILURES, so the summary must not be derived from the array length.
@@ -515,7 +519,9 @@ async function handleSearchAndReplace(
         ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
       });
 
-  const summary = createReplaceSummary(root);
+  // Relative to the root, not to the walked directory: `a.ts` from a run over
+  // `src` would name `<root>/a.ts` when passed back.
+  const summary = createReplaceSummary(ctx.fs.pathGuard.resultPaths(root));
 
   // The matcher may own a compiled RE2 pattern, whose wasm memory re2-wasm
   // never reclaims on its own. Nothing past the scan touches it, so free it the

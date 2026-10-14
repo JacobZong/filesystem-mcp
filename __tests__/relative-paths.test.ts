@@ -248,6 +248,129 @@ describe('relative paths', () => {
     }
   });
 
+  // Results are printed relative to the root, not to the folder searched, so
+  // `a.ts` from a search of `src` cannot be read back as `<root>/a.ts`.
+  describe('result paths', () => {
+    let harness: TestClientContext;
+
+    before(async () => {
+      await writeTestFile(root, 'a.ts', 'DECOY\n');
+      await writeTestFile(root, 'src/core/x.ts', 'NEEDLE core\n');
+      harness = await createTestClientPair([root]);
+    });
+
+    after(async () => {
+      await harness.close();
+    });
+
+    it('search_text prints a scoped match relative to the root, and it reads back', async () => {
+      const result = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: 'src', searchPattern: 'NEEDLE' },
+      });
+      const { root: reported, matches } = result._meta as {
+        root: string;
+        matches: { file: string }[];
+      };
+      assert.deepStrictEqual(
+        matches.map((m) => m.file),
+        ['src/a.ts', 'src/core/x.ts'],
+      );
+      assert.strictEqual(reported, normalizePath(root));
+      const read = await harness.client.callTool({
+        name: 'read',
+        arguments: { path: matches[0]?.file },
+      });
+      assert.match(firstTextBlock(read).text ?? '', /NEEDLE = 1/u);
+    });
+
+    it('find_files and replace_text print scoped paths relative to the root', async () => {
+      const found = await harness.client.callTool({
+        name: 'find_files',
+        arguments: { path: 'src', pattern: '*.ts' },
+      });
+      const { root: reported, results } = found._meta as {
+        root: string;
+        results: { path: string }[];
+      };
+      assert.deepStrictEqual(
+        results.map((r) => r.path),
+        ['src/a.ts', 'src/core/x.ts'],
+      );
+      assert.strictEqual(reported, normalizePath(root));
+
+      const replaced = await harness.client.callTool({
+        name: 'replace_text',
+        arguments: { path: 'src/core', searchPattern: 'NEEDLE', replacement: 'X', dryRun: true },
+      });
+      const preview = replaced._meta as { root: string; results: { path: string }[] };
+      assert.deepStrictEqual(
+        preview.results.map((r) => r.path),
+        ['src/core/x.ts'],
+      );
+      assert.match(firstTextBlock(replaced).text ?? '', /--- src\/core\/x\.ts/u);
+    });
+
+    it('list names a listed subfolder by its path from the root', async () => {
+      const listed = await harness.client.callTool({
+        name: 'list',
+        arguments: { path: 'src/core' },
+      });
+      assert.match(firstTextBlock(listed).text ?? '', /^src\/core\n└── x\.ts/u);
+      const top = await harness.client.callTool({ name: 'list', arguments: {} });
+      assert.match(firstTextBlock(top).text ?? '', /^root\n/u);
+    });
+
+    it('prints absolute paths when the working directory is a subfolder of the root', async () => {
+      // Relative paths resolve against the working directory there, so `src/a.ts`
+      // would name <root>/src/src/a.ts.
+      process.chdir(join(root, 'src'));
+      try {
+        const result = await harness.client.callTool({
+          name: 'search_text',
+          arguments: { path: root, searchPattern: 'NEEDLE core' },
+        });
+        const { matches } = result._meta as { matches: { file: string }[] };
+        assert.deepStrictEqual(
+          matches.map((m) => m.file),
+          [under(root, 'src/core/x.ts')],
+        );
+      } finally {
+        process.chdir(elsewhere);
+      }
+    });
+
+    it('prints absolute paths for a name that would not read back as given', async () => {
+      const guard = await makeGuard([root]);
+      const paths = guard.resultPaths(root);
+      assert.strictEqual(paths.show(join(root, '~', 'x.txt')), join(root, '~', 'x.txt'));
+      assert.strictEqual(paths.show(join(root, 'src', 'a.ts')), 'src/a.ts');
+    });
+
+    it('prints absolute paths for a folder the user granted during the session', async () => {
+      const granted = join(base, 'granted-results');
+      await writeTestFile(granted, 'g.txt', 'GRANTED_NEEDLE\n');
+      const pair = await createElicitationClientPair([root], () => ({
+        action: 'accept' as const,
+        content: { confirm: true },
+      }));
+      try {
+        const result = await pair.client.callTool({
+          name: 'search_text',
+          arguments: { path: granted, searchPattern: 'GRANTED_NEEDLE' },
+        });
+        assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+        const { matches } = result._meta as { matches: { file: string }[] };
+        assert.deepStrictEqual(
+          matches.map((m) => normalizePath(m.file)),
+          [normalizePath(join(granted, 'g.txt'))],
+        );
+      } finally {
+        await pair.close();
+      }
+    });
+  });
+
   it('names the roots when a relative path is ambiguous', async () => {
     const harness = await createTestClientPair([root, second]);
     try {

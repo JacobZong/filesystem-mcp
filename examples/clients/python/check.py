@@ -140,6 +140,8 @@ try:
     assert code == 0 and fold(f"{src}: 3 FIXME, 1 HACK, 1 XXX, 5 TODO in 3 files.") in fold(out), (
         err
     )
+    # A report on a subfolder names files from the root, so each reads back as given.
+    assert "`src/a.ts:2` handle errors\n" in section(out, "FIXME"), out
     assert not os.listdir(elsewhere), os.listdir(elsewhere)
     # With two roots or none there is no default, so dir must be absolute.
     for url, says in (
