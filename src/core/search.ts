@@ -59,6 +59,83 @@ export function createYielder(signal: AbortSignal | undefined): () => Promise<bo
  */
 export const RE2_MAX_INPUT_BYTES = 4 * MIB;
 
+/** One line's matches: how many, and where the first starts (UTF-16 units). */
+interface LineHit {
+  count: number;
+  column: number;
+}
+
+/**
+ * A literal needle matched in native code, as RE2 would match it. RE2 copies
+ * its whole input into the wasm heap on every call, and for a literal that
+ * copy is most of what a search costs: once per file to rule it out, then once
+ * per line of every file it could not rule out.
+ */
+interface LiteralMatcher {
+  /** True when this file holds a character RE2 folds onto one of the needle's letters. */
+  needsRe2(buffer: Buffer): boolean;
+  /** False only when the raw bytes cannot hold a match. */
+  mayMatch(buffer: Buffer): boolean;
+  matchLine(line: string): LineHit | undefined;
+}
+
+/** The only non-ASCII characters RE2's case folding maps onto ASCII letters. */
+const KELVIN_SIGN_UTF8 = Buffer.from('\u212A', 'utf8'); // folds onto k
+const LONG_S_UTF8 = Buffer.from('\u017F', 'utf8'); // folds onto s
+const ASCII_UPPER_RE = /[A-Z]+/gu;
+
+/** Non-overlapping occurrences, left to right, as a global RE2 exec walks them. */
+function countOccurrences(line: string, needle: string): LineHit | undefined {
+  const column = line.indexOf(needle);
+  if (column === -1) return undefined;
+  let count = 0;
+  let at = column;
+  while (at !== -1 && count < MAX_MATCHES_PER_LINE) {
+    count++;
+    at = line.indexOf(needle, at + needle.length);
+  }
+  return { count, column };
+}
+
+/** `undefined` when RE2 must judge the needle: these shortcuts are exact only for the needles they take. */
+function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMatcher | undefined {
+  // The file is decoded with U+FFFD for every invalid byte, and a lone
+  // surrogate reaches RE2 as U+FFFD, so a needle holding either can match
+  // decoded text that the raw bytes, or indexOf, do not.
+  if (needle.includes('\uFFFD') || Buffer.from(needle, 'utf8').toString('utf8') !== needle) {
+    return undefined;
+  }
+  if (caseSensitive) {
+    const bytes = Buffer.from(needle, 'utf8');
+    return {
+      needsRe2: () => false,
+      mayMatch: (buffer) => buffer.includes(bytes),
+      matchLine: (line) => countOccurrences(line, needle),
+    };
+  }
+  // Every non-ASCII character takes more than one UTF-8 byte per UTF-16 unit.
+  if (Buffer.byteLength(needle, 'utf8') !== needle.length) return undefined;
+  const lower = needle.toLowerCase();
+  const folds = [
+    ...(lower.includes('k') ? [KELVIN_SIGN_UTF8] : []),
+    ...(lower.includes('s') ? [LONG_S_UTF8] : []),
+  ];
+  return {
+    needsRe2: (buffer) => folds.some((fold) => buffer.includes(fold)),
+    // Latin-1 decoding keeps one char per byte, and lowercasing it maps A-Z
+    // onto a-z and every other byte onto a non-ASCII char, so an ASCII needle
+    // is found exactly where the bytes spell it in either case.
+    mayMatch: (buffer) => buffer.toString('latin1').toLowerCase().includes(lower),
+    // ASCII letters only: String#toLowerCase turns U+0130 into two code units,
+    // which shifts every later column and spells an `i` RE2 does not match.
+    matchLine: (line) =>
+      countOccurrences(
+        line.replace(ASCII_UPPER_RE, (upper) => upper.toLowerCase()),
+        lower,
+      ),
+  };
+}
+
 const BUFFER_ANCHOR_RE = /\\[AzZ]/u;
 /** `(?i)`, `(?-m)`, `(?s:…)`: inline flags can undo the `m` the prefilter relies on. */
 const INLINE_FLAGS_RE = /\(\?[a-zA-Z-]+[:)]/u;
@@ -189,7 +266,7 @@ async function findLineMatches(
   regex: Regex,
   line: string,
   tick: () => Promise<boolean>,
-): Promise<{ count: number; column: number } | undefined> {
+): Promise<LineHit | undefined> {
   let count = 0;
   let column = -1;
   // Awaiting mid-drain is safe with a shared regex: execMatches re-writes
@@ -262,6 +339,8 @@ interface ScanContext {
   maxResults: number;
   regex: Regex;
   prefilter: Regex;
+  /** Set for a literal needle it can match; RE2 then judges only the files it hands back. */
+  literal: LiteralMatcher | undefined;
   source: string;
   context: number;
 }
@@ -273,9 +352,19 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
     // re-checks the descriptor's real path (H4), so these bytes are the
     // validated file's, not whatever the name points at by now.
     await using handle = await scanCtx.fs.open(entryPath);
-    const stats = await handle.stat();
-    if (stats.size > scanCtx.maxFileSize) return { kind: 'tooLarge' };
-    buffer = await handle.readFile({ signal: scanCtx.signal });
+    const { size } = await handle.stat();
+    if (size > scanCtx.maxFileSize) return { kind: 'tooLarge' };
+    // Read the size fstat reported: handle.readFile would fstat again and then
+    // read once more to find EOF, two extra round trips on every file a walk
+    // touches. A file that grows meanwhile is searched as it was at the fstat.
+    buffer = Buffer.allocUnsafe(size);
+    let filled = 0;
+    while (filled < size) {
+      const { bytesRead } = await handle.read(buffer, filled, size - filled, filled);
+      if (bytesRead === 0) break;
+      filled += bytesRead;
+    }
+    buffer = buffer.subarray(0, filled);
   } catch (error) {
     if (scanCtx.signal?.aborted) throw error;
     return { kind: 'inaccessible' };
@@ -286,8 +375,10 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
   // bytes a pattern could not have matched anyway.
   if (buffer.includes(0)) return { kind: 'binary' };
 
+  const literal = scanCtx.literal?.needsRe2(buffer) ? undefined : scanCtx.literal;
+  if (literal && !literal.mayMatch(buffer)) return { kind: 'scanned', matches: [] };
   const content = buffer.toString('utf-8');
-  if (canPrefilter(scanCtx.source, buffer)) {
+  if (!literal && canPrefilter(scanCtx.source, buffer)) {
     scanCtx.prefilter.lastIndex = 0;
     if (scanCtx.prefilter.exec(content) === null) return { kind: 'scanned', matches: [] };
   }
@@ -300,8 +391,9 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
     content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
   // A single line past RE2_MAX_INPUT_BYTES OOMs the wasm module for the rest of
   // the process; report the file tooLarge instead. Only a buffer over the bound
-  // can hold such a line, so ordinary files skip the per-line measure.
-  const checkLineSize = buffer.length > RE2_MAX_INPUT_BYTES;
+  // can hold such a line, so ordinary files skip the per-line measure, and a
+  // literal match never hands a line to RE2.
+  const checkLineSize = !literal && buffer.length > RE2_MAX_INPUT_BYTES;
   const matches: SearchResult[] = [];
   const tick = createYielder(scanCtx.signal);
   for (let i = 0; i < lineCount; i++) {
@@ -314,7 +406,9 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
     if (await tick()) break;
     // One scan per line: the helper resets lastIndex itself, so it
     // doubles as the "does this line match" test.
-    const found = await findLineMatches(scanCtx.regex, line, tick);
+    const found = literal
+      ? literal.matchLine(line)
+      : await findLineMatches(scanCtx.regex, line, tick);
     if (found) {
       matches.push({
         file: entryPath,
@@ -393,6 +487,9 @@ export async function searchContent(
       maxResults,
       regex,
       prefilter,
+      literal: options.isRegex
+        ? undefined
+        : createLiteralMatcher(pattern, Boolean(options.caseSensitive)),
       source,
       context,
     };
