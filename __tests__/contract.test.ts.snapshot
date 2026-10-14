@@ -164,7 +164,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "maxLength": 4096
           },
           "edits": {
-            "description": "Replacements applied to path; not allowed when using files",
+            "description": "Replacements applied to path (required with path); not allowed with files",
             "minItems": 1,
             "maxItems": 100,
             "type": "array",
@@ -265,20 +265,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "path",
-              "edits"
-            ]
-          },
-          {
-            "required": [
-              "files"
-            ]
-          }
-        ]
+        "additionalProperties": false
       },
       "annotations": {
         "readOnlyHint": false,
@@ -463,7 +450,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "maximum": 2147483647
           },
           "endLine": {
-            "description": "End line (1-indexed)",
+            "description": "End line (1-indexed); requires startLine",
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
@@ -488,24 +475,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "path"
-            ]
-          },
-          {
-            "required": [
-              "paths"
-            ]
-          }
-        ],
-        "dependentRequired": {
-          "endLine": [
-            "startLine"
-          ]
-        }
+        "additionalProperties": false
       },
       "annotations": {
         "readOnlyHint": true,
@@ -822,19 +792,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "path"
-            ]
-          },
-          {
-            "required": [
-              "paths"
-            ]
-          }
-        ]
+        "additionalProperties": false
       },
       "annotations": {
         "readOnlyHint": true,
@@ -1042,7 +1000,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             "maximum": 2147483647
           },
           "endLine": {
-            "description": "End line (1-indexed)",
+            "description": "End line (1-indexed); requires startLine",
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
@@ -1067,24 +1025,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "path"
-            ]
-          },
-          {
-            "required": [
-              "paths"
-            ]
-          }
-        ],
-        "dependentRequired": {
-          "endLine": [
-            "startLine"
-          ]
-        }
+        "additionalProperties": false
       },
       "annotations": {
         "readOnlyHint": true,
@@ -1293,19 +1234,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "path"
-            ]
-          },
-          {
-            "required": [
-              "paths"
-            ]
-          }
-        ]
+        "additionalProperties": false
       },
       "annotations": {
         "readOnlyHint": true,
