@@ -3,12 +3,14 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
   createTestRoot,
   type TestClientContext,
   trySymlink,
+  withEnv,
 } from './helpers.ts';
 
 interface StatValue {
@@ -91,5 +93,38 @@ describe('stat entryCount for a directory', () => {
     const sc = result.structuredContent as { results: { value?: StatValue }[] };
     // Only a.txt is listed; .env, env-link and out-link are hidden, so none count.
     assert.strictEqual(sc.results[0]?.value?.entryCount, 1);
+  });
+
+  it('reports TIMEOUT when the deadline fires mid-count, and no entryCount when the count fails', async () => {
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- restored in the finally below
+    const original = GuardedFileSystem.prototype.countEntries;
+    const full = join(root, 'full');
+    try {
+      // The deadline fires at 1000 ms; the count wakes at 1500 ms and sees the abort.
+      GuardedFileSystem.prototype.countEntries = async function (_dirPath, options) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        options?.signal?.throwIfAborted();
+        return 0;
+      };
+      const result = await withEnv({ FS_TOOL_TIMEOUT_MS: '1000' }, () =>
+        harness.client.callTool({ name: 'stat', arguments: { path: full } }),
+      );
+      assert.strictEqual(result.isError, true);
+      const sc = result.structuredContent as { results: { error?: { code: string } }[] };
+      assert.strictEqual(sc.results[0]?.error?.code, 'TIMEOUT');
+
+      // Control: an ordinary count failure still degrades to a stat without entryCount.
+      GuardedFileSystem.prototype.countEntries = async function () {
+        throw new Error('boom');
+      };
+      const control = await harness.client.callTool({ name: 'stat', arguments: { path: full } });
+      assert.notStrictEqual(control.isError, true);
+      const csc = control.structuredContent as { results: { value?: StatValue }[] };
+      const value = csc.results[0]?.value;
+      assert.ok(value, 'stat must return a value');
+      assert.ok(!('entryCount' in value), 'a failed count must not report an entryCount');
+    } finally {
+      GuardedFileSystem.prototype.countEntries = original;
+    }
   });
 });
