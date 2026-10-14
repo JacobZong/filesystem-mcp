@@ -387,7 +387,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
         );
     for (const dir of accepted) {
       if (!grantDirs.some((g) => isSamePath(g, dir))) continue;
-      await this.toolCtx.fs.pathGuard.applyGrant(dir);
+      await this.toolCtx.fs.pathGuard.applyGrant(dir, 'access');
     }
     return undefined;
   }
@@ -434,7 +434,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       // isError tool result like every other handler failure — not a raw
       // JSON-RPC error (GRANT-1 impact #2). Relative paths resolve first, so
       // the pre-check judges the path the call will use; with several roots
-      // that probes, but only names under the roots, and reads nothing.
+      // that probes each candidate through validation, and reads nothing.
       await this.resolveRelativePaths();
       const grantRequired = await this.precheckGrant();
       if (grantRequired !== undefined) return grantRequired;

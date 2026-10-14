@@ -104,7 +104,7 @@ export async function seedRootsFromClient(ctx: FilesystemServerContext): Promise
       continue; // not a file:// root
     }
     try {
-      if (await ctx.pathGuard.applyGrant(dir)) granted += 1;
+      if (await ctx.pathGuard.applyGrant(dir, 'workspace')) granted += 1;
       else Logger.debug('[Stdio] client root refused by grant policy', { dir });
     } catch (err: unknown) {
       Logger.debug('[Stdio] client root grant failed', {

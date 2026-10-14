@@ -200,11 +200,16 @@ it also has a `hint` saying how to add one.
 
 **Relative paths resolve against the server's working directory** while that
 lands inside a root. Otherwise they resolve against the roots: against the
-one root, or with several, against the one root the path exists under. A
-relative path that exists under several roots, or under none of several, is
-refused with `INVALID_INPUT`, and the error names the roots. So the paths
-`search_text` and `find_files` print for a search of the root can be passed
-straight back to `read` or `edit`. With no roots at all, a relative path still
+one root, or with several, against the one root the path exists under. Only
+the roots you configured and the ones your client declared count here, not a
+folder granted during the session, so approving a grant never changes what a
+relative path names. A relative path that exists under several roots, or
+under none of several, is refused with `INVALID_INPUT`, and the error names
+the roots. When the working directory is a root or outside every root, the
+paths `search_text` and `find_files` print for a search of the root can be
+passed straight back to `read` or `edit`. When it is a subfolder of a root,
+as with `--walk-cwd`, relative paths resolve against that subfolder, so send
+absolute paths. With no configured or declared roots, a relative path still
 resolves against the working directory, and so becomes a request to grant
 access there, which a client that approves grants automatically would accept.
 Absolute paths built from `list_roots` are never ambiguous. `~` expands to the

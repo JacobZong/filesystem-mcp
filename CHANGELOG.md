@@ -29,13 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Outside allowed directories" right after `search_text` printed
   `src/a.ts`. A relative path still resolves against the working directory
   while that lands inside a root. Otherwise it resolves against the roots:
-  the one root, or with several, the one root it exists under. A relative
-  path that exists under several roots, or under none of several, is refused
-  with `INVALID_INPUT` naming the roots. With a root configured, a relative
-  path no longer turns into a request to grant access to the server's
-  working directory. A `create` or `edit` batch that names one file by both
-  a relative and an absolute path is refused as a duplicate, as two
-  spellings of one absolute path already were.
+  the one root, or with several, the one root it exists under. Only
+  configured roots and those a client declares count; a folder granted during
+  the session does not, so approving one never changes what a relative path
+  names. A relative path that exists under several roots, or under none of
+  several, is refused with `INVALID_INPUT` naming the roots. With a root
+  configured, a relative path no longer turns into a request to grant access
+  to the server's working directory. A `create` or `edit` batch that names
+  one file by both a relative and an absolute path is refused as a
+  duplicate, as two spellings of one absolute path already were.
 - **Literal `search_text` is about twice as fast.** A literal pattern (the
   default, `isRegex: false`) is matched in native code instead of RE2, which
   copied every file into its heap just to rule it out. Each file also costs
