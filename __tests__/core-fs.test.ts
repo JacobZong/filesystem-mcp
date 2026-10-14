@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import type { PathLike } from 'node:fs';
+import type { Dir, PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
   mkdir,
@@ -1434,6 +1434,52 @@ describe('GuardedFileSystem.countEntries', () => {
       name: 'AbortError',
     });
   });
+
+  it('a stalled directory read ends at the deadline', async (t) => {
+    const dir = join(root, 'stalled-read');
+    await mkdir(dir);
+    // A read on a hung mount never settles, so only the signal can end the call.
+    const stalled = {
+      read: () => new Promise<never>(() => {}),
+      close: async () => {},
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+    };
+    t.mock.method(fsPromises, 'opendir', async () => stalled as unknown as Dir);
+    syncBuiltinESMExports();
+    try {
+      const started = performance.now();
+      await assert.rejects(fs.countEntries(dir, { signal: AbortSignal.timeout(200) }), {
+        name: 'TimeoutError',
+      });
+      assert.ok(performance.now() - started < 2000);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it(
+    'a stalled directory open ends at the deadline',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async (t) => {
+      const dir = join(root, 'stalled-open');
+      await mkdir(dir);
+      t.mock.method(fsPromises, 'open', () => new Promise<never>(() => {}));
+      syncBuiltinESMExports();
+      try {
+        const started = performance.now();
+        await assert.rejects(fs.countEntries(dir, { signal: AbortSignal.timeout(200) }), {
+          name: 'TimeoutError',
+        });
+        assert.ok(performance.now() - started < 2000);
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    },
+  );
 
   it('counts regular entries of a readable directory without resolving each one', async () => {
     const dir = join(root, 'readonly');
