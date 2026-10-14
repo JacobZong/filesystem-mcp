@@ -357,14 +357,21 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
     // Read the size fstat reported: handle.readFile would fstat again and then
     // read once more to find EOF, two extra round trips on every file a walk
     // touches. A file that grows meanwhile is searched as it was at the fstat.
-    buffer = Buffer.allocUnsafe(size);
-    let filled = 0;
-    while (filled < size) {
-      const { bytesRead } = await handle.read(buffer, filled, size - filled, filled);
-      if (bytesRead === 0) break;
-      filled += bytesRead;
+    // A size of 0 is also what procfs and other virtual files report while
+    // holding text, so those still read to EOF.
+    if (size === 0) {
+      buffer = await handle.readFile({ signal: scanCtx.signal });
+      if (buffer.length > scanCtx.maxFileSize) return { kind: 'tooLarge' };
+    } else {
+      buffer = Buffer.allocUnsafe(size);
+      let filled = 0;
+      while (filled < size) {
+        const { bytesRead } = await handle.read(buffer, filled, size - filled, filled);
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      buffer = buffer.subarray(0, filled);
     }
-    buffer = buffer.subarray(0, filled);
   } catch (error) {
     if (scanCtx.signal?.aborted) throw error;
     return { kind: 'inaccessible' };

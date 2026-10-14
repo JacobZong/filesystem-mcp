@@ -45,8 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stopped at the 5-second limit after about 3,200 files now finishes in 2 to
   4 seconds. Results are unchanged, with one exception: a literal search now
   searches a line longer than 4 MiB, which RE2 cannot take, instead of
-  counting its file in `skippedTooLarge`. Regex searches, and case-insensitive
-  patterns with non-ASCII letters, still use RE2.
+  counting its file in `skippedTooLarge`. RE2 still handles regex searches,
+  case-insensitive patterns with non-ASCII letters, patterns holding U+FFFD,
+  and a case-insensitive pattern with a `k` or `s` in a file that holds the
+  Kelvin sign or the long s, which RE2 matches as those letters; there a line
+  over 4 MiB still counts its file in `skippedTooLarge`.
 
 ### Fixed
 

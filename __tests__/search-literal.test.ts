@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -80,5 +81,25 @@ describe('literal search matches what RE2 would', () => {
         if (!caseSensitive) assert.strictEqual(literal.length, hits);
       });
     }
+  }
+});
+
+// procfs reports a size of 0 for files that hold text; a read sized by fstat
+// would search them as empty.
+describe('a file whose size reads as 0 while it holds text', () => {
+  const procDir = `/proc/${String(process.pid)}`;
+  const skip = !existsSync(join(procDir, 'status')) && 'needs Linux procfs';
+
+  for (const isRegex of [false, true]) {
+    it(`is searched to its end (${isRegex ? 'regex' : 'literal'})`, { skip }, async () => {
+      const guard = await makeGuard([procDir]);
+      const outcome = await searchContent(
+        procDir,
+        'Name',
+        { isRegex, caseSensitive: true, explicitFile: join(procDir, 'status') },
+        guard,
+      );
+      assert.strictEqual(outcome.summary.filesMatched, 1, JSON.stringify(outcome.summary));
+    });
   }
 });
