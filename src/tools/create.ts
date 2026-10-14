@@ -187,22 +187,32 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       if (round !== undefined) return round;
     }
 
+    // One counter across both batches: ProgressSession drops a value at or below its last one.
+    const progressTotal = dirs.length + files.length;
+    const progressFrom = (offset: number): ToolCtx => ({
+      ...ctx,
+      onProgress: ({ current }) => {
+        ctx.onProgress({ current: offset + current, total: progressTotal });
+      },
+    });
+
     // Directories wait for the overwrite question above, so nothing is written
     // before the user answers.
     const dirBatch =
       dirs.length > 0
-        ? await runOverPaths(dirs, ctx, ErrorCode.UNKNOWN, async (dir) => {
+        ? await runOverPaths(dirs, progressFrom(0), ErrorCode.UNKNOWN, async (dir) => {
             await ctx.fs.mkdir(dir, { recursive: true });
             return dir;
           })
         : NO_ENTRIES;
 
+    const filesCtx = progressFrom(dirs.length);
     const batch =
       files.length > 0
         ? await runOverPaths<
             z.infer<typeof CreateFileItemSchema>,
             { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
-          >(files, ctx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
+          >(files, filesCtx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
             const pendingPath = pendingByPath.get(path);
             if (pendingPath !== undefined) {
               const verdict = readPendingVerdict(ctx, pendingSorted, pendingPath, 'overwrite');

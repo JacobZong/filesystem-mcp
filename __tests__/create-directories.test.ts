@@ -79,4 +79,46 @@ describe('create with directories', () => {
       [file],
     );
   });
+
+  it('counts progress across the directory and file batches', async (t) => {
+    // Each Date.now() read advances one rate-limit window, so every tick is sent
+    // and only the progress counter decides which values reach the client.
+    let now = 0;
+    t.mock.method(Date, 'now', () => (now += 50));
+    const dirs = [1, 2, 3].map((n) => join(root, 'progress', `d${String(n)}`));
+    const files = [1, 2].map((n) => ({
+      path: join(root, 'progress', `f${String(n)}.txt`),
+      content: `file ${String(n)}`,
+    }));
+    const frames: { progress: number; total?: number | undefined }[] = [];
+    const result = await harness.client.callTool(
+      { name: 'create', arguments: { directories: dirs, files } },
+      {
+        onprogress: (p) => {
+          frames.push(p);
+        },
+      },
+    );
+    assert.notStrictEqual(result.isError, true, firstTextBlock(result).text);
+
+    let previous = -1;
+    for (const frame of frames) {
+      assert.ok(
+        frame.progress > previous,
+        `progress must strictly increase: ${JSON.stringify(frames)}`,
+      );
+      previous = frame.progress;
+    }
+    // Frames are a start (0), one tick per entry, then the completion, which
+    // lands one past the last tick.
+    const ticks = frames.slice(1, -1);
+    assert.deepStrictEqual(
+      ticks.map((frame) => frame.progress),
+      [1, 2, 3, 4, 5],
+    );
+    assert.ok(
+      ticks.every((frame) => frame.total === 5),
+      JSON.stringify(ticks),
+    );
+  });
 });
