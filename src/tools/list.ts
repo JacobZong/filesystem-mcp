@@ -167,7 +167,7 @@ const INDENT = '    ';
  */
 function treeHeader(pathGuard: PathGuard, dir: string): string {
   const paths = pathGuard.resultPaths(dir);
-  return paths.atRoot ? basename(dir) : paths.show(dir);
+  return paths.atRoot ? basename(paths.root) : paths.show(dir);
 }
 
 function renderMarkdown(rootName: string, page: readonly CollectedEntry[]): string {
