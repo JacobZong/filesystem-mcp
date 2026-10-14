@@ -201,20 +201,33 @@ export function singleOrBatchPathsInput<TExtra extends z.ZodRawShape>(
 }
 
 /**
- * Extract the filesystem paths from a {@link singleOrBatchPathsInput} shape
- * (`{ path?, paths?, files?[{path}] }`) for the executor's access-grant
- * pre-check. Exactly one of the three is set (enforced by the schema's
- * superRefine), so they are checked in priority order.
+ * `ToolDef.mapPaths` for a {@link singleOrBatchPathsInput} shape
+ * (`{ path?, paths?, files?[{path}] }`). The schema's superRefine lets exactly
+ * one of the three through; each present one is mapped.
  */
-export function singleOrBatchAccessPaths(args: {
-  path?: string | undefined;
-  paths?: string[] | undefined;
-  files?: readonly { path: string }[] | undefined;
-}): string[] {
-  if (args.path) return [args.path];
-  if (args.paths) return [...args.paths];
-  if (args.files) return args.files.map((f) => f.path);
-  return [];
+export function mapSingleOrBatchPaths<
+  T extends {
+    path?: string | undefined;
+    paths?: string[] | undefined;
+    files?: readonly { path: string }[] | undefined;
+  },
+>(args: T, fn: (path: string) => string): T {
+  return {
+    ...args,
+    ...(args.path !== undefined ? { path: fn(args.path) } : {}),
+    ...(args.paths !== undefined ? { paths: args.paths.map(fn) } : {}),
+    ...(args.files !== undefined
+      ? { files: args.files.map((file) => ({ ...file, path: fn(file.path) })) }
+      : {}),
+  };
+}
+
+/** `ToolDef.mapPaths` for a tool whose one `path` is optional (omitted = the root). */
+export function mapOptionalPath<T extends { path?: string | undefined }>(
+  args: T,
+  fn: (path: string) => string,
+): T {
+  return args.path === undefined ? args : { ...args, path: fn(args.path) };
 }
 
 // ponytail: charset regex, not z.base64url() — the SDK's AJV warns on the

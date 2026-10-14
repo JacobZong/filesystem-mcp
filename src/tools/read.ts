@@ -12,7 +12,7 @@ import { detectMimeFromContent, detectMimeType, type FileKind } from '../core/mi
 import type { ReadFileResult, ReadSpec } from '../core/read.ts';
 import {
   defaultFalseBoolean,
-  singleOrBatchAccessPaths,
+  mapSingleOrBatchPaths,
   singleOrBatchPathsInput,
   validateReadRange,
 } from '../core/schema.ts';
@@ -347,7 +347,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     }
     return { label: READ_TOOL_LABEL, subject: name, ...(scope ? { scope } : {}) };
   },
-  accessPaths: singleOrBatchAccessPaths,
+  mapPaths: mapSingleOrBatchPaths,
   run: async (args, ctx) => {
     const items: BudgetItem[] =
       args.paths !== undefined

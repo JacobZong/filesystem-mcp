@@ -16,6 +16,7 @@ import {
 import { Logger } from './observability.ts';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.ts';
 import {
+  expandHome,
   getReservedDeviceNameForPath,
   IS_WINDOWS,
   isPathInsideDirectory,
@@ -551,6 +552,68 @@ export class PathGuard {
       throw new FsError(ErrorCode.ACCESS_DENIED, 'Workspace root is unexpectedly undefined');
     }
     return root;
+  }
+
+  /**
+   * Where the relative paths a caller sent should point, keyed by the spelling
+   * sent; a path that keeps its meaning is absent. A relative path resolves
+   * against the working directory, as it always has, while that lands inside
+   * an allowed root. When it does not — a desktop host starts the server
+   * outside the project, and an HTTP client never shares its working directory
+   * — it resolves against the roots: the one root, or with several, the one it
+   * exists under. Tools report paths relative to the root they walked, so this
+   * is what lets one tool's output feed the next.
+   *
+   * Absolute, `~` and drive-relative paths keep their meaning, as does every
+   * path when no root is configured; validation judges them as before. A
+   * relative path that exists under several roots, or under none of several,
+   * is refused here rather than guessed.
+   */
+  async resolveRelativePaths(paths: readonly string[]): Promise<Map<string, string>> {
+    const resolved = new Map<string, string>();
+    const roots = this.getRoots();
+    if (roots.length === 0) return resolved;
+    const allowedDirs = this.getAllowedDirectories();
+    for (const requested of new Set(paths)) {
+      if (
+        requested.trim().length === 0 ||
+        isWindowsDriveRelativePath(requested) ||
+        isAbsolute(expandHome(requested)) ||
+        isPathWithinDirectories(normalizePath(requested), allowedDirs)
+      ) {
+        continue;
+      }
+      resolved.set(requested, await this.resolveAgainstRoots(requested, roots));
+    }
+    return resolved;
+  }
+
+  private async resolveAgainstRoots(requested: string, roots: readonly string[]): Promise<string> {
+    const candidates = roots.map((root) => join(root, requested));
+    const [first] = candidates;
+    if (first === undefined || candidates.length === 1) return first ?? requested;
+    // A blocked name is never probed: whether it exists is what the denylist
+    // hides. Validation refuses the first spelling with the denylist's reason.
+    const blocked = candidates.find((candidate) => this.isSensitive(candidate));
+    if (blocked !== undefined) return blocked;
+    const existing: string[] = [];
+    for (const candidate of candidates) {
+      try {
+        await lstat(candidate);
+        existing.push(candidate);
+      } catch {
+        // Missing, or under a file (ENOTDIR), or unreadable: not this root's.
+      }
+    }
+    const [only] = existing;
+    if (only !== undefined && existing.length === 1) return only;
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      existing.length === 0
+        ? `Relative path exists under none of the ${String(roots.length)} roots, so it names no one file. Pass an absolute path under one of: ${roots.join(', ')}.`
+        : `Relative path exists under more than one root: ${existing.join(', ')}. Pass the absolute path you mean.`,
+      requested,
+    );
   }
 
   isAllowedRoot(normalizedPath: string): boolean {

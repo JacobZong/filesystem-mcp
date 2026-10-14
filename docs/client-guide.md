@@ -102,8 +102,8 @@ the allowed roots; every flag in the
 argument list (for example `--read-only`).
 
 - Set `cwd` to the workspace. Relative paths in tool calls resolve against the
-  server process's working directory, not against its root (see
-  [Folders and paths](#folders-and-paths)).
+  server process's working directory when that is inside a root, and against
+  the root otherwise (see [Folders and paths](#folders-and-paths)).
 - The server prints its allowed folders and its logs on stderr. Pipe stderr
   (`stderr: 'pipe'` in TypeScript, `errlog=` in Python) if it would mix with
   your own output, and keep the tail of it for error messages.
@@ -140,8 +140,8 @@ async with Client(transport) as client: ...
 - The server is stateless per request, with no session ID. One server can
   serve many clients at once, and they share its allowed folders, including
   folders granted by any one of them.
-- Send absolute paths. Relative paths resolve against the directory the server
-  was started in, which a remote client cannot know.
+- Prefer absolute paths. A relative path resolves against the root unless the
+  server was started inside one, which a remote client cannot know.
 - 2025-era clients get no confirmations and no change notifications over HTTP;
   see the table below.
 
@@ -198,13 +198,17 @@ the user accepts. Call the `list_roots` tool for the current set:
 `structuredContent.roots` is an array of absolute paths. With no roots at all
 it also has a `hint` saying how to add one.
 
-**Relative paths resolve against the server's working directory**, not
-against a root. Over stdio, start the server with `cwd` set to the
-workspace. Over HTTP, use absolute paths built from `list_roots`. A relative
-path that lands outside the roots does not fail outright. It becomes a request
-to grant access to the server's working directory, which a client that
-approves grants automatically would accept. `~` expands to the home directory
-of the user running the server.
+**Relative paths resolve against the server's working directory** while that
+lands inside a root. Otherwise they resolve against the roots: against the
+one root, or with several, against the one root the path exists under. A
+relative path that exists under several roots, or under none of several, is
+refused with `INVALID_INPUT`, and the error names the roots. So the paths
+`search_text` and `find_files` print for a search of the root can be passed
+straight back to `read` or `edit`. With no roots at all, a relative path still
+resolves against the working directory, and so becomes a request to grant
+access there, which a client that approves grants automatically would accept.
+Absolute paths built from `list_roots` are never ambiguous. `~` expands to the
+home directory of the user running the server.
 
 **Access grants.** A tool call with a path outside the roots does not touch
 the filesystem. It asks the user first (see [Confirmations](#confirmations)),
@@ -536,7 +540,7 @@ if (client.getProtocolEra() === 'modern') {
 - Start the server with `--read-only` for anything that only reads.
 - Do not approve access grants automatically. Over HTTP, a grant one client
   accepts applies to every client of that server until it restarts.
-- Use absolute paths over HTTP, and set `cwd` over stdio (see
+- Prefer absolute paths, above all with several roots or no roots (see
   [Folders and paths](#folders-and-paths)).
 - Treat `requestState` as opaque and keep it with the call it came from.
 - Over HTTP, set an API key, keep the server on `127.0.0.1` unless clients

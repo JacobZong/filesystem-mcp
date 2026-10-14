@@ -397,7 +397,7 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
         ? basename(args.paths[0] ?? '')
         : `${String(args.paths.length)} paths`,
   }),
-  accessPaths: (args) => [...args.paths],
+  mapPaths: (args, fn) => ({ ...args, paths: args.paths.map(fn) }),
   run: async (args, ctx) => {
     const structured = await handleDelete(args, ctx);
     // input_required is a return value, not a completed call: surface it

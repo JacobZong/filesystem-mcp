@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hits the 5-second deadline keeps the files it already rewrote. Its text now
   names them and warns that re-running the same replacement applies it to
   them again.
+- **A relative path resolves against the root when the server runs outside
+  it.** Desktop hosts start the server outside the project, and an HTTP client
+  never shares its working directory, so `read` with `src/a.ts` failed with
+  "Outside allowed directories" right after `search_text` printed
+  `src/a.ts`. A relative path still resolves against the working directory
+  while that lands inside a root. Otherwise it resolves against the roots:
+  the one root, or with several, the one root it exists under. A relative
+  path that exists under several roots, or under none of several, is refused
+  with `INVALID_INPUT` naming the roots. With a root configured, a relative
+  path no longer turns into a request to grant access to the server's
+  working directory. A `create` or `edit` batch that names one file by both
+  a relative and an absolute path is refused as a duplicate, as two
+  spellings of one absolute path already were.
 
 ### Fixed
 

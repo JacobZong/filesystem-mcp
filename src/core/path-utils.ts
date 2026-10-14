@@ -139,7 +139,7 @@ export function isWindowsDriveRelativePath(requestedPath: string): boolean {
   return root.length === 2;
 }
 
-function expandHome(filepath: string): string {
+export function expandHome(filepath: string): string {
   if (filepath === '~' || filepath.startsWith('~/') || filepath.startsWith('~\\')) {
     const rest = filepath.slice(1).replace(/^[/\\]+/, '');
     return rest ? join(HOMEDIR, rest) : HOMEDIR;

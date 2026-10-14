@@ -112,7 +112,10 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     'edit or patch changes part of an existing file.',
   input: CreateInputSchema,
   readOnlyHint: false,
-  accessPaths: (args) => args.files.map((f) => f.path),
+  mapPaths: (args, fn) => ({
+    ...args,
+    files: args.files.map((file) => ({ ...file, path: fn(file.path) })),
+  }),
   run: async (args, ctx) => {
     // Phase 1 (no mutation): which entries would replace a file that exists
     // right now? Those need the user's word before anything is written (R14).

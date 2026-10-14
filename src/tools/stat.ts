@@ -4,7 +4,7 @@ import { ErrorCode, rethrowIfAborted } from '../core/errors.ts';
 import type { GuardedFileSystem, Stats } from '../core/fs.ts';
 import { detectMimeType } from '../core/mime.ts';
 import { type EntryType, resolveEntryType } from '../core/path-utils.ts';
-import { singleOrBatchAccessPaths, singleOrBatchPathsInput } from '../core/schema.ts';
+import { mapSingleOrBatchPaths, singleOrBatchPathsInput } from '../core/schema.ts';
 import { DEFAULT_SEARCH_TIMEOUT_MS } from '../core/util.ts';
 import type { BatchResult } from './batch.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
@@ -155,7 +155,7 @@ export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
     }
     return { label: 'Stat', subject: args.path ?? '' };
   },
-  accessPaths: singleOrBatchAccessPaths,
+  mapPaths: mapSingleOrBatchPaths,
   run: async (args, ctx) => {
     const paths = args.path !== undefined ? [args.path] : (args.paths ?? []);
 
