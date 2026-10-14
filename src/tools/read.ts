@@ -12,7 +12,7 @@ import { detectMimeFromContent, detectMimeType, type FileKind } from '../core/mi
 import type { ReadFileResult, ReadSpec } from '../core/read.ts';
 import {
   defaultFalseBoolean,
-  singleOrBatchAccessPaths,
+  mapSingleOrBatchPaths,
   singleOrBatchPathsInput,
   validateReadRange,
 } from '../core/schema.ts';
@@ -314,8 +314,9 @@ async function readOnePath(
   return buildPerPathReadValue(result, {
     includeHash: args.includeHash,
     // The continuation is args the caller pastes back, so it echoes the path
-    // they wrote. `result.path` is the resolved absolute one — on Windows that
-    // is a backslash-doubling JSON string that also spells out the server root.
+    // they wrote, or the root-resolved one a relative path was rewritten to.
+    // `result.path` is the real path — on Windows that is a backslash-doubling
+    // JSON string that also spells out the server root.
     requestedPath: filePath,
   });
 }
@@ -347,7 +348,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     }
     return { label: READ_TOOL_LABEL, subject: name, ...(scope ? { scope } : {}) };
   },
-  accessPaths: singleOrBatchAccessPaths,
+  mapPaths: mapSingleOrBatchPaths,
   run: async (args, ctx) => {
     const items: BudgetItem[] =
       args.paths !== undefined

@@ -23,6 +23,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hits the 5-second deadline keeps the files it already rewrote. Its text now
   names them and warns that re-running the same replacement applies it to
   them again.
+- **A relative path resolves against the root when the server runs outside
+  it.** Desktop hosts start the server outside the project, and an HTTP client
+  never shares its working directory, so `read` with `src/a.ts` failed with
+  "Outside allowed directories" right after `search_text` printed
+  `src/a.ts`. A relative path still resolves against the working directory
+  while that lands inside a root. Otherwise it resolves against the roots:
+  the one root, or with several, the one root it exists under. Only
+  configured roots and those a client declares count; a folder granted during
+  the session does not, so approving one never changes what a relative path
+  names. A relative path that exists under several roots, or under none of
+  several, is refused with `INVALID_INPUT` naming the roots. With a root
+  configured, a relative path no longer turns into a request to grant access
+  to the server's working directory. A `create` or `edit` batch that names
+  one file by both a relative and an absolute path is refused as a
+  duplicate, as two spellings of one absolute path already were.
+- **Literal `search_text` is about twice as fast.** A literal pattern (the
+  default, `isRegex: false`) is matched in native code instead of RE2, which
+  copied every file into its heap just to rule it out. Each file also costs
+  two fewer filesystem calls. On a 7,300-file tree, a literal search that
+  stopped at the 5-second limit after about 3,200 files now finishes in 2 to
+  4 seconds. Results are unchanged, with one exception: a literal search now
+  searches a line longer than 4 MiB, which RE2 cannot take, instead of
+  counting its file in `skippedTooLarge`. RE2 still handles regex searches,
+  case-insensitive patterns with non-ASCII letters, patterns holding U+FFFD,
+  and a case-insensitive pattern with a `k` or `s` in a file that holds the
+  Kelvin sign or the long s, which RE2 matches as those letters; there a line
+  over 4 MiB still counts its file in `skippedTooLarge`.
 
 ### Fixed
 

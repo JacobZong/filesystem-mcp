@@ -19,6 +19,7 @@ import {
   defaultFalseBoolean,
   IncludeHidden,
   IncludeIgnored,
+  mapOptionalPath,
   MaxDepth,
   nonBlankString,
   OptionalPath,
@@ -610,7 +611,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       subject: `${truncateProgressPattern(args.searchPattern)} → ${truncateProgressPattern(args.replacement)}`,
     };
   },
-  accessPaths: (args) => (args.path ? [args.path] : []),
+  mapPaths: mapOptionalPath,
   run: async (args, ctx) => {
     const truncatedPattern = truncateProgressPattern(args.searchPattern);
     const { structured, link } = await handleSearchAndReplace(args, ctx);

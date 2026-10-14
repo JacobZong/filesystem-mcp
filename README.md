@@ -350,8 +350,10 @@ The basics:
   `search_text`, `edit`, ...) and in `structuredContent` for `stat`,
   `create`, and `list_roots`. `read` is the exception: the file's text is
   only in the text block, and `_meta` holds metadata about it.
-- **Paths.** Relative paths resolve against the server's working directory,
-  not its root. Set `cwd` over stdio, and send absolute paths over HTTP.
+- **Paths.** A relative path resolves against the server's working directory
+  when that is inside a root, and against the root otherwise. With several
+  roots, it must exist under exactly one of them. Absolute paths are never
+  ambiguous.
 - **Confirmations.** Overwrites, recursive deletes, and paths outside the
   roots are questions for the user. Declare the `elicitation` capability and
   answer them in a handler, or, on the 2026-07-28 protocol, take them as data

@@ -266,8 +266,9 @@ those clients, use stdio, or `overwrite: true` where a tool offers it.
 The server never picks up a client's workspace folders over HTTP, whatever
 the client's version, so pass folders as arguments when you start it. All
 clients of one server share its folders, including any folder one of them was
-granted. Clients should send absolute paths, because a relative path resolves against
-the folder the server was started in, not against a root. The
+granted. A relative path resolves against the root unless the server was
+started inside one, and with several roots it must exist under exactly one,
+so clients are safest sending absolute paths. The
 [client guide](client-guide.md) covers this and the rest of what a client
 needs to know.
 

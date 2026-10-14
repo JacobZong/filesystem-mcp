@@ -56,7 +56,7 @@ export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
     label: args.dryRun ? 'Patch [dry run]' : 'Patch',
     subject: basename(args.path),
   }),
-  accessPaths: (args) => [args.path],
+  mapPaths: (args, fn) => ({ ...args, path: fn(args.path) }),
   run: async (args, ctx) =>
     // A dry run never writes, so it needs no lock.
     args.dryRun

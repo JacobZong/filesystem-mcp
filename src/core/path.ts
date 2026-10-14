@@ -16,6 +16,7 @@ import {
 import { Logger } from './observability.ts';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.ts';
 import {
+  expandHome,
   getReservedDeviceNameForPath,
   IS_WINDOWS,
   isPathInsideDirectory,
@@ -167,6 +168,15 @@ export class PathGuard {
    * field — so the recompute can rebuild from it without re-filtering.
    */
   private grantedDirectories: string[] = [];
+  /**
+   * The grants a user approved for a path a tool asked about, as opposed to
+   * the workspace roots a client declared. Relative paths never resolve
+   * against these: one approval must not change what a relative path names,
+   * neither in a later round of the same call nor in a later call.
+   */
+  private accessGrants: string[] = [];
+  /** Where relative paths resolve: the roots minus `accessGrants`, alone and with realpath aliases. */
+  private relativeBases: { roots: string[]; expanded: string[] } | undefined;
   private rootBoundaries: string[] = [];
 
   private readonly options: ServerOptions | undefined;
@@ -178,10 +188,20 @@ export class PathGuard {
   /**
    * `expanded` is the containment set (each root plus its realpath alias);
    * `roots` is what a caller choosing "the root" sees, one entry per root.
+   * `relativeBases` is the same pair for the roots relative paths resolve
+   * against; every root, unless some were access grants.
    */
-  initialize(expanded: readonly string[], roots: readonly string[] = expanded): void {
+  initialize(
+    expanded: readonly string[],
+    roots: readonly string[] = expanded,
+    relativeBases: { roots: readonly string[]; expanded: readonly string[] } = { roots, expanded },
+  ): void {
     this.allowedDirectoriesState = normalizeAllowedDirectories(expanded);
     this.rootsState = normalizeAllowedDirectories(roots);
+    this.relativeBases = {
+      roots: normalizeAllowedDirectories(relativeBases.roots),
+      expanded: normalizeAllowedDirectories(relativeBases.expanded),
+    };
   }
 
   isInitialized(): boolean {
@@ -325,8 +345,12 @@ export class PathGuard {
    * pre-checks passed. The caller leaves a refused path to fail with
    * ACCESS_DENIED during the operation. Idempotent: re-granting an already
    * allowed directory is a no-op via the dedup in `initialize`.
+   *
+   * `kind` says where the grant came from: `access` for a path the user
+   * approved when a tool asked, `workspace` for a root the client declared.
+   * Only a workspace root becomes a place relative paths resolve.
    */
-  async applyGrant(targetDir: string): Promise<boolean> {
+  async applyGrant(targetDir: string, kind: 'access' | 'workspace' = 'access'): Promise<boolean> {
     // Defense-in-depth: even a tampered/accepted grant cannot extend roots into
     // an unsafe path. The precheckAccess guard already refuses to offer these;
     // this catches a grant that arrived by another route — the legacy stdio
@@ -342,21 +366,31 @@ export class PathGuard {
     // nothing in this body may take the lock again.
     return runExclusive(this, async () => {
       const previous = this.grantedDirectories;
-      this.grantedDirectories = [...previous, normalizePath(targetDir)];
+      const previousAccess = this.accessGrants;
+      const dir = normalizePath(targetDir);
+      this.grantedDirectories = [...previous, dir];
+      this.accessGrants =
+        kind === 'access'
+          ? [...previousAccess, dir]
+          : previousAccess.filter((grant) => !isSamePath(grant, dir));
+      const rollBack = (): void => {
+        this.grantedDirectories = previous;
+        this.accessGrants = previousAccess;
+      };
       try {
         await this.recomputeAllowedDirectories();
       } catch (error) {
         // A failed recompute leaves the guard with its previous, consistent view.
-        this.grantedDirectories = previous;
+        rollBack();
         throw error;
       }
       // Verify rather than assume: a boundary that no longer covers this
       // directory would drop it in the recompute above, and reporting success
       // for a grant that did not land is exactly the failure this replaces.
-      if (isPathWithinDirectories(normalizePath(targetDir), this.getAllowedDirectories())) {
+      if (isPathWithinDirectories(dir, this.getAllowedDirectories())) {
         return true;
       }
-      this.grantedDirectories = previous;
+      rollBack();
       await this.recomputeAllowedDirectories();
       return false;
     });
@@ -551,6 +585,72 @@ export class PathGuard {
       throw new FsError(ErrorCode.ACCESS_DENIED, 'Workspace root is unexpectedly undefined');
     }
     return root;
+  }
+
+  /**
+   * Where the relative paths a caller sent should point, keyed by the spelling
+   * sent; a path that keeps its meaning is absent. A relative path resolves
+   * against the working directory, as it always has, while that lands inside
+   * a root. When it does not — a desktop host starts the server outside the
+   * project, and an HTTP client never shares its working directory — it
+   * resolves against the roots: the one root, or with several, the one it
+   * exists under. A search of the root reports paths relative to it, so this
+   * is what lets one tool's output feed the next.
+   *
+   * "Roots" here are the configured ones and those a client declared, never an
+   * access grant (see `accessGrants`). Absolute, `~` and drive-relative paths
+   * keep their meaning, as does every path when there is no such root;
+   * validation judges them as before. A relative path that exists under
+   * several roots, or under none of several, is refused rather than guessed.
+   */
+  async resolveRelativePaths(paths: readonly string[]): Promise<Map<string, string>> {
+    const resolved = new Map<string, string>();
+    const bases = this.relativeBases;
+    if (!bases || bases.roots.length === 0) return resolved;
+    for (const requested of new Set(paths)) {
+      if (
+        requested.trim().length === 0 ||
+        isWindowsDriveRelativePath(requested) ||
+        isAbsolute(expandHome(requested)) ||
+        isPathWithinDirectories(normalizePath(requested), bases.expanded)
+      ) {
+        continue;
+      }
+      resolved.set(requested, await this.resolveAgainstRoots(requested, bases.roots));
+    }
+    return resolved;
+  }
+
+  private async resolveAgainstRoots(requested: string, roots: readonly string[]): Promise<string> {
+    const candidates = roots.map((root) => join(root, requested));
+    const [first] = candidates;
+    if (first === undefined || candidates.length === 1) return first ?? requested;
+    // Each candidate is probed through validation itself, so the probe learns
+    // nothing validation would not tell the caller: a denylisted name is
+    // refused before the filesystem is touched, and a path through a symlink
+    // out of the roots is refused whether or not its target exists.
+    const existing: string[] = [];
+    let refused: string | undefined;
+    for (const candidate of candidates) {
+      try {
+        await this.validateExistingPath(candidate);
+        existing.push(candidate);
+      } catch (error) {
+        if (isFsError(error) && error.code === ErrorCode.NOT_FOUND) continue;
+        refused ??= candidate;
+      }
+    }
+    const [only] = existing;
+    if (only !== undefined && existing.length === 1) return only;
+    // Validation then refuses it again, with its own reason.
+    if (existing.length === 0 && refused !== undefined) return refused;
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      existing.length === 0
+        ? `Relative path exists under none of the ${String(roots.length)} roots, so it names no one file. Pass an absolute path under one of: ${roots.join(', ')}.`
+        : `Relative path exists under more than one root: ${existing.join(', ')}. Pass the absolute path you mean.`,
+      requested,
+    );
   }
 
   isAllowedRoot(normalizedPath: string): boolean {
@@ -775,10 +875,19 @@ export class PathGuard {
 
     const combined = [...baseline, ...grantsToInclude];
     const nextState = await resolveAllowedDirectoriesState(combined, signal);
+    const accessGrants = this.accessGrants;
+    const bases = [
+      ...baseline,
+      ...grantsToInclude.filter((dir) => !accessGrants.some((grant) => isSamePath(grant, dir))),
+    ];
+    const nextBases =
+      bases.length === combined.length
+        ? nextState
+        : await resolveAllowedDirectoriesState(bases, signal);
     // Commit boundaries and the allowed set together, after every await has
     // resolved, so a rejecting recompute leaves the guard's previous,
     // consistent view intact.
     this.rootBoundaries = boundaries;
-    this.initialize(nextState, combined);
+    this.initialize(nextState, combined, { roots: bases, expanded: nextBases });
   }
 }

@@ -11,6 +11,7 @@ import {
   defaultFalseBoolean,
   IncludeHidden,
   IncludeIgnored,
+  mapOptionalPath,
   MaxDepth,
   nonBlankString,
   OptionalPath,
@@ -216,7 +217,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   progressDone: (_args, result) => ({
     detail: buildSearchMatchDetail(result.totalMatches ?? 0, result.filesMatched ?? 0),
   }),
-  accessPaths: (args) => (args.path ? [args.path] : []),
+  mapPaths: mapOptionalPath,
   run: async (args, ctx) => {
     const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
     const paged = await paginate<SearchMatchPayload, SearchContentPageMetadata, JsonResourceResult>(

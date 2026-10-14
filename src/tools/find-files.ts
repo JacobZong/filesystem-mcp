@@ -7,6 +7,7 @@ import {
   CursorSchema,
   IncludeHidden,
   IncludeIgnored,
+  mapOptionalPath,
   MaxDepth,
   OptionalPath,
   SafeGlobPattern,
@@ -79,7 +80,7 @@ export const FIND_FILES = defineTool<typeof SearchFilesInputSchema, SearchFilesO
   progressDone: (_args, result) => ({
     detail: formatCount(result.totalMatches ?? 0, 'match', 'matches'),
   }),
-  accessPaths: (args) => (args.path ? [args.path] : []),
+  mapPaths: mapOptionalPath,
   run: async (args, ctx) => {
     const requestedBasePath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
     const paged = await paginate<SearchFileResult, SearchFilesPageMetadata, JsonResourceResult>({

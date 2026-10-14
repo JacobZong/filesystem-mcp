@@ -122,14 +122,17 @@ export interface ToolDef<I extends z.ZodType, O extends object> {
   readonly progressDone?: (args: z.infer<I>, result: O) => Partial<ProgressCtx>;
   readonly defaultErrorCode?: ErrorCode;
   /**
-   * The filesystem paths this tool will operate on, extracted from its parsed
-   * args. The executor runs an access-grant pre-check over these BEFORE `run`
+   * The parsed args with every caller-supplied filesystem path passed through
+   * `fn`. Before `run`, the executor reads the paths through it to resolve
+   * relative ones (`PathGuard.resolveRelativePaths`) and writes the results
+   * back, so every check `run` makes — duplicates and overlaps included — sees
+   * one spelling. It then runs the access-grant pre-check over the same paths
    * (R7): any path outside the granted roots yields an `input_required`
    * round-trip requesting a grant, and nothing is touched until the client
    * retries with an accepted grant (R8). Omit for tools that do not operate on
    * caller-supplied filesystem paths.
    */
-  readonly accessPaths?: (args: z.infer<I>) => readonly string[];
+  readonly mapPaths?: (args: z.infer<I>, fn: (path: string) => string) => z.infer<I>;
   readonly run: (args: z.infer<I>, ctx: ToolCtx) => Promise<RunResult<O> | InputRequiredResult>;
   /**
    * What the stdio size refusal tells the caller to do instead, for a tool
@@ -211,7 +214,8 @@ function buildSuccessResponse<O extends object>(result: RunResult<O>): CallToolR
 class ToolExecutor<I extends z.ZodType, O extends object> {
   readonly signal: AbortSignal;
   private readonly def: ToolDef<I, O>;
-  private readonly parsedArgs: z.infer<I>;
+  /** Rewritten once, by `resolveRelativePaths`, before anything reads a path. */
+  private parsedArgs: z.infer<I>;
   private readonly toolCtx: ToolCtx;
 
   readonly #progressCtx: ProgressCtx;
@@ -293,6 +297,34 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     };
   }
 
+  private collectPaths(): string[] {
+    const paths: string[] = [];
+    this.def.mapPaths?.(this.parsedArgs, (path) => {
+      paths.push(path);
+      return path;
+    });
+    return paths;
+  }
+
+  private async resolveRelativePaths(): Promise<void> {
+    const { mapPaths } = this.def;
+    if (!mapPaths) return;
+    const resolved = await this.toolCtx.fs.pathGuard.resolveRelativePaths(this.collectPaths());
+    if (resolved.size === 0) return;
+    const rewritten = mapPaths(this.parsedArgs, (path) => resolved.get(path) ?? path);
+    // The schema compared the spellings the caller sent, so `a.txt` and
+    // `<root>/a.txt` passed create's and edit's one-entry-per-file rule as two
+    // files. Its checks judge the resolved paths too.
+    const check = this.def.input.safeParse(rewritten);
+    if (!check.success) {
+      const issues = check.error.issues.map(
+        (issue) => `${issue.path.map(String).join('.')}: ${issue.message}`,
+      );
+      throw new FsError(ErrorCode.INVALID_INPUT, issues.join('; '));
+    }
+    this.parsedArgs = rewritten;
+  }
+
   /**
    * Access-grant pre-check (R7/R8/R9). Before `run` touches the filesystem,
    * ask PathGuard which of the tool's declared paths are out-of-root and
@@ -304,9 +336,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
    * when no round-trip is needed and any applicable grants have been applied.
    */
   private async precheckGrant(): Promise<InputRequiredResult | undefined> {
-    const extract = this.def.accessPaths;
-    if (!extract) return undefined;
-    const paths = extract(this.parsedArgs);
+    const paths = this.collectPaths();
     if (paths.length === 0) return undefined;
     const grantDirs = await this.toolCtx.fs.pathGuard.precheckAccess(paths);
     if (grantDirs.length === 0) return undefined;
@@ -357,7 +387,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
         );
     for (const dir of accepted) {
       if (!grantDirs.some((g) => isSamePath(g, dir))) continue;
-      await this.toolCtx.fs.pathGuard.applyGrant(dir);
+      await this.toolCtx.fs.pathGuard.applyGrant(dir, 'access');
     }
     return undefined;
   }
@@ -402,7 +432,10 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       // grant input_required short-circuits here (progress paused, not
       // finished); an R9 mismatch throws, which this catch surfaces as an
       // isError tool result like every other handler failure — not a raw
-      // JSON-RPC error (GRANT-1 impact #2).
+      // JSON-RPC error (GRANT-1 impact #2). Relative paths resolve first, so
+      // the pre-check judges the path the call will use; with several roots
+      // that probes each candidate through validation, and reads nothing.
+      await this.resolveRelativePaths();
       const grantRequired = await this.precheckGrant();
       if (grantRequired !== undefined) return grantRequired;
       const result = await this.def.run(this.parsedArgs, this.toolCtx);

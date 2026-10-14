@@ -3971,27 +3971,36 @@ describe('High-severity bug-hunt regressions (tools)', () => {
   describe('H1 + H6: core search is interruptible and guards over-long lines', () => {
     it('H6: a line past the RE2 input bound is reported skippedTooLarge, not a false empty, and later searches still work', async () => {
       const dir = join(tmpDir, 'oversized');
-      const bigLine = 'a'.repeat(RE2_MAX_INPUT_BYTES + 1024); // one line over the bound
+      // One line over the bound, ending in a match RE2 never gets to see.
+      const bigLine = `${'a'.repeat(RE2_MAX_INPUT_BYTES + 1024)} NEEDLE`;
       await writeTestFile(dir, 'huge.txt', bigLine);
       await writeTestFile(dir, 'ok.txt', 'hello NEEDLE world\n');
 
       const outcome = await searchContent(
         dir,
         'NEEDLE',
-        { isRegex: false },
+        { isRegex: true },
         pair.serverCtx.pathGuard,
       );
       assert.strictEqual(outcome.summary.skippedTooLarge, 1, 'the huge-line file is skipped');
       assert.strictEqual(outcome.matches.length, 1, 'the ordinary file is still searched');
 
       // The wasm module is still alive for a second search in the same process.
-      const again = await searchContent(
+      const again = await searchContent(dir, 'NEEDLE', { isRegex: true }, pair.serverCtx.pathGuard);
+      assert.strictEqual(again.matches.length, 1);
+
+      // A literal is matched natively, so the long line holds no hazard and is searched.
+      const literal = await searchContent(
         dir,
         'NEEDLE',
         { isRegex: false },
         pair.serverCtx.pathGuard,
       );
-      assert.strictEqual(again.matches.length, 1);
+      assert.strictEqual(literal.summary.skippedTooLarge, 0);
+      assert.deepStrictEqual(literal.matches.map((m) => m.file).sort(), [
+        join(dir, 'huge.txt'),
+        join(dir, 'ok.txt'),
+      ]);
     });
 
     it('H1: an aborted search over a dense-match line resolves as timeout, not a hang', async () => {

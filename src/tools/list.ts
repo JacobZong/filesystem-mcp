@@ -12,6 +12,7 @@ import {
   CursorSchema,
   IncludeHidden,
   IncludeIgnored,
+  mapOptionalPath,
   OptionalPath,
   PositiveInt,
 } from '../core/schema.ts';
@@ -259,7 +260,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
     label: 'List',
     subject: args.path ? basename(args.path) : '.',
   }),
-  accessPaths: (args) => (args.path ? [args.path] : []),
+  mapPaths: mapOptionalPath,
   run: async (args, ctx) => {
     const resolvedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
     const paged = await paginate<CollectedEntry, ListPageMetadata, JsonResourceResult>({

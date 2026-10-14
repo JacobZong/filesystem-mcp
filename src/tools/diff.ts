@@ -33,7 +33,7 @@ export const DIFF = defineTool<typeof DiffInputSchema, DiffOutput>({
     label: 'Diff',
     subject: basename(args.a),
   }),
-  accessPaths: (args) => [args.a, args.b],
+  mapPaths: (args, fn) => ({ ...args, a: fn(args.a), b: fn(args.b) }),
   run: async (args, ctx) => {
     const [{ validPath: validA, content: contentA }, { validPath: validB, content: contentB }] =
       await Promise.all([

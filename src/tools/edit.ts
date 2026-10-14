@@ -11,9 +11,9 @@ import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
 import { isSamePath } from '../core/path-utils.ts';
 import {
   defaultFalseBoolean,
+  mapSingleOrBatchPaths,
   nonBlankString,
   RequiredPath,
-  singleOrBatchAccessPaths,
 } from '../core/schema.ts';
 import { compileRegex, execMatches, freeRegex } from '../core/search.ts';
 import { escapeRegExp } from '../core/util.ts';
@@ -475,7 +475,7 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
     }
     return { label: `Edit${dryLabel}`, subject };
   },
-  accessPaths: singleOrBatchAccessPaths,
+  mapPaths: mapSingleOrBatchPaths,
   run: async (args, ctx) => {
     const items =
       args.path !== undefined ? [{ path: args.path, edits: args.edits ?? [] }] : (args.files ?? []);

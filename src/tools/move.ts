@@ -587,7 +587,10 @@ export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({
     }
     return { label, subject: `${String(args.moves.length)} files` };
   },
-  accessPaths: (args) => args.moves.flatMap((m) => [m.source, m.destination]),
+  mapPaths: (args, fn) => ({
+    ...args,
+    moves: args.moves.map((m) => ({ ...m, source: fn(m.source), destination: fn(m.destination) })),
+  }),
   run: async (args, ctx) => {
     const op: PairOp = args.copy ? 'copy' : 'move';
     // `overwrite` is copy-only; move has no confirmation bypass.
