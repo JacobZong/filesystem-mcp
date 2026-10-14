@@ -18,11 +18,12 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "create",
       "title": "Create Files",
-      "description": "Write whole text files: create new ones, overwrite, or append. Missing parent directories are created. edit or patch changes part of an existing file.",
+      "description": "Write whole text files (create new ones, overwrite, or append) or make empty directories. Missing parent directories are created. edit or patch changes part of an existing file.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "files": {
+            "description": "List of files to create (max 100); each entry requires path and content; combined content is capped at the file-size limit",
             "minItems": 1,
             "maxItems": 100,
             "type": "array",
@@ -53,13 +54,21 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
                 "content"
               ],
               "additionalProperties": false
-            },
-            "description": "List of files to create (max 100); each entry requires path and content; combined content is capped at the file-size limit"
+            }
+          },
+          "directories": {
+            "description": "Empty directories to create, like mkdir -p; one that already exists is left as it is",
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "description": "File or directory path inside an allowed workspace root."
+            }
           }
         },
-        "required": [
-          "files"
-        ],
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false
       },
