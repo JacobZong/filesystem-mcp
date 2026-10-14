@@ -302,7 +302,7 @@ What is where:
 | `search_text`                    | `root`, `matches[]` (`file`, relative to `root`, `line`, `column`, `content`, `before`, `after`), `totalMatches`, `nextCursor` |
 | `stat`, `read`, `edit`, `delete` | `results[]`, each `{ path, value }` or `{ path, error }`, and `summary` (`total`, `succeeded`, `failed`)                       |
 | `replace_text`                   | `root`, `results[]` (`path` relative to `root`), `summary`, `totalMatches`, `filesScanned`, and `diff` with `returnDiff: true` |
-| `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...) and `failures[]`                                       |
+| `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...), `directories[]`, and `failures[]`                     |
 | `move`                           | `moves[]` (`from`, `to`) and `failures[]`                                                                                      |
 | `diff`, `patch`                  | `a`/`b` or `path`, `linesAdded`, `linesRemoved`; a `patch` dry run also has `diff`                                             |
 

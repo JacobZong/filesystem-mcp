@@ -263,7 +263,7 @@ npm install -g @j0hanz/filesystem-mcp
 | `stat`           | Gets size, dates, type, permissions, and a token estimate without reading the file.                           |
 | `read`           | Reads one or many text files, whole or by line range, head, or tail. Images and audio come back as media.     |
 | `diff`           | Compares two files and returns a unified diff.                                                                |
-| `create` ✎       | Writes new files, or appends to them. Asks before replacing an existing file, unless `overwrite: true`.       |
+| `create` ✎       | Writes new files, appends, or makes empty folders. Asks before replacing a file, unless `overwrite: true`.    |
 | `edit` ✎         | Replaces exact text in files. All edits to a file apply, or none do. `dryRun` shows the diff first.           |
 | `patch` ✎        | Applies a unified diff to a file. All hunks apply, or none do.                                                |
 | `replace_text` ✎ | Finds and replaces text or a regex across many files. `dryRun` shows what would change.                       |
