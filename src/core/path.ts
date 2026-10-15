@@ -1054,12 +1054,23 @@ export class PathGuard {
     if (realAncestor !== resolvedTarget) {
       // Part of it is not on disk as typed; it may be under another Unicode
       // spelling (#101). Re-run the same checks on the on-disk spelling.
-      const respelled = await this.respellMissing(
-        normalizedRequested,
-        allowedDirs,
-        accessDeniedHint,
-        requestedPath,
-      );
+      // A followed link may name a missing target whose on-disk spelling
+      // differs; respell that target too, under the same checks.
+      const respelled =
+        (await this.respellMissing(
+          normalizedRequested,
+          allowedDirs,
+          accessDeniedHint,
+          requestedPath,
+        )) ??
+        (isSamePath(resolvedTarget, normalizedRequested)
+          ? undefined
+          : await this.respellMissing(
+              resolvedTarget,
+              allowedDirs,
+              accessDeniedHint,
+              requestedPath,
+            ));
       if (respelled !== undefined) {
         this.assertNotSensitiveFile(respelled, requestedPath);
         ({ realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(

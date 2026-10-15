@@ -283,6 +283,16 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       const target = await guard.validatePathForDelete(join(root, ASCII_SHOT));
       assert.strictEqual(target, guardPath(root, NNBSP_SHOT));
     });
+
+    it('a write through a link to a missing name lands on its equivalent spelling', async (t) => {
+      await writeFile(join(root, NBSP_NAME), 'nbsp');
+      const alias = join(root, 'alias');
+      if (!(await trySymlink(join(root, ASCII_NAME), alias, () => t.skip('no symlinks'), 'file'))) {
+        return;
+      }
+      const target = await guard.validatePathForWrite(alias);
+      assert.strictEqual(target, guardPath(root, NBSP_NAME));
+    });
   });
 
   describe('through the tools', () => {
@@ -605,6 +615,65 @@ describe('Unicode-equivalent path lookup (#101)', () => {
         assert.notStrictEqual(move.isError, true, firstTextBlock(move).text);
         const names = (await readdir(root)).filter((name) => name.endsWith('.txt'));
         assert.deepStrictEqual(names, [`${NFC_CAFE}.txt`]);
+      } finally {
+        await pair.close();
+      }
+    });
+
+    it('delete and edit keep two existing files whose names fold alike apart', async () => {
+      await writeFile(join(root, ASCII_NAME), 'space');
+      await writeFile(join(root, NBSP_NAME), 'nbsp');
+      const pair = await createTestClientPair([root]);
+      try {
+        const edit = await pair.client.callTool({
+          name: 'edit',
+          arguments: {
+            files: [
+              { path: join(root, ASCII_NAME), edits: [{ oldText: 'space', newText: 'S' }] },
+              { path: join(root, NBSP_NAME), edits: [{ oldText: 'nbsp', newText: 'N' }] },
+            ],
+          },
+        });
+        assert.notStrictEqual(edit.isError, true, firstTextBlock(edit).text);
+        assert.strictEqual(await readFile(join(root, ASCII_NAME), 'utf8'), 'S');
+        assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'N');
+
+        const del = await pair.client.callTool({
+          name: 'delete',
+          arguments: { paths: [join(root, ASCII_NAME), join(root, NBSP_NAME)] },
+        });
+        assert.notStrictEqual(del.isError, true, firstTextBlock(del).text);
+        assert.deepStrictEqual(await readdir(root), []);
+      } finally {
+        await pair.close();
+      }
+    });
+
+    it('edit refuses, and delete collapses, two spellings of one file', async () => {
+      await writeFile(join(root, NBSP_NAME), 'nbsp');
+      const pair = await createTestClientPair([root]);
+      try {
+        const edit = await pair.client.callTool({
+          name: 'edit',
+          arguments: {
+            files: [
+              { path: join(root, ASCII_NAME), edits: [{ oldText: 'nbsp', newText: 'A' }] },
+              { path: join(root, NBSP_NAME), edits: [{ oldText: 'nbsp', newText: 'B' }] },
+            ],
+          },
+        });
+        assert.strictEqual(edit.isError, true);
+        assert.match(firstTextBlock(edit).text ?? '', /same file/);
+        assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'nbsp');
+
+        const del = await pair.client.callTool({
+          name: 'delete',
+          arguments: { paths: [join(root, ASCII_NAME), join(root, NBSP_NAME)] },
+        });
+        assert.notStrictEqual(del.isError, true, firstTextBlock(del).text);
+        const summary = (del._meta as { summary: { total: number; failed: number } }).summary;
+        assert.deepStrictEqual([summary.total, summary.failed], [1, 0]);
+        assert.deepStrictEqual(await readdir(root), []);
       } finally {
         await pair.close();
       }

@@ -284,6 +284,9 @@ interface ReplacementPlan {
 
 async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<void> {
   const { dryRun, returnDiff, signal, summary } = ctx;
+  // Discovery/read failures on a walked file are skipped silently; a failed
+  // write is the caller's edit not landing, so it is always reported.
+  const write = { started: false };
 
   try {
     // Lock the read→write per file so a concurrent writer is not lost; a dry
@@ -292,7 +295,10 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
       ? await readReplacementPlan(entryPath, ctx)
       : await ctx.fs.lockForWrite(entryPath, async () => {
           const planned = await readReplacementPlan(entryPath, ctx);
-          if (planned) await ctx.fs.writeFile(entryPath, planned.updatedContent, { signal });
+          if (planned) {
+            write.started = true;
+            await ctx.fs.writeFile(entryPath, planned.updatedContent, { signal });
+          }
           return planned;
         });
     if (!plan) {
@@ -319,6 +325,7 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
     if (signal?.aborted) return;
     if (
       !ctx.singleFile &&
+      !write.started &&
       ((isFsError(error) &&
         (error.code === ErrorCode.ACCESS_DENIED ||
           error.code === ErrorCode.NOT_FOUND ||

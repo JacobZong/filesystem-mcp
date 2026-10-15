@@ -94,6 +94,11 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
   let totalBytes = 0;
   let fatalError: Error | undefined;
   const ceiling = options.pathGuard.allowedRootContaining(rootPath);
+  const comparator = entryComparator(options.sortBy);
+  const keepBest = (): void => {
+    entries.sort(comparator);
+    if (entries.length > options.entryCap) entries.length = options.entryCap;
+  };
 
   await processEntriesConcurrently<GlobEntry>(
     globEntries({
@@ -155,16 +160,16 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
           type: entryType,
           ...(size !== undefined ? { size } : {}),
         });
+        // Keep at most the best entryCap: prune whenever the buffer doubles,
+        // so memory stays O(entryCap) and the sorts O(n log entryCap) overall.
+        if (entries.length >= options.entryCap * 2) keepBest();
       },
     },
   );
 
   if (fatalError !== undefined) throw fatalError;
   options.signal.throwIfAborted();
-  entries.sort(entryComparator(options.sortBy));
-  if (entries.length > options.entryCap) {
-    entries.length = options.entryCap;
-  }
+  keepBest();
 
   return {
     entries,

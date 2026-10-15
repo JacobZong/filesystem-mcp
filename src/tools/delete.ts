@@ -23,7 +23,7 @@ import {
   type PendingState,
   readPendingVerdict,
 } from '../core/input-required.ts';
-import { isEquivalentPath, resolveEntryType } from '../core/path-utils.ts';
+import { resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, type PerPathResult, summarize } from './batch.ts';
@@ -271,10 +271,10 @@ async function handleDelete(
   ctx: ToolCtx,
 ): Promise<DeleteOutput | InputRequiredResult> {
   // Duplicate paths collapse: results are keyed by path, so a repeated entry
-  // would emit two rows for one deletion and inflate `summary.total`.
-  const paths = args.paths.filter(
-    (p, i) => args.paths.findIndex((other) => isEquivalentPath(other, p)) === i,
-  );
+  // would emit two rows for one deletion and inflate `summary.total`. Exact
+  // repeats go here; other spellings of one entry collapse after planning,
+  // by validated path, so two on-disk names that fold alike both stay.
+  const paths = [...new Set(args.paths)];
 
   // Phase 1 (no mutation): plan every path.
   const planned = await processInParallel(
@@ -290,9 +290,20 @@ async function handleDelete(
   const previouslyPendingPaths = new Set(
     confirmationState?.op === 'delete' ? confirmationState.paths : [],
   );
+  const seenTargets = new Set<string>();
+  const duplicates = new Set<number>();
   for (const { index, value: r } of planned.results) {
-    if (r.status === 'fail') out[index] = { path: r.failure.path, error: r.failure.error };
-    else if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
+    if (r.status === 'fail') {
+      out[index] = { path: r.failure.path, error: r.failure.error };
+      continue;
+    }
+    const target = r.status === 'noop' ? r.deleted : r.plan.validPath;
+    if (seenTargets.has(target)) {
+      duplicates.add(index);
+      continue;
+    }
+    seenTargets.add(target);
+    if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
     else {
       // Emptying a directory while its prompt is open must not discard the
       // answer. Keep that path pending so the verified retry still honors skip.
@@ -372,14 +383,15 @@ async function handleDelete(
 
   // Emit in the caller's input order so `results[i]` lines up with `paths[i]`
   // the way read/stat guarantee.
-  const results: DeletePerPathResult[] = paths.map((requested, i) => {
+  const results: DeletePerPathResult[] = paths.flatMap((requested, i) => {
+    if (duplicates.has(i)) return [];
     const entry = out[i];
-    return (
+    return [
       entry ?? {
         path: requested,
         error: { code: ErrorCode.UNKNOWN, message: 'Unknown delete failure' },
-      }
-    );
+      },
+    ];
   });
 
   return { results, summary: summarize(results) };
