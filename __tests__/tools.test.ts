@@ -157,6 +157,102 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.match(firstTextBlock(ranged).text ?? '', /no lines; read it whole with binary: true/);
   });
 
+  it('read with binary returns a PDF or zip as an embedded resource', async () => {
+    const dir = join(tmpDir, 'binary-flag');
+    await mkdir(dir, { recursive: true });
+    const cases = [
+      {
+        name: 'doc.pdf',
+        bytes: Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'latin1'),
+        mimeType: 'application/pdf',
+        kind: 'pdf',
+      },
+      {
+        name: 'a.zip',
+        bytes: Buffer.from([0x50, 0x4b, 3, 4, 0, 0, 0, 0]),
+        mimeType: 'application/zip',
+        kind: 'binary',
+      },
+      // Refused by extension although its bytes are ASCII: still one resource.
+      {
+        name: 'notes.bin',
+        bytes: Buffer.from('plain ascii\n'),
+        mimeType: 'application/octet-stream',
+        kind: 'binary',
+      },
+    ];
+    for (const c of cases) {
+      const file = join(dir, c.name);
+      await writeFile(file, c.bytes);
+      const result = await harness.client.callTool({
+        name: 'read',
+        arguments: { path: file, binary: true, includeHash: true },
+      });
+      assert.notStrictEqual(result.isError, true, c.name);
+      const blocks = result.content as readonly {
+        type: string;
+        resource?: { uri?: string; mimeType?: string; blob?: string };
+      }[];
+      assert.strictEqual(blocks.filter((b) => b.type === 'resource_link').length, 0, c.name);
+      const block = blocks.find((b) => b.type === 'resource');
+      assert.ok(block?.resource, `${c.name}: expected an embedded resource`);
+      assert.strictEqual(block.resource.uri, buildFileResourceUri(file));
+      assert.strictEqual(block.resource.mimeType, c.mimeType);
+      assert.ok(Buffer.from(block.resource.blob ?? '', 'base64').equals(c.bytes), c.name);
+      assert.match(firstTextBlock(result).text ?? '', /returned as an embedded resource block/);
+      assert.match(firstTextBlock(result).text ?? '', /\/\/ sha256: [0-9a-f]{64}/);
+      const value = (result._meta as { results?: { value?: Record<string, unknown> }[] })
+        .results?.[0]?.value;
+      assert.strictEqual(value?.['kind'], c.kind);
+      assert.strictEqual(value?.['mimeType'], c.mimeType);
+      assert.strictEqual(value?.['size'], c.bytes.length);
+      assert.strictEqual(value?.['resourceUri'], buildFileResourceUri(file));
+      assert.strictEqual(value?.['blobData'], undefined, 'bytes never ride _meta');
+    }
+  });
+
+  it('read with binary leaves text, UTF-16, secret and oversize files as they were', async () => {
+    const text = await writeTestFile(tmpDir, 'binary-flag/plain.txt', 'hello\n');
+    const plain = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: text, binary: true },
+    });
+    assert.notStrictEqual(plain.isError, true);
+    assert.strictEqual(firstTextBlock(plain).text, 'hello\n');
+    assert.ok((plain.content as { type: string }[]).some((b) => b.type === 'resource_link'));
+
+    const utf16 = join(tmpDir, 'binary-flag/utf16.txt');
+    await writeFile(
+      utf16,
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi\n', 'utf16le')]),
+    );
+    const wide = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: utf16, binary: true },
+    });
+    assert.strictEqual(wide.isError, true);
+    assert.match(failedSummary(wide)?.results?.[0]?.error?.message ?? '', /UTF-16/);
+
+    const secret = await writeTestFile(tmpDir, 'binary-flag/.env', 'SECRET=1');
+    const denied = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: secret, binary: true },
+    });
+    assert.strictEqual(denied.isError, true);
+    assert.ok(!(denied.content as { type: string }[]).some((b) => b.type === 'resource'));
+
+    const big = join(tmpDir, 'binary-flag/big.zip');
+    await writeFile(big, Buffer.alloc(1024 * 1024 + 1));
+    await withEnv({ FS_MAX_FILE_SIZE: String(1024 * 1024) }, async () => {
+      const tooLarge = await harness.client.callTool({
+        name: 'read',
+        arguments: { path: big, binary: true },
+      });
+      assert.strictEqual(tooLarge.isError, true);
+      assert.strictEqual(failedSummary(tooLarge)?.results?.[0]?.error?.code, 'TOO_LARGE');
+    });
+  });
+
   it('TC-FUNC-007: Read path outside allowed root returns isError: true with ACCESS_DENIED', async () => {
     const outsideDir = await createTestRoot();
     const outsideFile = await writeTestFile(outsideDir, 'outside_test.txt', 'secret');

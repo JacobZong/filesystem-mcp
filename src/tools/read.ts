@@ -95,6 +95,8 @@ interface ReadPerPathValue {
   mimeType?: string;
   kind?: FileKind;
   resourceUri?: string;
+  /** Bytes in the file; set when the bytes ride a media or resource block. */
+  size?: number;
   /** ISO-8601 mtime at read time; also rides the resource_link. */
   modified?: string;
   continuation?: ReadContinuation;
@@ -157,14 +159,15 @@ function buildReadContinuation(
 }
 
 /**
- * The published metadata plus the bytes this call read. `content` and
- * `mediaData` exist only between `readOnePath` and the content blocks `run`
+ * The published metadata plus the bytes this call read. `content`, `mediaData`
+ * and `blobData` exist only between `readOnePath` and the content blocks `run`
  * builds from them — they are stripped before the structured half is returned,
  * which is why they are not in `ReadPerPathValue`.
  */
 type PerPathReadValue = ReadPerPathValue & {
   content?: string;
   mediaData?: string;
+  blobData?: string;
 };
 
 interface BatchFileInfo {
@@ -279,6 +282,36 @@ function readTrailer(v: PerPathReadValue): string[] {
   return lines;
 }
 
+/**
+ * `binary: true` after the text path refused the file as binary. readRaw
+ * re-validates the path (roots, denylist) and enforces the same size cap.
+ * A file refused by its extension can still probe as text: it ships as the
+ * extension says, octet-stream.
+ */
+async function readBinaryResource(
+  filePath: string,
+  args: ReadFileInput,
+  ctx: ToolCtx,
+): Promise<PerPathReadValue> {
+  const raw = await ctx.fs.readRaw(filePath, { signal: ctx.signal });
+  const asText = raw.kind === 'text';
+  const kind: FileKind = asText ? 'binary' : raw.kind;
+  const mimeType = asText ? 'application/octet-stream' : raw.mimeType;
+  const size = raw.content.length;
+  return {
+    content: `[binary ${kind} content: ${String(size)} bytes (${mimeType}); returned as an embedded resource block]`,
+    mimeType,
+    kind,
+    size,
+    resourceUri: buildFileResourceUri(raw.validPath),
+    modified: raw.modified,
+    blobData: raw.content.toString('base64'),
+    ...(args.includeHash
+      ? { contentHash: createHash('sha256').update(raw.content).digest('hex') }
+      : {}),
+  };
+}
+
 async function readOnePath(
   filePath: string,
   args: ReadFileInput,
@@ -288,8 +321,8 @@ async function readOnePath(
   // INVALID_INPUT ("Binary file detected."). Line-range reads are
   // text-oriented and stay rejected. `readRaw` enforces the same size cap as
   // the text path (getMaxTextFileSize), so a too-large image surfaces TOO_LARGE
-  // rather than blowing memory. svg carries kind:'image' but is XML text —
-  // readRaw.isBinary is false for it, so it falls through to the text path.
+  // rather than blowing memory. svg is kind 'image' in EXT_MAP, so readRaw
+  // reports it binary and it returns as an image block.
   const isRangeRead =
     args.head !== undefined ||
     args.tail !== undefined ||
@@ -304,6 +337,7 @@ async function readOnePath(
           content: `[binary ${mime.kind} content: ${String(raw.content.length)} bytes; returned as a ${mime.kind} content block]`,
           mimeType: raw.mimeType,
           kind: mime.kind,
+          size: raw.content.length,
           mediaData: raw.content.toString('base64'),
         };
       }
@@ -318,6 +352,8 @@ async function readOnePath(
     result = await ctx.fs.readFile(filePath, spec);
   } catch (error: unknown) {
     if (!isBinaryRefusal(error)) throw error;
+    // The schema refuses binary with a range, so this is always a full read.
+    if (args.binary) return await readBinaryResource(filePath, args, ctx);
     throw new FsError(
       ErrorCode.INVALID_INPUT,
       isRangeRead
@@ -385,6 +421,13 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     for (const result of ordered) {
       if ('error' in result) continue;
       const v = result.value;
+      if (v.blobData !== undefined && v.resourceUri !== undefined && v.mimeType !== undefined) {
+        resources.push({
+          type: 'resource',
+          resource: { uri: v.resourceUri, mimeType: v.mimeType, blob: v.blobData },
+        });
+        continue;
+      }
       // Image/audio full read: emit the media content block alongside the
       // structured value. The base64 lives in v.mediaData (set in readOnePath).
       if (v.mediaData && v.mimeType && (v.kind === 'image' || v.kind === 'audio')) {
@@ -441,7 +484,12 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     // hashes, continuations, resourceUri.
     const structuredResults = ordered.map((result) => {
       if ('error' in result) return result;
-      const { content: _content, mediaData: _mediaData, ...value } = result.value;
+      const {
+        content: _content,
+        mediaData: _mediaData,
+        blobData: _blobData,
+        ...value
+      } = result.value;
       return { ...result, value };
     });
 
