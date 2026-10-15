@@ -11,7 +11,9 @@ import {
   FsError,
   isFsError,
   isNotFoundErrno,
+  isSkippableErrno,
   rethrowIfAborted,
+  SKIPPABLE_FS_CODES,
 } from './errors.ts';
 import { Logger } from './observability.ts';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.ts';
@@ -162,11 +164,16 @@ export async function resolveAllowedDirectoriesState(
 /**
  * TOCTOU note: validation returns a plain string and the fs operation is a
  * later syscall, so a symlink swapped in between could redirect it. Reads and
- * appends in core/fs.ts open with O_NOFOLLOW (final component)
- * and re-check the fd's real path on Linux (ancestor swap). Residual: write
- * paths that resolve a parent by name (`rename`, `mkdir`, `rm`, `cp`) would
- * need openat()-relative-to-dirfd, which Node lacks; non-Linux skips the fd
- * re-check.
+ * appends in core/fs.ts open with O_NOFOLLOW (final component) and re-check the
+ * fd's real path on Linux (ancestor swap). stat's directory count opens and
+ * re-checks the directory, and reads entries through that descriptor, only on
+ * Linux with procfs; elsewhere it reads the directory by path, so the swap
+ * window stays there, like the read path's non-Linux residual. Residuals: the
+ * directory walker behind list and the search tools (core/glob.ts) still
+ * resolves each entry by path, as the count does for a symlinked entry;
+ * write paths that resolve a parent by name
+ * (`rename`, `mkdir`, `rm`, `cp`) would need openat()-relative-to-dirfd, which
+ * Node lacks; non-Linux skips the fd re-check.
  */
 export class PathGuard {
   private allowedDirectoriesState: string[] | undefined;
@@ -279,6 +286,29 @@ export class PathGuard {
 
   isSensitive(filePath: string): boolean {
     return this.sensitive.isSensitive(filePath);
+  }
+
+  /**
+   * True when a walked entry is inside the allowed directories and not sensitive,
+   * on both its requested and resolved paths. Every entry is realpath-resolved: a
+   * symlinked ancestor pointing outside the sandbox would otherwise pass the
+   * lexical check (fs.glob follows symlinks and yields external entries as
+   * non-symlink dirents). Escapes and sensitive targets throw ACCESS_DENIED and
+   * skippable errors filter the entry; anything else is fatal. The accepted
+   * TOCTOU window is documented on this class.
+   */
+  async isEntryAccessible(entryPath: string): Promise<boolean> {
+    try {
+      const { requestedPath, resolvedPath } = await this.validateExistingPathDetailed(entryPath);
+      return !this.isSensitive(requestedPath) && !this.isSensitive(resolvedPath);
+    } catch (error) {
+      if (isFsError(error)) {
+        if (SKIPPABLE_FS_CODES.has(error.code)) return false;
+        throw error;
+      }
+      if (isSkippableErrno(error)) return false;
+      throw error;
+    }
   }
 
   async validateExistingPath(requestedPath: string): Promise<string> {

@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Read Changed if you join `search_text`, `find_files` or `replace_text`
 result paths onto the folder you searched: they are now relative to the
-root, which a new or changed `root` field names.
+root, which a new or changed `root` field names. Read it too if you check
+calls against the published input schemas: `read`, `stat` and `edit` no
+longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
 
 ### Security
 
@@ -21,10 +23,43 @@ root, which a new or changed `root` field names.
   patterns backtracked for minutes on one long file name, blocking every
   client. The refusal is the usual `Invalid glob or unsafe path` error.
 
+### Added
+
+- **`--tool-timeout` sets the time limit for one call.** `list`, `stat`,
+  `read`, `find_files`, `search_text` and `replace_text` stopped after a fixed
+  5 seconds, so a search over a large repository always ended early.
+  `--tool-timeout <ms>` or `FS_TOOL_TIMEOUT_MS` now sets the limit, from 1000
+  to 600000 ms. The default stays 5000, and `--print-config` reports the value
+  as `limits.toolTimeoutMs`. Most clients give up on a call after 60 seconds.
+- **`FS_READ_ONLY` turns on read-only mode from the environment**, like
+  `--read-only`, for clients that can only pass environment variables.
+- **The Claude Desktop extension can run read-only and block more files.**
+  Its settings gain a read-only switch and a comma-separated list of patterns
+  to block, passed to the server as `FS_READ_ONLY` and `FS_DENYLIST`.
+- **`create` makes empty directories.** A new `directories` list creates each
+  one like `mkdir -p`, and leaves one that already exists as it is. `files` is
+  now optional; a call needs at least one of the two. Directories are made only
+  after any overwrite confirmation is answered. The result lists them in
+  `directories`, and a failed one joins `failures`.
+- **`stat` on a directory reports `entryCount`**, the number of entries
+  directly inside it, so "is this folder empty?" takes one call
+  ([#56](https://github.com/j0hanz/filesystem-mcp/issues/56)). Hidden and
+  ignored entries count. Secret files, and symlinks to them or to anything
+  outside the allowed folders, do not, so the count never reveals what `list`
+  hides.
+
 ### Changed
 
+- **`read`, `stat` and `edit` no longer publish a top-level `oneOf`**, and
+  `read` no longer publishes `dependentRequired`. The OpenAI and Anthropic
+  function-calling APIs reject a top-level `oneOf`, `anyOf` or `allOf`, so
+  these schemas could not go to a model as they were. The rules themselves are
+  unchanged and still checked when the tool runs: `path` or `paths`, `path`
+  with `edits` or `files`, and `endLine` needs `startLine`, which the `endLine`
+  description now says. A call that breaks one gets the same
+  `Input validation error`.
 - **A `replace_text` timeout says what it already wrote.** A live run that
-  hits the 5-second deadline keeps the files it already rewrote. Its text now
+  hits its time limit keeps the files it already rewrote. Its text now
   names them and warns that re-running the same replacement applies it to
   them again.
 - **A relative path resolves against the root when the server runs outside

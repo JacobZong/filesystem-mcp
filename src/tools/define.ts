@@ -36,7 +36,7 @@ import { isSamePath } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import { withSplitArgsRecovery } from '../core/schema.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
-import { jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from '../core/util.ts';
+import { getToolTimeoutMs, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from '../core/util.ts';
 import { ProgressSession } from './progress.ts';
 
 export interface ToolCtx {
@@ -117,7 +117,8 @@ export interface ToolDef<I extends z.ZodType, O extends object> {
   readonly input: I;
   /** Required: drives both the --read-only gate and published annotations. */
   readonly readOnlyHint: boolean;
-  readonly timeoutMs?: number;
+  /** Abort the call after getToolTimeoutMs() (`--tool-timeout`, FS_TOOL_TIMEOUT_MS). */
+  readonly deadline?: boolean;
   readonly progress?: (args: z.infer<I>) => ProgressCtx;
   readonly progressDone?: (args: z.infer<I>, result: O) => Partial<ProgressCtx>;
   readonly defaultErrorCode?: ErrorCode;
@@ -229,8 +230,8 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
   ) {
     this.def = def;
     this.parsedArgs = parsedArgs;
-    this.signal = def.timeoutMs
-      ? AbortSignal.any([ctx.signal, AbortSignal.timeout(def.timeoutMs)])
+    this.signal = def.deadline
+      ? AbortSignal.any([ctx.signal, AbortSignal.timeout(getToolTimeoutMs())])
       : ctx.signal;
     this.#progressCtx = def.progress ? def.progress(parsedArgs) : { label: def.title };
     const { mcpReq } = ctx.serverCtx;

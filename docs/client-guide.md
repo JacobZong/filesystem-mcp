@@ -265,9 +265,11 @@ found by `resources/read`.
 - `--read-only` removes the six tools that change files from `tools/list`.
   Calling one anyway throws `Tool create not found`. Check the list rather
   than assuming.
-- Input schemas are JSON Schema draft 2020-12. `read`, `stat`, and `edit` have
-  a top-level `oneOf` (`path` or `paths`; `path`+`edits` or `files`), and
-  `read` has `dependentRequired` (`endLine` needs `startLine`).
+- Input schemas are JSON Schema draft 2020-12 with no top-level `oneOf`,
+  `anyOf`, or `allOf`, so they can go to the OpenAI and Anthropic APIs as they
+  are. Rules that span fields (`path` or `paths`; `path` with `edits`, or
+  `files`; `endLine` needs `startLine`) are checked when the tool runs and come
+  back as `Input validation error: ...`.
 - On 2026-07-28 the TypeScript SDK caches `tools/list` for the hour the
   server allows. The list only changes when the server restarts with other
   flags.
@@ -300,7 +302,7 @@ What is where:
 | `search_text`                    | `root`, `matches[]` (`file`, relative to `root`, `line`, `column`, `content`, `before`, `after`), `totalMatches`, `nextCursor` |
 | `stat`, `read`, `edit`, `delete` | `results[]`, each `{ path, value }` or `{ path, error }`, and `summary` (`total`, `succeeded`, `failed`)                       |
 | `replace_text`                   | `root`, `results[]` (`path` relative to `root`), `summary`, `totalMatches`, `filesScanned`, and `diff` with `returnDiff: true` |
-| `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...) and `failures[]`                                       |
+| `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...), `directories[]`, and `failures[]`                     |
 | `move`                           | `moves[]` (`from`, `to`) and `failures[]`                                                                                      |
 | `diff`, `patch`                  | `a`/`b` or `path`, `linesAdded`, `linesRemoved`; a `patch` dry run also has `diff`                                             |
 
@@ -319,6 +321,9 @@ Notes on individual tools:
   with `Binary file detected.`
 - `read` and `create` add a `resource_link` block per file, pointing at its
   `filesystem-mcp://file/...` resource.
+- `stat` on a folder has no `size`; its `entryCount` is the number of entries
+  directly inside it, hidden ones included and secret files left out. `0` means
+  the folder is empty.
 - A dry run of `edit` or `replace_text` returns a unified diff as its text.
   A dry run of `patch` returns the patched file as its text; the diff it
   applied is in `_meta.diff`.
@@ -380,7 +385,8 @@ pattern. The [limits table](configuration.md#limits) has the numbers.
   progress. The SDK's default request timeout is 60 seconds.
 - Abort the call's `AbortSignal` to cancel it. The SDK sends
   `notifications/cancelled` and rejects with an `AbortError`.
-- `list`, `stat` and `read` stop themselves after about 5 seconds with a
+- `list`, `stat` and `read` stop themselves after 5 seconds by default (the
+  server's `--tool-timeout` or `FS_TOOL_TIMEOUT_MS` changes this) with a
   `TIMEOUT` error. `find_files` and `search_text` stop at the same
   deadline but return what they found so far, with
   `_meta.stoppedReason: 'timeout'` (see
@@ -543,9 +549,8 @@ if (client.getProtocolEra() === 'modern') {
 
 ## Using the tools from a model
 
-- Pass `tools/list` to the model as function definitions. OpenAI and Anthropic
-  reject a top-level `oneOf`/`anyOf`/`allOf`/`not` in function parameters.
-  Remove those keys before sending, and leave validation to the server.
+- Pass `tools/list` to the model as function definitions. The schemas need no
+  rewriting, and the server validates every call.
 - Use `internal://instructions` as, or in, the system prompt.
 - Send the model the text blocks, including on `isError` (prefix them with
   `ERROR:` or similar). The server writes the messages so a model can recover.

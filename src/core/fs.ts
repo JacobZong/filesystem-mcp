@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Stats } from 'node:fs';
+import { constants, existsSync } from 'node:fs';
+import type { Dir, Dirent, Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
   chmod as fsChmod,
@@ -17,7 +18,7 @@ import {
   unlink as fsUnlink,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -31,7 +32,7 @@ import {
 import { detectMimeFromContent, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
-import { normalizePath, respellCaseOnlyTarget } from './path-utils.ts';
+import { isSamePath, normalizePath, respellCaseOnlyTarget } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
 import {
@@ -39,6 +40,7 @@ import {
   APPEND_NOFOLLOW,
   assertFileStats,
   createTooLargeError,
+  O_NOFOLLOW,
   READ_NOFOLLOW,
   readFileWithStats,
 } from './read.ts';
@@ -46,6 +48,13 @@ import { getMaxTextFileSize } from './util.ts';
 
 export type { FileType };
 export type { Stats };
+
+// Directory open for countEntries. O_NOFOLLOW refuses a symlink named as the
+// directory; used only under COUNT_THROUGH_FD, like the re-check it feeds.
+const DIR_NOFOLLOW = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW;
+// The descriptor re-check and the read through /proc/self/fd need Linux with procfs mounted,
+// as the read path's re-check does; elsewhere the count reads the directory by path.
+const COUNT_THROUGH_FD = process.platform === 'linux' && existsSync('/proc/self/fd');
 
 // ─── Domain primitives ────────────────────────────────────────────────────────
 
@@ -89,13 +98,17 @@ export class GuardedFileSystem {
    * for a symlink after validation still passes. Re-read the open descriptor's
    * real path (Linux `/proc/self/fd`; skipped elsewhere) and require it to stay
    * inside the roots. Run before any byte is read or written through `handle`.
+   * Resolves to the normalized real path checked, or undefined when /proc is unreadable.
    */
-  async #assertFdWithinRoots(handle: FileHandle, requestedPath: string): Promise<void> {
+  async #assertFdWithinRoots(
+    handle: FileHandle,
+    requestedPath: string,
+  ): Promise<string | undefined> {
     let fdPath: string;
     try {
       fdPath = await fsReadlink(`/proc/self/fd/${String(handle.fd)}`);
     } catch {
-      return;
+      return undefined;
     }
     // A replaced target reads back as "<path> (deleted)".
     const inRoots =
@@ -110,6 +123,7 @@ export class GuardedFileSystem {
         requestedPath,
       );
     }
+    return normalizePath(fdPath);
   }
 
   /** The one read open: O_NOFOLLOW, then the descriptor re-check above. */
@@ -141,6 +155,30 @@ export class GuardedFileSystem {
       return handle;
     } catch (error) {
       await handle.close();
+      throw error;
+    }
+  }
+
+  /**
+   * Waits for `pending` until `signal` fires. A result that lands after the abort goes to
+   * `release` without anyone waiting on it, so a stalled open or read never holds the caller.
+   */
+  async #abandonOnAbort<T>(
+    pending: Promise<T>,
+    signal: AbortSignal | undefined,
+    release: (late: T) => Promise<unknown>,
+    label: string,
+  ): Promise<T> {
+    try {
+      return await withAbort(pending, signal);
+    } catch (error) {
+      void pending
+        .then(release, () => undefined)
+        .catch((releaseErr: unknown) => {
+          Logger.warn(
+            `Failed to release ${label} after abort: ${formatUnknownErrorMessage(releaseErr)}`,
+          );
+        });
       throw error;
     }
   }
@@ -504,6 +542,116 @@ export class GuardedFileSystem {
       await dir.close().catch((closeErr: unknown) => {
         Logger.warn(
           `Failed to close dir handle for ${dirPath}: ${formatUnknownErrorMessage(closeErr)}`,
+        );
+      });
+    }
+  }
+
+  /**
+   * Direct children of a directory, leaving out entries the guard treats as
+   * sensitive so the count never reveals what listings hide. Hidden and
+   * ignored entries count: this answers "is it empty?", not "what would list show?".
+   * A symlinked child counts only when list would show it. The path validation, open, opendir,
+   * each read and each link check race the signal, so a stalled mount ends the call at its
+   * deadline.
+   */
+  async countEntries(dirPath: string, options?: { signal?: AbortSignal }): Promise<number> {
+    const signal = options?.signal;
+    // Refuse an already-cancelled call before any validation or I/O.
+    signal?.throwIfAborted();
+    // A late validation result is a plain object, so a stalled realpath needs no release.
+    const { resolvedPath } = await withAbort(
+      this.pathGuard.validateExistingPathDetailed(dirPath),
+      signal,
+    );
+    // With procfs (COUNT_THROUGH_FD), open the directory itself with O_NOFOLLOW and check where
+    // the open descriptor really is, so a directory or ancestor swapped for a symlink after
+    // validation is refused. Then read entries through the descriptor, which a later swap cannot
+    // redirect.
+    const handle = COUNT_THROUGH_FD
+      ? await this.#abandonOnAbort(
+          fsOpen(resolvedPath, DIR_NOFOLLOW),
+          signal,
+          (late) => late.close(),
+          `directory descriptor for ${resolvedPath}`,
+        )
+      : undefined;
+    let dir: Dir | undefined;
+    let pendingRead: Promise<Dirent | null> | undefined;
+    try {
+      const openedPath = handle ? await this.#assertFdWithinRoots(handle, dirPath) : undefined;
+      // An in-root swap passes the roots check, but the children would be filtered under the
+      // validated directory's spelling, not the one actually opened.
+      if (openedPath !== undefined && !isSamePath(openedPath, resolvedPath)) {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Path changed under validation and now resolves to another directory (TOCTOU).',
+          dirPath,
+        );
+      }
+      const readPath = handle ? `/proc/self/fd/${String(handle.fd)}` : resolvedPath;
+      dir = await this.#abandonOnAbort(
+        fsOpendir(readPath),
+        signal,
+        (late) => late.close(),
+        `directory stream for ${resolvedPath}`,
+      );
+      let count = 0;
+      for (;;) {
+        // Each read races the signal, so a read that stalls ends the call at its deadline.
+        const read = dir.read();
+        pendingRead = read;
+        const entry = await withAbort(read, signal);
+        pendingRead = undefined;
+        if (entry === null) break;
+        if (this.pathGuard.isSensitive(join(dirPath, entry.name))) continue;
+        // list walks the real directory, so it checks every child, links
+        // included, under its real spelling: a deny rule naming the real
+        // directory hides the child under an alias too.
+        if (this.pathGuard.isSensitive(join(resolvedPath, entry.name))) continue;
+        // A link counts only when list would show it: same rule, same error policy.
+        if (
+          entry.isSymbolicLink() &&
+          !(await withAbort(
+            this.pathGuard.isEntryAccessible(join(resolvedPath, entry.name)),
+            signal,
+          ))
+        ) {
+          continue;
+        }
+        count += 1;
+      }
+      // A deadline that fired during the last read still ends the call, even with no entries left.
+      signal?.throwIfAborted();
+      return count;
+    } finally {
+      if (dir) {
+        const stream = dir;
+        if (pendingRead) {
+          // close() queues behind a read still in flight, so awaiting it would hold the TIMEOUT
+          // response on a stalled mount. Close once that read settles, without waiting for it.
+          void pendingRead
+            .then(
+              () => stream.close(),
+              () => stream.close(),
+            )
+            .catch((closeErr: unknown) => {
+              Logger.warn(
+                `Failed to close dir handle for ${resolvedPath} after abort: ${formatUnknownErrorMessage(closeErr)}`,
+              );
+            });
+        } else {
+          await stream.close().catch((closeErr: unknown) => {
+            Logger.warn(
+              `Failed to close dir handle for ${resolvedPath}: ${formatUnknownErrorMessage(closeErr)}`,
+            );
+          });
+        }
+      }
+      // A failed close must not replace the error the count threw, so it is logged, not thrown.
+      await handle?.close().catch((closeErr: unknown) => {
+        Logger.warn(
+          `Failed to close dir descriptor for ${resolvedPath}: ${formatUnknownErrorMessage(closeErr)}`,
         );
       });
     }

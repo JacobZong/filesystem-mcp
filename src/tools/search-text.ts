@@ -20,11 +20,7 @@ import {
 import { searchContent } from '../core/search.ts';
 import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
-import {
-  DEFAULT_SEARCH_CONTENT_RESULTS,
-  DEFAULT_SEARCH_TIMEOUT_MS,
-  MAX_SEARCH_RESULTS,
-} from '../core/util.ts';
+import { DEFAULT_SEARCH_CONTENT_RESULTS, MAX_SEARCH_RESULTS } from '../core/util.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 // Type Definitions
@@ -212,7 +208,7 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
     'and paths relative to the root, ready to pass to read or edit. Patterns match within one line. find_files matches file names.',
   input: GrepInputSchema,
   readOnlyHint: true,
-  timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
+  deadline: true,
   progress: (args) => ({
     label: 'Search',
     subject: truncateProgressPattern(args.searchPattern),

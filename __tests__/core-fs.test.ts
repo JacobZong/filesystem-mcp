@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import type { PathLike } from 'node:fs';
+import type { Dir, PathLike } from 'node:fs';
 import fsPromises, {
   chmod,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
   rename,
@@ -11,12 +12,14 @@ import fsPromises, {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { after, before, describe, it, mock } from 'node:test';
 
-import { ErrorCode, isFsError, Problem } from '../src/core/errors.ts';
+import { ErrorCode, isFsError, isNodeError, Problem } from '../src/core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks } from '../src/core/file-uri.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
@@ -1229,5 +1232,501 @@ describe('H4: a symlink swapped onto a validated path cannot escape the sandbox'
         );
       });
     });
+  });
+});
+
+describe('GuardedFileSystem.countEntries', () => {
+  let root: string;
+  let ctx: FilesystemServerContext;
+  let fs: GuardedFileSystem;
+  // O_NOFOLLOW refuses a symlink named as the directory before the descriptor check runs.
+  // Linux reports ENOTDIR for it (O_DIRECTORY is checked first); ELOOP is accepted as well.
+  const refusedSymlinkOpen = (error: unknown) =>
+    isNodeError(error) && ['ENOTDIR', 'ELOOP'].includes(error.code ?? '');
+  // Settles like `promise`, or rejects once `ms` passes, so a call that never settles fails fast.
+  const failIfPendingAfter = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`still pending after ${ms} ms`)), ms);
+    });
+    return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
+  };
+
+  before(async () => {
+    root = await createTestRoot();
+    ctx = await createTestServer([root]);
+    fs = new GuardedFileSystem(ctx.pathGuard);
+  });
+
+  after(async () => {
+    if (ctx) {
+      ctx.disposeRuntimeState();
+      await ctx.mcp.close();
+    }
+    if (root) {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it(
+    'refuses a directory swapped for a symlink after validation',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async () => {
+      const target = join(root, 'target');
+      await writeTestFile(target, 'inside.txt', 'inside');
+      const outside = await mkdtemp(join(tmpdir(), 'fsmcp-outside-'));
+      const guard = ctx.pathGuard;
+      const validate = guard.validateExistingPathDetailed.bind(guard);
+      let swapped = false;
+      guard.validateExistingPathDetailed = async (requestedPath: string) => {
+        const details = await validate(requestedPath);
+        if (requestedPath === target && !swapped) {
+          swapped = true;
+          await rename(target, `${target}.bak`);
+          await symlink(outside, target, 'dir');
+        }
+        return details;
+      };
+      try {
+        for (const name of ['a.txt', 'b.txt', 'c.txt']) await writeTestFile(outside, name, name);
+        await assert.rejects(fs.countEntries(target), refusedSymlinkOpen);
+      } finally {
+        Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+        await cleanupTestRoot(outside);
+      }
+    },
+  );
+
+  it(
+    'refuses a directory swapped for a symlink to another directory inside the roots',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async () => {
+      const target2 = join(root, 'target2');
+      await writeTestFile(target2, 'inside.txt', 'inside');
+      const other = join(root, 'other');
+      await writeTestFile(other, 'a.txt', 'a');
+      await writeTestFile(other, 'b.txt', 'b');
+      const guard = ctx.pathGuard;
+      const validate = guard.validateExistingPathDetailed.bind(guard);
+      let swapped = false;
+      guard.validateExistingPathDetailed = async (requestedPath: string) => {
+        const details = await validate(requestedPath);
+        if (requestedPath === target2 && !swapped) {
+          swapped = true;
+          await rename(target2, `${target2}.bak`);
+          await symlink(other, target2, 'dir');
+        }
+        return details;
+      };
+      try {
+        await assert.rejects(fs.countEntries(target2), refusedSymlinkOpen);
+      } finally {
+        Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+      }
+    },
+  );
+
+  it(
+    'refuses an ancestor swapped for a symlink after validation',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async () => {
+      const dir = join(root, 'anc', 'dir');
+      await writeTestFile(dir, 'inside.txt', 'inside');
+      const outside = await mkdtemp(join(tmpdir(), 'fsmcp-outside-'));
+      const guard = ctx.pathGuard;
+      const validate = guard.validateExistingPathDetailed.bind(guard);
+      let swapped = false;
+      guard.validateExistingPathDetailed = async (requestedPath: string) => {
+        const details = await validate(requestedPath);
+        if (requestedPath === dir && !swapped) {
+          swapped = true;
+          await rename(join(root, 'anc'), join(root, 'anc.bak'));
+          await symlink(outside, join(root, 'anc'), 'dir');
+        }
+        return details;
+      };
+      try {
+        for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+          await writeTestFile(join(outside, 'dir'), name, name);
+        }
+        await assert.rejects(
+          fs.countEntries(dir),
+          (error) => isFsError(error) && error.code === ErrorCode.ACCESS_DENIED,
+        );
+      } finally {
+        Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+        await cleanupTestRoot(outside);
+      }
+    },
+  );
+
+  it(
+    'refuses an ancestor swapped for a symlink to another directory inside the roots',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async () => {
+      // Names differ from the test above, whose swapped ancestor is left behind as a dangling link.
+      const dir = join(root, 'swap-anc', 'dir');
+      await writeTestFile(dir, 'inside.txt', 'inside');
+      const other = join(root, 'swap-other');
+      for (const name of ['a.txt', 'b.txt']) await writeTestFile(join(other, 'dir'), name, name);
+      const guard = ctx.pathGuard;
+      const validate = guard.validateExistingPathDetailed.bind(guard);
+      let swapped = false;
+      guard.validateExistingPathDetailed = async (requestedPath: string) => {
+        const details = await validate(requestedPath);
+        if (requestedPath === dir && !swapped) {
+          swapped = true;
+          await rename(join(root, 'swap-anc'), join(root, 'swap-anc.bak'));
+          await symlink(other, join(root, 'swap-anc'), 'dir');
+        }
+        return details;
+      };
+      try {
+        await assert.rejects(
+          fs.countEntries(dir),
+          (error) => isFsError(error) && error.code === ErrorCode.ACCESS_DENIED,
+        );
+      } finally {
+        Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+      }
+    },
+  );
+
+  it('propagates an unexpected error from a symlinked entry', async (t) => {
+    const dir = join(root, 'links');
+    await writeTestFile(dir, 'a.txt', 'a');
+    await writeTestFile(dir, 'b.txt', 'b');
+    const link = join(dir, 'link.txt');
+    if (
+      !(await trySymlink(join(dir, 'a.txt'), link, () => t.skip('symlink not permitted'), 'file'))
+    )
+      return;
+    const guard = ctx.pathGuard;
+    const validate = guard.validateExistingPathDetailed.bind(guard);
+    let injected: NodeJS.ErrnoException | undefined;
+    guard.validateExistingPathDetailed = async (requestedPath: string) => {
+      if (injected && requestedPath.endsWith('link.txt')) throw injected;
+      return validate(requestedPath);
+    };
+    try {
+      injected = Object.assign(new Error('EIO: i/o error'), {
+        code: 'EIO',
+        errno: -5,
+        syscall: 'realpath',
+      });
+      await assert.rejects(fs.countEntries(dir));
+
+      // A dangling link is skipped, as list skips it.
+      injected = Object.assign(new Error('ENOENT: no such file or directory'), {
+        code: 'ENOENT',
+        errno: -2,
+        syscall: 'realpath',
+      });
+      assert.strictEqual(await fs.countEntries(dir), 2);
+    } finally {
+      Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+    }
+  });
+
+  it('checks the signal after the last entry', async () => {
+    const emptyDir = join(root, 'empty');
+    await mkdir(emptyDir);
+    await assert.rejects(fs.countEntries(emptyDir, { signal: AbortSignal.abort() }), {
+      name: 'AbortError',
+    });
+  });
+
+  it('checks the signal after the last read', async (t) => {
+    const dir = join(root, 'signal-after-read');
+    await mkdir(dir);
+    const controller = new AbortController();
+    // The last read resolves null, and the abort lands in the microtask gap before the count
+    // returns, so only the check after the loop can refuse it.
+    const drained = {
+      read: () => {
+        queueMicrotask(() => controller.abort());
+        return Promise.resolve(null);
+      },
+      close: async () => {},
+    };
+    t.mock.method(fsPromises, 'opendir', async () => drained as unknown as Dir);
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(fs.countEntries(dir, { signal: controller.signal }), {
+        name: 'AbortError',
+      });
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('a stalled directory read ends at the deadline', async (t) => {
+    const dir = join(root, 'stalled-read');
+    await mkdir(dir);
+    // A read on a hung mount never settles, so only the signal can end the call.
+    const stalled = {
+      read: () => new Promise<never>(() => {}),
+      close: async () => {},
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+    };
+    t.mock.method(fsPromises, 'opendir', async () => stalled as unknown as Dir);
+    syncBuiltinESMExports();
+    try {
+      const started = performance.now();
+      await assert.rejects(fs.countEntries(dir, { signal: AbortSignal.timeout(200) }), {
+        name: 'TimeoutError',
+      });
+      assert.ok(performance.now() - started < 2000);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it(
+    'a stalled directory open ends at the deadline',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async (t) => {
+      const dir = join(root, 'stalled-open');
+      await mkdir(dir);
+      t.mock.method(fsPromises, 'open', () => new Promise<never>(() => {}));
+      syncBuiltinESMExports();
+      try {
+        const started = performance.now();
+        await assert.rejects(fs.countEntries(dir, { signal: AbortSignal.timeout(200) }), {
+          name: 'TimeoutError',
+        });
+        assert.ok(performance.now() - started < 2000);
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    },
+  );
+
+  it('a stalled path validation ends at the deadline', async (t) => {
+    const dir = join(root, 'stalled-realpath');
+    await mkdir(dir);
+    const originalRealpath = fsPromises.realpath.bind(fsPromises);
+    // Only the directory under test hangs; every other realpath call passes through.
+    t.mock.method(fsPromises, 'realpath', (path: PathLike) =>
+      String(path) === normalizePath(dir) ? new Promise<never>(() => {}) : originalRealpath(path),
+    );
+    syncBuiltinESMExports();
+    try {
+      const started = performance.now();
+      await assert.rejects(fs.countEntries(dir, { signal: AbortSignal.timeout(200) }), {
+        name: 'TimeoutError',
+      });
+      assert.ok(performance.now() - started < 2000);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('a stalled read is closed only after it settles, without holding the deadline', async (t) => {
+    const dir = join(root, 'stalled-close');
+    await mkdir(dir);
+    let releaseRead: () => void = () => {};
+    const read = new Promise<null>((resolve) => {
+      releaseRead = () => resolve(null);
+    });
+    let closed = false;
+    // Like Node's Dir, close() queues behind the in-flight read and settles only once it does.
+    const stalled = {
+      read: () => read,
+      close: () =>
+        read
+          .catch(() => undefined)
+          .then(() => {
+            closed = true;
+          }),
+    };
+    t.mock.method(fsPromises, 'opendir', async () => stalled as unknown as Dir);
+    syncBuiltinESMExports();
+    try {
+      const counting = fs.countEntries(dir, { signal: AbortSignal.timeout(200) });
+      await assert.rejects(failIfPendingAfter(counting, 2000), { name: 'TimeoutError' });
+      // The read is still pending, so the close has not run and the call did not wait for it.
+      assert.strictEqual(closed, false);
+      releaseRead();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.strictEqual(closed, true);
+    } finally {
+      releaseRead();
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it(
+    'an open that lands after the deadline is closed',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async (t) => {
+      const dir = join(root, 'late-open');
+      await mkdir(dir);
+      let closed = 0;
+      const late = {
+        fd: 999999,
+        close: async () => {
+          closed += 1;
+        },
+      };
+      // The open lands 400 ms after a 100 ms deadline, so only its late release can close it.
+      t.mock.method(
+        fsPromises,
+        'open',
+        () =>
+          new Promise<FileHandle>((resolve) => {
+            setTimeout(() => resolve(late as unknown as FileHandle), 400);
+          }),
+      );
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(fs.countEntries(dir, { signal: AbortSignal.timeout(100) }), {
+          name: 'TimeoutError',
+        });
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        assert.strictEqual(closed, 1, 'the late handle must be closed exactly once');
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    },
+  );
+
+  it('an opendir that lands after the deadline is closed', async (t) => {
+    const dir = join(root, 'late-opendir');
+    await mkdir(dir);
+    let closed = 0;
+    const late = {
+      close: async () => {
+        closed += 1;
+      },
+    };
+    // The stream lands 400 ms after a 100 ms deadline, so only its late release can close it.
+    t.mock.method(
+      fsPromises,
+      'opendir',
+      () =>
+        new Promise<Dir>((resolve) => {
+          setTimeout(() => resolve(late as unknown as Dir), 400);
+        }),
+    );
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(fs.countEntries(dir, { signal: AbortSignal.timeout(100) }), {
+        name: 'TimeoutError',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      assert.strictEqual(closed, 1, 'the late Dir must be closed exactly once');
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it(
+    'a descriptor close failure does not mask the original error',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async (t) => {
+      const dir = join(root, 'close-fails');
+      await mkdir(dir);
+      const originalOpen = fsPromises.open.bind(fsPromises);
+      // The real descriptor is opened, but its close rejects. The real close runs in finally.
+      let closeAttempted = false;
+      let realClose: (() => Promise<void>) | undefined;
+      t.mock.method(fsPromises, 'open', async (...args: Parameters<typeof fsPromises.open>) => {
+        const handle = await originalOpen(...args);
+        realClose = handle.close.bind(handle);
+        handle.close = () => {
+          closeAttempted = true;
+          return Promise.reject(new Error('close-fail'));
+        };
+        return handle;
+      });
+      t.mock.method(fsPromises, 'opendir', async () => {
+        throw new Error('boom');
+      });
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(fs.countEntries(dir), { message: 'boom' });
+        assert.ok(closeAttempted, 'the descriptor close must have been attempted');
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+        await realClose?.();
+      }
+    },
+  );
+
+  it('a Dir close failure does not mask the original error', async (t) => {
+    const dir = join(root, 'dir-close-fails');
+    await writeTestFile(dir, 'a.txt', 'a');
+    const link = join(dir, 'link.txt');
+    if (
+      !(await trySymlink(join(dir, 'a.txt'), link, () => t.skip('symlink not permitted'), 'file'))
+    )
+      return;
+    const guard = ctx.pathGuard;
+    const validate = guard.validateExistingPathDetailed.bind(guard);
+    // No read is pending here: the link's accessibility check throws EIO, which the count keeps.
+    guard.validateExistingPathDetailed = async (requestedPath: string) => {
+      if (requestedPath.endsWith('link.txt')) {
+        throw Object.assign(new Error('EIO: i/o error'), {
+          code: 'EIO',
+          errno: -5,
+          syscall: 'realpath',
+        });
+      }
+      return validate(requestedPath);
+    };
+    const originalOpendir = fsPromises.opendir.bind(fsPromises);
+    // The real Dir is returned, but its close closes it and then rejects.
+    t.mock.method(fsPromises, 'opendir', async (...args: Parameters<typeof fsPromises.opendir>) => {
+      const realDir = await originalOpendir(...args);
+      const closeReal = realDir.close.bind(realDir);
+      realDir.close = async () => {
+        await closeReal();
+        throw new Error('dir-close-fail');
+      };
+      return realDir;
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(fs.countEntries(dir), { code: 'EIO' });
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+    }
+  });
+
+  it('counts regular entries of a readable directory without resolving each one', async () => {
+    const dir = join(root, 'readonly');
+    await writeTestFile(dir, 'one.txt', '1');
+    await writeTestFile(dir, 'two.txt', '2');
+    await chmod(dir, 0o444);
+    try {
+      assert.strictEqual(await fs.countEntries(dir), 2);
+    } finally {
+      await chmod(dir, 0o755);
+    }
   });
 });

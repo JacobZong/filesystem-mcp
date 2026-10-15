@@ -5,7 +5,6 @@ import type { GuardedFileSystem, Stats } from '../core/fs.ts';
 import { detectMimeType } from '../core/mime.ts';
 import { type EntryType, resolveEntryType } from '../core/path-utils.ts';
 import { mapSingleOrBatchPaths, singleOrBatchPathsInput } from '../core/schema.ts';
-import { DEFAULT_SEARCH_TIMEOUT_MS } from '../core/util.ts';
 import type { BatchResult } from './batch.ts';
 import { isTotalFailure, runOverPaths } from './batch.ts';
 import type { ToolCtx } from './define.ts';
@@ -16,6 +15,7 @@ interface FileInfo {
   path: string;
   type: EntryType;
   size?: number;
+  entryCount?: number;
   tokenEstimate?: number;
   created: string;
   modified: string;
@@ -55,6 +55,7 @@ function buildFileInfoResult(
   stats: Stats,
   mimeType: string | undefined,
   symlinkTarget: string | undefined,
+  entryCount: number | undefined,
 ): FileInfo {
   const tokenEstimate = stats.isFile() ? Math.ceil(stats.size / 4) : undefined;
   return {
@@ -63,7 +64,12 @@ function buildFileInfoResult(
     type: isSymlink ? 'symlink' : resolveEntryType(stats),
     // A directory's st_size is 0 on Windows and the block size on POSIX; neither
     // describes its contents, and a literal 0 reads as "empty" (issue #56).
-    ...(stats.isDirectory() ? {} : { size: stats.size }),
+    // entryCount stands in for it, and is left out when the count failed.
+    ...(stats.isDirectory()
+      ? entryCount !== undefined
+        ? { entryCount }
+        : {}
+      : { size: stats.size }),
     ...(tokenEstimate !== undefined ? { tokenEstimate } : {}),
     created: stats.birthtime.toISOString(),
     modified: stats.mtime.toISOString(),
@@ -135,19 +141,41 @@ async function getFileInfo(
     ? await getSymlinkTarget(requestedPath, fs, signal, log)
     : undefined;
 
-  return buildFileInfoResult(name, requestedPath, isOwnSymlink, stats, mimeType, symlinkTarget);
+  // Count only a real directory: a symlink's own stats are not its target's.
+  // A failed count must not fail the stat, so it degrades to no entryCount.
+  let entryCount: number | undefined;
+  if (!isOwnSymlink && stats.isDirectory()) {
+    try {
+      entryCount = await fs.countEntries(requestedPath, { signal });
+    } catch (error) {
+      rethrowIfAborted(error);
+      // A deadline is not an abort to rethrowIfAborted, but it must still end the call as TIMEOUT.
+      signal.throwIfAborted();
+      log('warning', `stat: entry count failed for "${requestedPath}": ${String(error)}`, 'stat');
+    }
+  }
+
+  return buildFileInfoResult(
+    name,
+    requestedPath,
+    isOwnSymlink,
+    stats,
+    mimeType,
+    symlinkTarget,
+    entryCount,
+  );
 }
 
 export const STAT = defineTool<typeof StatInputSchema, StatOutput>({
   name: 'stat',
   title: 'Get File Info',
   description:
-    'Get metadata without reading contents, like ls -ld: type, size (files only; use list for directory contents), ' +
+    'Get metadata without reading contents, like ls -ld: type, size (files) or entryCount (directories; secret files not counted), ' +
     'tokenEstimate, timestamps, permissions (readOnly on Windows), MIME type guessed from the extension, and symlink target. ' +
     'Also checks whether paths exist.',
   input: StatInputSchema,
   readOnlyHint: true,
-  timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
+  deadline: true,
   defaultErrorCode: ErrorCode.NOT_FOUND,
   progress: (args) => {
     if (args.paths !== undefined) {

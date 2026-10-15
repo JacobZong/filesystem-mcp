@@ -19,7 +19,11 @@
     "entry_point": "dist/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/dist/index.js", "${user_config.allowed_directories}"]
+      "args": ["${__dirname}/dist/index.js", "${user_config.allowed_directories}"],
+      "env": {
+        "FS_READ_ONLY": "${user_config.read_only}",
+        "FS_DENYLIST": "${user_config.deny_patterns}"
+      }
     }
   },
   "tools": [
@@ -36,7 +40,10 @@
     },
     { "name": "diff", "description": "Compare two files as a unified diff." },
     { "name": "read", "description": "Read text files whole, by line range, head, or tail." },
-    { "name": "create", "description": "Create, overwrite, or append to text files." },
+    {
+      "name": "create",
+      "description": "Create, overwrite, or append to text files, or make empty directories."
+    },
     { "name": "edit", "description": "Apply literal string replacements to files." },
     { "name": "move", "description": "Move, rename, or copy files and directories." },
     { "name": "delete", "description": "Permanently delete files or directories." },
@@ -50,6 +57,20 @@
       "description": "Directories the server may read and write. Other paths need your approval first.",
       "multiple": true,
       "required": true
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read-only mode",
+      "description": "Remove every tool that changes files. The AI can still list, search, and read.",
+      "default": false,
+      "required": false
+    },
+    "deny_patterns": {
+      "type": "string",
+      "title": "Extra blocked files",
+      "description": "Comma-separated patterns to block, for example private/**,*.sqlite. Secret files such as .env and private keys are already blocked.",
+      "default": "",
+      "required": false
     }
   },
   "compatibility": {

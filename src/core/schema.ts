@@ -193,11 +193,10 @@ export function singleOrBatchPathsInput<TExtra extends z.ZodRawShape>(
     }
   });
 
-  // Mirror the superRefine above on the wire: exactly one input mode. `{}` and
-  // `path`+`paths` both fail this oneOf, matching the runtime rule.
-  return base.meta({
-    oneOf: [{ required: ['path'] }, { required: ['paths'] }],
-  }) as z.ZodObject<SingleOrBatchShape<TExtra>>;
+  // No top-level oneOf on the wire: OpenAI and Anthropic reject top-level
+  // oneOf/anyOf/allOf in function parameters. The superRefine enforces
+  // "exactly one of path/paths" at call time.
+  return base as z.ZodObject<SingleOrBatchShape<TExtra>>;
 }
 
 /**

@@ -16,7 +16,12 @@ import {
 } from './core/path-utils.ts';
 import { PathGuard } from './core/path.ts';
 import { describeSensitivePolicy } from './core/sensitive.ts';
-import { getMaxInboundMessageBytes, getMaxTextFileSize, parseTrueEnvFlag } from './core/util.ts';
+import {
+  getMaxInboundMessageBytes,
+  getMaxTextFileSize,
+  getToolTimeoutMs,
+  parseTrueEnvFlag,
+} from './core/util.ts';
 import { registeredTools } from './tools/index.ts';
 
 // ════════════════════════════════════════════════════════════
@@ -124,6 +129,7 @@ const CLI_PARSER_CONFIG = {
     'allow-sensitive': { type: 'boolean', default: false },
     'root-boundary': { type: 'string' },
     'max-file-size': { type: 'string' },
+    'tool-timeout': { type: 'string' },
     'walk-cwd': { type: 'boolean', default: false },
     deny: { type: 'string', multiple: true },
     allow: { type: 'string', multiple: true },
@@ -168,6 +174,7 @@ export async function parseArgs(): Promise<{
     const apiKey = v['api-key'] ?? process.env['FS_API_KEY'];
     if (v['log-level'] !== undefined) cli.logLevel = v['log-level'];
     if (v['max-file-size'] !== undefined) cli.maxFileSize = v['max-file-size'];
+    if (v['tool-timeout'] !== undefined) cli.toolTimeout = v['tool-timeout'];
     if (v['root-boundary'] !== undefined) cli.rootBoundary = v['root-boundary'];
     if (v['allow-sensitive']) cli.allowSensitive = true;
     if (v['walk-cwd']) cli.allowCwdWalk = true;
@@ -184,7 +191,8 @@ export async function parseArgs(): Promise<{
       v['allow-cwd'] ||
       v['walk-cwd'] ||
       parseTrueEnvFlag(process.env['FS_ALLOW_CWD_WALK'], 'FS_ALLOW_CWD_WALK');
-    const readOnly = v['read-only'];
+    const readOnly =
+      v['read-only'] || parseTrueEnvFlag(process.env['FS_READ_ONLY'], 'FS_READ_ONLY');
     const printConfig = v['print-config'];
     const port = parsePortOption(v.port ?? process.env['FS_PORT']);
     const allowMissingRoots =
@@ -242,6 +250,7 @@ export async function runPrintConfig(
     limits: {
       maxFileSizeBytes: getMaxTextFileSize(),
       maxInboundMessageBytes: getMaxInboundMessageBytes(),
+      toolTimeoutMs: getToolTimeoutMs(),
     },
     // What the binary negotiates with, so an era mismatch ("unsupported
     // protocol version") can be diagnosed without attaching a client. The

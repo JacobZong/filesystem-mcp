@@ -47,7 +47,7 @@ const EditFileInputSchema = z
       .min(1)
       .max(MAX_EDITS_PER_FILE)
       .optional()
-      .describe('Replacements applied to path; not allowed when using files'),
+      .describe('Replacements applied to path (required with path); not allowed with files'),
     files: z
       .array(
         z.strictObject({
@@ -112,12 +112,7 @@ const EditFileInputSchema = z
         });
       }
     }
-  })
-  // Mirror the superRefine on the wire: exactly one input mode, and single-file
-  // mode carries its own `edits`. Without `edits` in the first branch, `{ path }`
-  // alone validated against the published schema and was then rejected at
-  // runtime — the model had no way to see that coming.
-  .meta({ oneOf: [{ required: ['path', 'edits'] }, { required: ['files'] }] });
+  });
 
 type EditFileValue = Omit<WrittenFileMeta, 'resourceLink'> & {
   path: string;

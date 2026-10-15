@@ -21,6 +21,8 @@ export interface CliOverrides {
   logLevel?: string;
   /** `--max-file-size` (raw string; validated by the reader like the env var) */
   maxFileSize?: string;
+  /** `--tool-timeout` (raw string; validated by the reader like the env var) */
+  toolTimeout?: string;
   /** `--root-boundary` */
   rootBoundary?: string;
   /** `--allow-sensitive` */
