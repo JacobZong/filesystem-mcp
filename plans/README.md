@@ -95,7 +95,7 @@ These files are Prettier-checked by `npm run check` (`plans/` is not in
 | 071  | A read cancelled before its stream opens never crashes the server | P1       | S      | —             | DONE (branch `advisor/071-aborted-read-stream`, tip `e8cdd68a`)                                                                                               |
 | 072  | Close the three gaps the PR #85 review found                      | P1       | S      | 065, 067, 069 | DONE (branch `advisor/072-pr85-review-fixes`, tip `e5ebf481`; on PR #85)                                                                                      |
 | 073  | Count every extglob group toward the glob wildcard cap            | P1       | S      | 065, 072      | DONE (branch `advisor/073-pr85-second-review`, tip `84bc0ea0`; on PR #85)                                                                                     |
-| 074  | `read` can return other binary files as an embedded resource      | P2       | M      | —             | TODO (issue #98; dry-run green at `83103bd`; one Haiku agent per step)                                                                                        |
+| 074  | `read` can return other binary files as an embedded resource      | P2       | M      | —             | DONE (issue #98; branch `ccr-8ca35f95-pt3iv1`, tip `b6869e1`; one Haiku agent per step)                                                                       |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
