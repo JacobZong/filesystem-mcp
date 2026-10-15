@@ -253,6 +253,32 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
   });
 
+  it('batch read with binary mixes text and resources and charges base64 size', async () => {
+    const text = await writeTestFile(tmpDir, 'binary-flag/mix/a.txt', 'x'.repeat(100 * 1024));
+    const pdf = join(tmpDir, 'binary-flag/mix/doc.pdf');
+    await writeFile(pdf, Buffer.from('%PDF-1.4\n', 'latin1'));
+    const mixed = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [text, pdf], binary: true },
+    });
+    assert.notStrictEqual(mixed.isError, true);
+    const types = (mixed.content as { type: string }[]).map((b) => b.type);
+    assert.deepStrictEqual(types, ['text', 'resource_link', 'resource']);
+    assert.strictEqual(failedSummary(mixed)?.summary?.failed, 0);
+
+    // 100 KiB + 400 KiB fits 512 KiB raw, but the zip ships as ~533 KiB of base64.
+    const zip = join(tmpDir, 'binary-flag/mix/big.zip');
+    await writeFile(zip, Buffer.alloc(400 * 1024));
+    const budget = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [text, zip], binary: true },
+    });
+    const results = failedSummary(budget)?.results;
+    assert.strictEqual(results?.[0]?.error, undefined);
+    assert.strictEqual(results?.[1]?.error?.code, 'TOO_LARGE');
+    assert.match(results?.[1]?.error?.message ?? '', /maxTotalSize/);
+  });
+
   it('TC-FUNC-007: Read path outside allowed root returns isError: true with ACCESS_DENIED', async () => {
     const outsideDir = await createTestRoot();
     const outsideFile = await writeTestFile(outsideDir, 'outside_test.txt', 'secret');

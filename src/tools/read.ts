@@ -8,7 +8,12 @@ import * as z from 'zod/v4';
 import { processInParallel } from '../core/concurrency.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
-import { detectMimeFromContent, detectMimeType, type FileKind } from '../core/mime.ts';
+import {
+  detectMimeFromContent,
+  detectMimeType,
+  type FileKind,
+  isKnownBinaryExtension,
+} from '../core/mime.ts';
 import {
   BINARY_FILE_MESSAGE,
   isBinaryRefusal,
@@ -180,11 +185,19 @@ interface BudgetItem {
   skip?: FsError;
 }
 
+/** What a file costs the batch: one whose bytes ship as base64 costs that size. */
+function budgetBytes(path: string, size: number, binary: boolean): number {
+  const { kind } = detectMimeType(path);
+  const base64 = kind === 'image' || kind === 'audio' || (binary && isKnownBinaryExtension(path));
+  return base64 ? 4 * Math.ceil(size / 3) : size;
+}
+
 async function collectFileBudget(
   filePaths: readonly string[],
   maxTotalSize: number,
   maxSize: number,
   ctx: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
+  binary: boolean,
 ): Promise<BudgetItem[]> {
   const indexed = filePaths.map((path, index) => ({ path, index }));
   const { results } = await processInParallel(
@@ -192,7 +205,7 @@ async function collectFileBudget(
     async ({ path, index }): Promise<BatchFileInfo | undefined> => {
       try {
         const out = await ctx.fs.stat(path);
-        return { index, size: Math.min(out.stats.size, maxSize) };
+        return { index, size: budgetBytes(path, Math.min(out.stats.size, maxSize), binary) };
       } catch (err: unknown) {
         ctx.log('debug', `collectFileBudget: stat failed for "${path}": ${String(err)}`, 'read');
         return undefined;
@@ -405,7 +418,13 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   run: async (args, ctx) => {
     const items: BudgetItem[] =
       args.paths !== undefined
-        ? await collectFileBudget(args.paths, READ_MANY_MAX_TOTAL_BYTES, getMaxTextFileSize(), ctx)
+        ? await collectFileBudget(
+            args.paths,
+            READ_MANY_MAX_TOTAL_BYTES,
+            getMaxTextFileSize(),
+            ctx,
+            args.binary,
+          )
         : [{ path: args.path ?? '' }];
     const { results: ordered, summary } = await runOverPaths(
       items,
