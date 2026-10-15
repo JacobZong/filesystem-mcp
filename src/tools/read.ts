@@ -392,7 +392,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   title: 'Read File',
   description:
     'Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. ' +
-    'Images and audio return as media; other binary files are rejected.',
+    'Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource.',
   input: ReadFileInputSchema,
   readOnlyHint: true,
   deadline: true,

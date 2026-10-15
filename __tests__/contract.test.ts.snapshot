@@ -431,13 +431,18 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Images and audio return as media; other binary files are rejected.",
+      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "includeHash": {
             "default": false,
             "description": "Include SHA-256 hash of the returned content in the response",
+            "type": "boolean"
+          },
+          "binary": {
+            "default": false,
+            "description": "Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.",
             "type": "boolean"
           },
           "head": {
@@ -981,13 +986,18 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "read",
       "title": "Read File",
-      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Images and audio return as media; other binary files are rejected.",
+      "description": "Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. Images and audio return as media; pass binary: true to get any other binary file whole as a base64 embedded resource.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "includeHash": {
             "default": false,
             "description": "Include SHA-256 hash of the returned content in the response",
+            "type": "boolean"
+          },
+          "binary": {
+            "default": false,
+            "description": "Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.",
             "type": "boolean"
           },
           "head": {
