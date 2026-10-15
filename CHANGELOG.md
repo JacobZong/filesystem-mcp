@@ -5,13 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.9.0] - 2026-10-15
 
-Read Changed if you join `search_text`, `find_files` or `replace_text`
-result paths onto the folder you searched: they are now relative to the
-root, which a new or changed `root` field names. Read it too if you check
-calls against the published input schemas: `read`, `stat` and `edit` no
-longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
+A feature and security release. `read` returns any binary file, `list`
+shows file sizes, `stat` counts a directory's entries, `create` makes
+empty directories, and the per-call time limit is configurable. Search
+results and relative paths now resolve against the root, so what a tool
+prints reads back as given, and a name that differs from the disk only in
+Unicode form resolves everywhere. Path validation follows symlink chains,
+and a denylist blocks every Unicode spelling of a name it covers. Some
+calls that used to succeed are now refused. Before upgrading, read
+Changed if you join `search_text`, `find_files` or `replace_text` result
+paths onto the folder you searched, or check calls against the published
+input schemas (`read`, `stat` and `edit` no longer publish a top-level
+`oneOf`, and `create`'s `files` is now optional). Read Security if you
+pass glob patterns with nested groups or long `*` runs, rely on a name
+whose Unicode spelling a denylist pattern missed, or write through
+chained or broken symlinks. Read Fixed if you run on Linux or macOS where
+clients send Windows-style paths, or send batches that name one target by
+two spellings.
 
 ### Security
 
@@ -32,6 +44,29 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
   path segment. Node matches globs synchronously, and such
   patterns backtracked for minutes on one long file name, blocking every
   client. The refusal is the usual `Invalid glob or unsafe path` error.
+- **Path validation follows symlink chains.** A write target reached
+  through a symlink that pointed through another symlink, or through a
+  broken link, bypassed the root check. Ancestor resolution now follows
+  every hop before falling back to parent traversal, and a broken chain
+  is refused, so a write never resolves through a link the guard did not
+  check.
+- **Directory walks no longer name secret files in errors.** A
+  `search_text` or `replace_text` run that could not read or rewrite a
+  secret file reported its name in the failure list or the skipped-file
+  count. Walks now omit such entries from both.
+- **An ambiguity error no longer lists denylisted names.** A name the
+  denylist covered was refused, but a Unicode-equivalent spelling of it
+  listed the protected names and the real directory in the
+  `INVALID_INPUT` error. The denylist now wins before the ambiguity
+  check, so the error never names what it hides.
+- **A missing relative path no longer reports what is outside the
+  roots.** With several roots, deciding which root a relative name sat
+  under followed a symlink out of every root: a missing target answered
+  "exists under none of the roots" and a present one `ACCESS_DENIED`, so
+  the error told a caller whether an outside file exists. The probe now
+  goes through the same validation as the call, which refuses such a
+  path the same way whether or not the target exists, and refuses a
+  denylisted name before touching the filesystem.
 
 ### Added
 
@@ -51,6 +86,12 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
   now optional; a call needs at least one of the two. Directories are made only
   after any overwrite confirmation is answered. The result lists them in
   `directories`, and a failed one joins `failures`.
+- **`list` can show file sizes.** `includeSizes: true` adds each file's
+  size to the tree and a totals line of counts and bytes, so finding
+  what takes the space no longer needs a `stat` call per file
+  ([#99](https://github.com/j0hanz/filesystem-mcp/issues/99)).
+  `sortBy: "size"` orders each directory largest first; the default
+  name order is unchanged.
 - **`stat` on a directory reports `entryCount`**, the number of entries
   directly inside it, so "is this folder empty?" takes one call
   ([#56](https://github.com/j0hanz/filesystem-mcp/issues/56)). Hidden and
@@ -125,6 +166,13 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
   over 4 MiB still counts its file in `skippedTooLarge`.
 - **A batched `read` counts image, audio and binary files at their base64
   size** against its 512 KiB budget, because that is what it returns.
+- **Hidden-pattern variants walk in one pass.** `find_files`,
+  `search_text` and `replace_text` walk the hidden and dotted variants
+  of a pattern in one glob call, about a third faster on a large tree.
+  Results are unchanged; a run capped early keeps a different set of
+  the files it met. `list` over a directory past `entryCap` now keeps
+  the entries best by sort order instead of whichever the walk met
+  first.
 
 ### Fixed
 
@@ -156,6 +204,45 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
   A written file whose `resources/read` result would exceed the stdio message
   limit once JSON-encoded no longer gets a `resource_link` that the read
   always refuses.
+- **Batch mutations refuse overlapping or duplicate paths.** A batch
+  that names one target by two spellings, through a symlinked parent or
+  another Unicode form, or a `delete` batch that names a path together
+  with its ancestor, is refused before anything runs, and parallel
+  writes that race on equivalent paths are serialized.
+- **A `replace_text` failure to write back is reported, not skipped.**
+  Only discovery and read errors skip a file now; a rewrite that fails
+  is listed as failed. A failure reading metadata after a finished
+  write no longer reports the write as failed.
+- **Renaming a link never destroys its target.** Moving a symlink onto
+  its own target, in any spelling, re-spelled the destination, skipped
+  the overwrite check, and renamed the link over the file it pointed
+  at. Such a move is now the no-op an exact self-move already was, and
+  a rename that changes only a name's Unicode form renames the link
+  itself.
+- **A `read` slice counts its lines exactly.** A newline is counted
+  only between retained lines, so `head`, `tail` and range results
+  report the line count the returned text has.
+- **A directory's `entryCount` holds up under races and deadlines.** A
+  directory or ancestor swapped for a symlink between validation and
+  the count could have another directory's entries counted; the opened
+  directory is now re-checked, and every entry is checked under its
+  real spelling, as `list` does. A `stat` that runs out of time while
+  counting ends `TIMEOUT` instead of returning success without
+  `entryCount`, and a stalled directory open or read is released at
+  the deadline instead of holding the call.
+- **`create` progress counts directories and files against one
+  total.** Each phase reported progress from one, so a call with at
+  least as many directories as files lost every file-phase tick and
+  its total jumped between phases.
+- **`search_text` reads virtual files and stops on cancel.** A file
+  that reports a size of 0 while holding text, such as procfs, was
+  searched as empty; it is now read to its end. A large file was also
+  read in one call that never checked the cancel signal, so a search
+  on a slow filesystem could hold past its deadline; reads now go in
+  chunks with a signal check.
+- **Image and audio reads honor `includeHash`**, and their per-path
+  value now reports `size`, `modified` and a `resourceUri` alongside
+  the media block.
 
 ## [2.8.1] - 2026-10-13
 
