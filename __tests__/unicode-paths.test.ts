@@ -180,6 +180,30 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       );
     });
 
+    it('an operator pattern denies every Unicode spelling of its name', async (t) => {
+      if (!(await isNormalizationSensitive(root))) {
+        t.skip('filesystem is normalization-insensitive');
+        return;
+      }
+      await writeFile(join(root, `${NFD_CAFE}.txt`), 'nfd');
+      await writeFile(join(root, NBSP_NAME), 'nbsp');
+      const denying = await withEnv({ FS_DENYLIST: `${NFC_CAFE}.txt,${ASCII_NAME}` }, () =>
+        makeGuard([root]),
+      );
+      for (const onDisk of [`${NFD_CAFE}.txt`, NBSP_NAME]) {
+        for (const validate of [
+          (path: string) => denying.validateExistingPath(path),
+          (path: string) => denying.validatePathForWrite(path),
+          (path: string) => denying.validatePathForDelete(path),
+        ]) {
+          await assert.rejects(
+            validate(join(root, onDisk)),
+            fsErrorMatcher(ErrorCode.ACCESS_DENIED, /denylist/),
+          );
+        }
+      }
+    });
+
     it('writes into the existing NFD directory, not a new NFC sibling', async (t) => {
       if (!(await isNormalizationSensitive(root))) {
         t.skip('filesystem is normalization-insensitive');

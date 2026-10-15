@@ -21,7 +21,14 @@ function normalizeForMatch(input: string): string {
   // normalize() preserves the double leading slash of UNC paths
   // (//server/share/...) on Windows; collapse it to one so the compiled
   // patterns — which carry no leading slash — still match their segments.
-  return toPosixPath(normalize(input)).toLowerCase().replace(/^\/+/u, '/');
+  // NFC, with every space separator read as U+0020: a pattern then matches
+  // each spelling of a name that the path guard resolves to one entry
+  // (#101), not only the bytes it was typed with.
+  return toPosixPath(normalize(input))
+    .normalize('NFC')
+    .replace(/\p{Zs}/gu, ' ')
+    .toLowerCase()
+    .replace(/^\/+/u, '/');
 }
 
 interface CompiledPatternSet {

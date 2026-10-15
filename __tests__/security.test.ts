@@ -243,6 +243,24 @@ describe('Security (P0)', () => {
       assert.strictEqual(matcher.isSensitive('.env '), true, '".env " should be caught as ".env"');
       assert.strictEqual(matcher.isSensitive('.env.'), true, '".env." should be caught as ".env"');
     });
+
+    it('TC-SENS-006: a pattern matches every Unicode spelling of a name', () => {
+      const matcher = new SensitiveMatcher(['caf\u00e9.txt', 'secret notes.txt']);
+      assert.strictEqual(matcher.isSensitive('/w/cafe\u0301.txt'), true, 'NFD name, NFC pattern');
+      assert.strictEqual(matcher.isSensitive('/w/secret\u00a0notes.txt'), true, 'U+00A0');
+      assert.strictEqual(matcher.isSensitive('/w/secret\u202fnotes.txt'), true, 'U+202F');
+      assert.strictEqual(
+        matcher.isSensitive('/w/secret\tnotes.txt'),
+        false,
+        'a tab is not a space',
+      );
+      const nfdPattern = new SensitiveMatcher(['cafe\u0301/**']);
+      assert.strictEqual(
+        nfdPattern.isSensitive('/w/caf\u00e9/a.txt'),
+        true,
+        'NFC path, NFD pattern',
+      );
+    });
   });
 
   describe('SensitiveMatcher allow-list relief (--allow / FS_ALLOWLIST)', () => {
