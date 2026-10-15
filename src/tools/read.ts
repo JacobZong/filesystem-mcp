@@ -519,9 +519,15 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       ...(resources.length > 0 ? { resources } : {}),
     };
   },
-  // Media cannot be sliced, so head/tail is no remedy for it.
-  oversizeRemedy: (result) =>
-    result.resources?.some((b) => b.type === 'image' || b.type === 'audio')
-      ? 'This media file is too large to return over the stdio transport; connect over HTTP, or raise it as a smaller file.'
-      : 'Read a slice with head, tail, or startLine/endLine.',
+  // Media and binary resources cannot be sliced, so head/tail is no remedy.
+  oversizeRemedy: (result) => {
+    const types = new Set(result.resources?.map((b) => b.type));
+    if (types.has('image') || types.has('audio')) {
+      return 'This media file is too large to return over the stdio transport; connect over HTTP, or raise it as a smaller file.';
+    }
+    if (types.has('resource')) {
+      return 'This binary file is too large to return over the stdio transport; connect over HTTP.';
+    }
+    return 'Read a slice with head, tail, or startLine/endLine.';
+  },
 });
