@@ -49,6 +49,9 @@ const readRangeFields = {
 
 const ReadFileInputSchema = singleOrBatchPathsInput({
   includeHash: defaultFalseBoolean('Include SHA-256 hash of the returned content in the response'),
+  binary: defaultFalseBoolean(
+    'Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.',
+  ),
   ...readRangeFields,
 }).superRefine((value, ctx) => {
   validateReadRange(
@@ -60,6 +63,20 @@ const ReadFileInputSchema = singleOrBatchPathsInput({
     },
     ctx,
   );
+  const hasRange =
+    value.head !== undefined ||
+    value.tail !== undefined ||
+    value.startLine !== undefined ||
+    value.endLine !== undefined;
+  if (value.binary && hasRange) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['binary'],
+      message:
+        "Cannot use 'binary' with 'head'/'tail'/'startLine'/'endLine'. A binary file is read whole.",
+      input: value,
+    });
+  }
 });
 
 interface ReadContinuation {

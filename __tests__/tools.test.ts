@@ -122,6 +122,23 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(structured?.results?.[0]?.value?.kind, 'image');
   });
 
+  it('read refuses binary together with a line range', async () => {
+    const file = await writeTestFile(tmpDir, 'binary-flag/range.txt', 'a\nb\n');
+    for (const extra of [
+      { head: 1 },
+      { tail: 1 },
+      { startLine: 1 },
+      { startLine: 1, endLine: 2 },
+    ]) {
+      const result = await harness.client.callTool({
+        name: 'read',
+        arguments: { path: file, binary: true, ...extra },
+      });
+      assert.strictEqual(result.isError, true, JSON.stringify(extra));
+      assert.match(firstTextBlock(result).text ?? '', /Cannot use 'binary'/);
+    }
+  });
+
   it('TC-FUNC-007: Read path outside allowed root returns isError: true with ACCESS_DENIED', async () => {
     const outsideDir = await createTestRoot();
     const outsideFile = await writeTestFile(outsideDir, 'outside_test.txt', 'secret');
