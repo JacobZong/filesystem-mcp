@@ -204,6 +204,27 @@ export function unicodeMatchKey(name: string): string {
 }
 
 /**
+ * False for a name of printable ASCII with no space, which no other entry can
+ * share a `unicodeMatchKey` with — except a name holding U+212A, U+037E or
+ * U+1FEF, which NFC maps to ASCII; those stay unmatched. A missed lookup of
+ * such a name skips the directory scan, so creating `new-file.ts` costs what
+ * it did.
+ */
+export function mayHaveEquivalentSpelling(name: string): boolean {
+  return /[^\x21-\x7e]/u.test(name);
+}
+
+/** `name` with each non-ASCII code unit as a `\uXXXX` escape, which a JSON string argument accepts. */
+export function escapeNonAscii(name: string): string {
+  return name.replace(/[^\x20-\x7e]/gu, (char) =>
+    Array.from(
+      { length: char.length },
+      (_, index) => `\\u${char.charCodeAt(index).toString(16).padStart(4, '0')}`,
+    ).join(''),
+  );
+}
+
+/**
  * A write target that already exists is realpathed to its on-disk spelling,
  * so a rename that changes only case (`foo.txt` -> `Foo.txt` on a
  * case-insensitive filesystem) or only Unicode spelling (`cafe\u0301.txt` ->

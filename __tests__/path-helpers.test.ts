@@ -4,11 +4,13 @@ import { basename, join, parse, sep } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
+  escapeNonAscii,
   isPathInsideDirectory,
   isPathWithinDirectories,
   isSamePath,
   isUnresolvableDrivePath,
   isWindowsDrivePath,
+  mayHaveEquivalentSpelling,
   normalizePath,
   respellSpellingOnlyTarget,
   unicodeMatchKey,
@@ -128,5 +130,16 @@ describe('PathGuard containment helpers', () => {
       respellSpellingOnlyTarget('x/caf\u00e9.txt', resolvedTarget),
       join(tmpdir(), 'caf\u00e9.txt'),
     );
+  });
+
+  it('TC-PH-015: mayHaveEquivalentSpelling is false only for printable ASCII without a space', () => {
+    assert.strictEqual(mayHaveEquivalentSpelling('new-file.ts'), false);
+    assert.strictEqual(mayHaveEquivalentSpelling('a b.txt'), true);
+    assert.strictEqual(mayHaveEquivalentSpelling('caf\u00e9'), true);
+  });
+
+  it('TC-PH-016: escapeNonAscii writes each non-ASCII UTF-16 unit as a JSON escape', () => {
+    assert.strictEqual(escapeNonAscii('a\u00a0b'), 'a\\u00a0b');
+    assert.strictEqual(escapeNonAscii('x\u{1f600}'), 'x\\ud83d\\ude00');
   });
 });
