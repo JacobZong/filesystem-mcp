@@ -551,8 +551,9 @@ export class GuardedFileSystem {
    * Direct children of a directory, leaving out entries the guard treats as
    * sensitive so the count never reveals what listings hide. Hidden and
    * ignored entries count: this answers "is it empty?", not "what would list show?".
-   * A symlinked child counts only when list would show it. The open, opendir, each read and
-   * each link check race the signal, so a stalled mount ends the call at its deadline.
+   * A symlinked child counts only when list would show it. The path validation, open, opendir,
+   * each read and each link check race the signal, so a stalled mount ends the call at its
+   * deadline.
    */
   async countEntries(dirPath: string, options?: { signal?: AbortSignal }): Promise<number> {
     const signal = options?.signal;

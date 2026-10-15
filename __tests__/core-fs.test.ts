@@ -12,6 +12,7 @@ import fsPromises, {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -1242,6 +1243,14 @@ describe('GuardedFileSystem.countEntries', () => {
   // Linux reports ENOTDIR for it (O_DIRECTORY is checked first); ELOOP is accepted as well.
   const refusedSymlinkOpen = (error: unknown) =>
     isNodeError(error) && ['ENOTDIR', 'ELOOP'].includes(error.code ?? '');
+  // Settles like `promise`, or rejects once `ms` passes, so a call that never settles fails fast.
+  const failIfPendingAfter = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`still pending after ${ms} ms`)), ms);
+    });
+    return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
+  };
 
   before(async () => {
     root = await createTestRoot();
@@ -1527,6 +1536,110 @@ describe('GuardedFileSystem.countEntries', () => {
     }
   });
 
+  it('a stalled read is closed only after it settles, without holding the deadline', async (t) => {
+    const dir = join(root, 'stalled-close');
+    await mkdir(dir);
+    let releaseRead: () => void = () => {};
+    const read = new Promise<null>((resolve) => {
+      releaseRead = () => resolve(null);
+    });
+    let closed = false;
+    // Like Node's Dir, close() queues behind the in-flight read and settles only once it does.
+    const stalled = {
+      read: () => read,
+      close: () =>
+        read
+          .catch(() => undefined)
+          .then(() => {
+            closed = true;
+          }),
+    };
+    t.mock.method(fsPromises, 'opendir', async () => stalled as unknown as Dir);
+    syncBuiltinESMExports();
+    try {
+      const counting = fs.countEntries(dir, { signal: AbortSignal.timeout(200) });
+      await assert.rejects(failIfPendingAfter(counting, 2000), { name: 'TimeoutError' });
+      // The read is still pending, so the close has not run and the call did not wait for it.
+      assert.strictEqual(closed, false);
+      releaseRead();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.strictEqual(closed, true);
+    } finally {
+      releaseRead();
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it(
+    'an open that lands after the deadline is closed',
+    {
+      skip: process.platform !== 'linux' && 'descriptor re-check is Linux-only',
+    },
+    async (t) => {
+      const dir = join(root, 'late-open');
+      await mkdir(dir);
+      let closed = 0;
+      const late = {
+        fd: 999999,
+        close: async () => {
+          closed += 1;
+        },
+      };
+      // The open lands 400 ms after a 100 ms deadline, so only its late release can close it.
+      t.mock.method(
+        fsPromises,
+        'open',
+        () =>
+          new Promise<FileHandle>((resolve) => {
+            setTimeout(() => resolve(late as unknown as FileHandle), 400);
+          }),
+      );
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(fs.countEntries(dir, { signal: AbortSignal.timeout(100) }), {
+          name: 'TimeoutError',
+        });
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        assert.strictEqual(closed, 1, 'the late handle must be closed exactly once');
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    },
+  );
+
+  it('an opendir that lands after the deadline is closed', async (t) => {
+    const dir = join(root, 'late-opendir');
+    await mkdir(dir);
+    let closed = 0;
+    const late = {
+      close: async () => {
+        closed += 1;
+      },
+    };
+    // The stream lands 400 ms after a 100 ms deadline, so only its late release can close it.
+    t.mock.method(
+      fsPromises,
+      'opendir',
+      () =>
+        new Promise<Dir>((resolve) => {
+          setTimeout(() => resolve(late as unknown as Dir), 400);
+        }),
+    );
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(fs.countEntries(dir, { signal: AbortSignal.timeout(100) }), {
+        name: 'TimeoutError',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      assert.strictEqual(closed, 1, 'the late Dir must be closed exactly once');
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+
   it(
     'a descriptor close failure does not mask the original error',
     {
@@ -1562,6 +1675,48 @@ describe('GuardedFileSystem.countEntries', () => {
       }
     },
   );
+
+  it('a Dir close failure does not mask the original error', async (t) => {
+    const dir = join(root, 'dir-close-fails');
+    await writeTestFile(dir, 'a.txt', 'a');
+    const link = join(dir, 'link.txt');
+    if (
+      !(await trySymlink(join(dir, 'a.txt'), link, () => t.skip('symlink not permitted'), 'file'))
+    )
+      return;
+    const guard = ctx.pathGuard;
+    const validate = guard.validateExistingPathDetailed.bind(guard);
+    // No read is pending here: the link's accessibility check throws EIO, which the count keeps.
+    guard.validateExistingPathDetailed = async (requestedPath: string) => {
+      if (requestedPath.endsWith('link.txt')) {
+        throw Object.assign(new Error('EIO: i/o error'), {
+          code: 'EIO',
+          errno: -5,
+          syscall: 'realpath',
+        });
+      }
+      return validate(requestedPath);
+    };
+    const originalOpendir = fsPromises.opendir.bind(fsPromises);
+    // The real Dir is returned, but its close closes it and then rejects.
+    t.mock.method(fsPromises, 'opendir', async (...args: Parameters<typeof fsPromises.opendir>) => {
+      const realDir = await originalOpendir(...args);
+      const closeReal = realDir.close.bind(realDir);
+      realDir.close = async () => {
+        await closeReal();
+        throw new Error('dir-close-fail');
+      };
+      return realDir;
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(fs.countEntries(dir), { code: 'EIO' });
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      Reflect.deleteProperty(guard, 'validateExistingPathDetailed');
+    }
+  });
 
   it('counts regular entries of a readable directory without resolving each one', async () => {
     const dir = join(root, 'readonly');
