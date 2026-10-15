@@ -213,6 +213,19 @@ access there, which a client that approves grants automatically would accept.
 Absolute paths built from `list_roots` are never ambiguous. `~` expands to the
 home directory of the user running the server.
 
+**A name spelled differently from the disk in Unicode still resolves.** When a
+name is not on disk as typed, the server compares it with the entries of its
+folder after NFC normalization, reading every space character as a plain
+space. `café` finds a folder stored decomposed (`cafe` plus U+0301), and
+`shot PM.png` finds a macOS screenshot whose name holds U+202F. This works for
+reads, writes, moves and deletes, below a root only: the root itself must be
+spelled as configured. A write lands on the entry it finds, so `create` asks
+before replacing it, as for any existing file. When two entries match, the
+call fails with `INVALID_INPUT` (`Ambiguous Unicode path component`) and shows
+each spelling with `\u` escapes; send the exact name. A match the denylist
+covers is refused as that file is, and never shown. A name of plain ASCII
+with no space is never matched this way.
+
 **Result paths read back as given.** `search_text`, `find_files` and
 `replace_text` print each path relative to the root that holds the folder
 they searched, whatever that folder was, and name that root, as

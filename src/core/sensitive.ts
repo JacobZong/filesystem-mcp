@@ -24,9 +24,33 @@ function normalizeForMatch(input: string): string {
   return toPosixPath(normalize(input)).toLowerCase().replace(/^\/+/u, '/');
 }
 
-interface CompiledPatternSet {
+/**
+ * A normalized pattern or path in NFC, with every space separator read as
+ * U+0020: the spelling the path guard folds names to (#101), so a pattern
+ * also matches the other Unicode spellings of the names it covers.
+ */
+function foldForMatch(normalized: string): string {
+  return normalized
+    .normalize('NFC')
+    .replace(/\p{Zs}/gu, ' ')
+    .toLowerCase();
+}
+
+interface GlobSet {
   pathGlobs: readonly RegExp[];
   nameGlobs: readonly RegExp[];
+}
+
+/**
+ * Every pattern twice: as typed, and folded. Each form is matched on its own
+ * (see `isSensitive`), because folding can also lose a match: `cafe?.txt`
+ * matches `cafe\u0301.txt` as typed, but not the composed `caf\u00e9.txt`.
+ */
+interface CompiledPatternSet {
+  raw: GlobSet;
+  folded: GlobSet;
+  /** No pattern changes under folding: on a path folding leaves alone, `folded` matches as `raw` does. */
+  foldInvariant: boolean;
 }
 
 // posix.matchesGlob runs with dot:false semantics and does not honor a dot
@@ -115,9 +139,21 @@ function expandBraces(glob: string): string[] {
   return parts.flatMap((part) => expandBraces(`${prefix}${part}${suffix}`));
 }
 
-function globToRegExp(glob: string): RegExp {
+function globToRegExp(glob: string, fold: boolean): RegExp {
   const segments = glob.split('/');
   let source = '';
+  // Literal text is folded here, by the same parse that finds the classes,
+  // so a class is always left as typed and a range's endpoints never move
+  // (folded, `[a-\u00a0]` would become the reversed `[a- ]` and fail to
+  // compile). Runs break only at '*', '?', '/' and a class's brackets, ASCII
+  // starters NFC never composes across, so folding run by run equals folding
+  // the whole path. Each code unit is escaped on its own, as it always was.
+  let text = '';
+  const flushText = (): void => {
+    const literal = fold ? foldForMatch(text) : text;
+    for (let k = 0; k < literal.length; k++) source += escapeRegExp(literal.charAt(k));
+    text = '';
+  };
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i] ?? '';
     const last = i === segments.length - 1;
@@ -128,15 +164,18 @@ function globToRegExp(glob: string): RegExp {
     for (let j = 0; j < segment.length; j++) {
       const char = segment[j] ?? '';
       if (char === '*') {
+        flushText();
         while (segment[j + 1] === '*') j++;
         source += '[^/]*';
       } else if (char === '?') {
+        flushText();
         source += '[^/]';
       } else if (char === '[') {
         // Same classEnd rule the scanners use: a ']' right after '[' (or
         // after the '!' negation) is a literal member, not the closer.
         const close = classEnd(segment, j);
         if (close !== -1) {
+          flushText();
           // Pass the class through, flipping glob '!' negation to '^' and
           // escaping backslashes so no body can make new RegExp throw. A
           // leading ']' must be escaped or the 'u' flag parses '[]a]' as an
@@ -150,12 +189,13 @@ function globToRegExp(glob: string): RegExp {
           source += `[${negated ? '^' : ''}${body}]`;
           j = close;
         } else {
-          source += escapeRegExp(char);
+          text += char;
         }
       } else {
-        source += escapeRegExp(char);
+        text += char;
       }
     }
+    flushText();
     if (!last) source += '/';
   }
   // Candidates are absolute paths but patterns carry no leading '/', so the
@@ -183,18 +223,26 @@ function compilePatternGlobs(normalizedPattern: string): readonly string[] {
 }
 
 function toPatternSet(patterns: readonly string[]): CompiledPatternSet {
+  const deduped = Array.from(new Set(patterns.map((p) => p.trim()).filter((p) => p.length > 0)));
+  const normalized = deduped.map(normalizeForMatch);
+  const raw = compileGlobSet(normalized, false);
+  const folded = compileGlobSet(normalized, true);
+  const sources = (set: GlobSet): string =>
+    JSON.stringify([set.pathGlobs, set.nameGlobs].map((globs) => globs.map((glob) => glob.source)));
+  return { raw, folded, foldInvariant: sources(raw) === sources(folded) };
+}
+
+function compileGlobSet(normalizedPatterns: readonly string[], fold: boolean): GlobSet {
   const pathGlobs = new Set<RegExp>();
   const nameGlobs = new Set<RegExp>();
 
-  const deduped = Array.from(new Set(patterns.map((p) => p.trim()).filter((p) => p.length > 0)));
-  for (const pattern of deduped) {
-    const normalized = normalizeForMatch(pattern);
+  for (const normalized of normalizedPatterns) {
     const matchesPath = normalized.includes('/');
     const target = matchesPath ? pathGlobs : nameGlobs;
     const globs = matchesPath ? compilePatternGlobs(normalized) : [normalized];
     for (const glob of globs) {
       for (const expanded of expandBraces(glob)) {
-        target.add(globToRegExp(expanded));
+        target.add(globToRegExp(expanded, fold));
       }
     }
   }
@@ -342,7 +390,7 @@ export function describeSensitivePolicy(): {
   };
 }
 
-const EMPTY_PATTERN_SET: CompiledPatternSet = { pathGlobs: [], nameGlobs: [] };
+const EMPTY_PATTERN_SET: CompiledPatternSet = toPatternSet([]);
 
 export class SensitiveMatcher {
   private readonly builtin: CompiledPatternSet;
@@ -367,16 +415,32 @@ export class SensitiveMatcher {
 
   isSensitive(filePath: string): boolean {
     const pathToCheck = IS_WINDOWS ? stripAlternateDataStreams(filePath) : filePath;
-    const normalizedPath = normalizeForMatch(pathToCheck);
-    const name = posix.basename(normalizedPath);
-    const matches = (set: CompiledPatternSet): boolean =>
-      matchesAnyGlob(set.pathGlobs, normalizedPath) || matchesAnyGlob(set.nameGlobs, name);
+    const rawPath = normalizeForMatch(pathToCheck);
+    const foldedPath = foldForMatch(rawPath);
+    const rawName = posix.basename(rawPath);
+    const foldedName = posix.basename(foldedPath);
+    const inForm = (globs: GlobSet, path: string, name: string): boolean =>
+      matchesAnyGlob(globs.pathGlobs, path) || matchesAnyGlob(globs.nameGlobs, name);
+    // Each form on its own: the raw form keeps every match a pattern had
+    // before folding, and the folded form adds the other Unicode spellings.
+    const hits = (set: CompiledPatternSet): { raw: boolean; folded: boolean } => {
+      const raw = inForm(set.raw, rawPath, rawName);
+      const folded =
+        set.foldInvariant && foldedPath === rawPath
+          ? raw
+          : inForm(set.folded, foldedPath, foldedName);
+      return { raw, folded };
+    };
 
     // Explicit deny entries (FS_DENYLIST/--deny) always apply.
-    if (matches(this.operator)) return true;
-    if (!matches(this.builtin)) return false;
+    const operator = hits(this.operator);
+    if (operator.raw || operator.folded) return true;
+    const builtin = hits(this.builtin);
+    if (!builtin.raw && !builtin.folded) return false;
     // A built-in hit is lifted only by an allow entry that matches the same
-    // normalized candidate — a pattern that matches nothing relieves nothing.
-    return !matches(this.allow);
+    // normalized candidate as typed — a pattern that matches nothing relieves
+    // nothing. Folding never widens what --allow relieves, and never revokes
+    // a spelling it already relieved.
+    return !inForm(this.allow.raw, rawPath, rawName);
   }
 }

@@ -1,5 +1,5 @@
 import type { Stats } from 'node:fs';
-import { lstat, readlink, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -18,6 +18,7 @@ import {
 import { Logger } from './observability.ts';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.ts';
 import {
+  escapeNonAscii,
   expandHome,
   getReservedDeviceNameForPath,
   IS_WINDOWS,
@@ -27,9 +28,11 @@ import {
   isUnresolvableDrivePath,
   isWindowsDrivePath,
   isWindowsDriveRelativePath,
+  mayHaveEquivalentSpelling,
   normalizeAllowedDirectory,
   normalizePath,
   toPosixRelative,
+  unicodeMatchKey,
 } from './path-utils.ts';
 import { SensitiveMatcher } from './sensitive.ts';
 import { parseTrueEnvFlag, ROOTS_TIMEOUT_MS } from './util.ts';
@@ -590,17 +593,38 @@ export class PathGuard {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
       this.validateAccess(requestedPath);
 
+    let spelled = normalizedRequested;
     let realPath: string;
     try {
-      realPath = await realpath(normalizedRequested);
+      realPath = await realpath(spelled);
     } catch (error) {
-      realPath = await this.handleRealpathError(
-        error,
-        normalizedRequested,
-        allowedDirs,
-        accessDeniedHint,
-        requestedPath,
-      );
+      // Not on disk as typed; it may be under another Unicode spelling (#101).
+      const respelled = isNotFoundErrno(error)
+        ? await this.respellMissing(spelled, allowedDirs, accessDeniedHint, requestedPath)
+        : undefined;
+      if (respelled === undefined) {
+        realPath = await this.handleRealpathError(
+          error,
+          spelled,
+          allowedDirs,
+          accessDeniedHint,
+          requestedPath,
+        );
+      } else {
+        this.assertNotSensitiveFile(respelled, requestedPath);
+        spelled = respelled;
+        try {
+          realPath = await realpath(spelled);
+        } catch (retryError) {
+          realPath = await this.handleRealpathError(
+            retryError,
+            spelled,
+            allowedDirs,
+            accessDeniedHint,
+            requestedPath,
+          );
+        }
+      }
     }
 
     const normalizedReal = normalizePath(realPath);
@@ -615,9 +639,9 @@ export class PathGuard {
     this.assertNotSensitiveFile(normalizedReal, requestedPath);
 
     return {
-      requestedPath: normalizedRequested,
+      requestedPath: spelled,
       resolvedPath: normalizedReal,
-      isSymlink: !isSamePath(normalizedRequested, normalizedReal),
+      isSymlink: !isSamePath(spelled, normalizedReal),
     };
   }
 
@@ -886,19 +910,140 @@ export class PathGuard {
     }
   }
 
+  /**
+   * `normalized` re-spelled with the on-disk names of the components that are
+   * missing as typed but present under another Unicode spelling (#101), or
+   * `undefined` when no component changed. Only names below a root are
+   * matched, never the root's own. Each directory is scanned only after its
+   * real path is checked to be inside the roots, and each matched entry is
+   * realpathed and checked again, so a link found this way cannot lead out
+   * (`resolveLast: false` leaves the last one unresolved, for delete). The
+   * first component with no match ends the walk; it and the rest stay as
+   * typed, so a write still creates them. The result is a spelling only:
+   * the caller runs its own containment and denylist checks on it.
+   */
+  private async respellMissing(
+    normalized: string,
+    allowedDirs: readonly string[],
+    accessDeniedHint: string,
+    requestedPath: string,
+    resolveLast = true,
+  ): Promise<string | undefined> {
+    const root = this.allowedRootContaining(normalized);
+    if (root === undefined || !mayHaveEquivalentSpelling(normalized.slice(root.length))) {
+      return undefined;
+    }
+    const missing: string[] = [];
+    let ancestor = normalized;
+    let real: string;
+    for (;;) {
+      try {
+        real = normalizePath(await realpath(ancestor));
+        break;
+      } catch (error) {
+        if (!isNotFoundErrno(error) || isSamePath(ancestor, root)) return undefined;
+        missing.unshift(basename(ancestor));
+        ancestor = dirname(ancestor);
+      }
+    }
+    // An ancestor that resolves out of the roots is the caller's to refuse.
+    if (!isPathWithinDirectories(real, allowedDirs)) return undefined;
+
+    const spelled: string[] = [];
+    for (const [index, name] of missing.entries()) {
+      let onDisk: string | undefined = name;
+      if (mayHaveEquivalentSpelling(name)) {
+        // The scan must not reveal what the denylist hides: a name it covers
+        // under the resolved parent is refused as the exact spelling is, and
+        // a directory `list` would refuse is never read.
+        this.assertNotSensitiveFile(join(real, ...missing.slice(index)), requestedPath);
+        if (this.isSensitive(real)) break;
+        onDisk = await this.findEquivalentEntry(real, name, requestedPath);
+      }
+      if (onDisk === undefined) break;
+      spelled.push(onDisk);
+      if (!resolveLast && index === missing.length - 1) break;
+      try {
+        real = normalizePath(await realpath(join(ancestor, ...spelled)));
+      } catch {
+        // Missing as typed, or a dangling link: the caller's checks judge it.
+        break;
+      }
+      if (!isPathWithinDirectories(real, allowedDirs)) {
+        this.throwAccessDenied(requestedPath, accessDeniedHint);
+      }
+    }
+    if (spelled.every((name, index) => name === missing[index])) return undefined;
+    return join(ancestor, ...spelled, ...missing.slice(spelled.length));
+  }
+
+  /**
+   * The entry of `realDir` that `name` names: `name` itself when it is
+   * there, else the one entry with the same `unicodeMatchKey`. Two or more
+   * such entries are refused, never chosen between. `undefined` when none
+   * matches or the directory cannot be read.
+   */
+  private async findEquivalentEntry(
+    realDir: string,
+    name: string,
+    requestedPath: string,
+  ): Promise<string | undefined> {
+    let entries: string[];
+    try {
+      entries = await readdir(realDir);
+    } catch {
+      return undefined;
+    }
+    if (entries.includes(name)) return name;
+    const key = unicodeMatchKey(name);
+    const matches = entries.filter((entry) => unicodeMatchKey(entry) === key);
+    // A match the denylist covers is refused here, as a lone one would be by
+    // the caller, so the ambiguity error below never lists a hidden name.
+    for (const match of matches) this.assertNotSensitiveFile(join(realDir, match), requestedPath);
+    if (matches.length > 1) {
+      throw new FsError(
+        ErrorCode.INVALID_INPUT,
+        `Ambiguous Unicode path component "${name}": ${String(matches.length)} entries in ${realDir} match it (${matches.map(escapeNonAscii).join(', ')}). Pass the exact name, using \\u escapes for the characters shown that way.`,
+        requestedPath,
+      );
+    }
+    return matches[0];
+  }
+
   async validatePathForWrite(requestedPath: string): Promise<string> {
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
       this.validateAccess(requestedPath);
 
-    const { realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
+    let { realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
       requestedPath,
       normalizedRequested,
     );
-    if (
-      !isPathWithinDirectories(realAncestor, allowedDirs) ||
-      !isPathWithinDirectories(resolvedTarget, allowedDirs)
-    ) {
-      this.throwAccessDenied(requestedPath, accessDeniedHint);
+    const assertInside = (): void => {
+      if (
+        !isPathWithinDirectories(realAncestor, allowedDirs) ||
+        !isPathWithinDirectories(resolvedTarget, allowedDirs)
+      ) {
+        this.throwAccessDenied(requestedPath, accessDeniedHint);
+      }
+    };
+    assertInside();
+    if (realAncestor !== resolvedTarget) {
+      // Part of it is not on disk as typed; it may be under another Unicode
+      // spelling (#101). Re-run the same checks on the on-disk spelling.
+      const respelled = await this.respellMissing(
+        normalizedRequested,
+        allowedDirs,
+        accessDeniedHint,
+        requestedPath,
+      );
+      if (respelled !== undefined) {
+        this.assertNotSensitiveFile(respelled, requestedPath);
+        ({ realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
+          requestedPath,
+          respelled,
+        ));
+        assertInside();
+      }
     }
     // Re-check the resolved target: a symlink inside an allowed root may point
     // at a sensitive file. Writing through such a link must be blocked too.
@@ -924,7 +1069,25 @@ export class PathGuard {
       );
     }
 
-    const parent = dirname(normalizedRequested);
+    // Probe the final component before the parent, so a target that is not on
+    // disk as typed can be re-spelled (#101) before either is checked.
+    let target = normalizedRequested;
+    let stats: Stats | undefined;
+    try {
+      stats = await lstat(target);
+    } catch (error) {
+      // The link itself is deleted, so the last component stays unresolved.
+      const respelled = isNotFoundErrno(error)
+        ? await this.respellMissing(target, allowedDirs, accessDeniedHint, requestedPath, false)
+        : undefined;
+      if (respelled !== undefined) {
+        this.assertNotSensitiveFile(respelled, requestedPath);
+        target = respelled;
+        stats = await lstat(target).catch(() => undefined);
+      }
+    }
+
+    const parent = dirname(target);
     let realParent: string;
     try {
       realParent = await realpath(parent);
@@ -942,36 +1105,37 @@ export class PathGuard {
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
 
-    // Resolve the final component when it exists. For deletion, we ONLY
-    // block if the real target is outside the sandbox IF the target is
-    // NOT a symlink. Deleting a symlink is safe even if it points outside.
-    try {
-      const stats = await lstat(normalizedRequested);
-      if (stats.isSymbolicLink()) {
-        // Symlink: check link sensitivity but don't resolve target.
-        // The parent check above ensures the link itself is in an allowed root.
-        this.assertNotSensitiveFile(normalizedRequested, requestedPath);
-        return normalizedRequested;
-      }
-
-      // Not a symlink: resolve to catch path escapes (e.g. /allowed/dir/../../etc)
-      // and block sensitive files.
-      const realTarget = normalizePath(await realpath(normalizedRequested));
-      if (!isPathWithinDirectories(realTarget, allowedDirs)) {
-        this.throwAccessDenied(requestedPath, accessDeniedHint);
-      }
-      this.assertNotSensitiveFile(realTarget, requestedPath);
-      return realTarget;
-    } catch (error) {
-      // A denial raised inside this block (out-of-root real target, or a
-      // sensitive file reached through a symlinked parent) must propagate.
-      // Only a probe failure — ENOENT and friends — falls through to the
-      // parent check, which is sufficient for a path that does not exist.
-      if (isFsError(error)) {
-        throw error;
-      }
+    // A target that does not exist needs only the parent check above.
+    if (stats === undefined) return target;
+    // For deletion, we ONLY block if the real target is outside the sandbox
+    // IF the target is NOT a symlink. Deleting a symlink is safe even if it
+    // points outside.
+    if (stats.isSymbolicLink()) {
+      // Symlink: check link sensitivity but don't resolve target.
+      // The parent check above ensures the link itself is in an allowed root.
+      // Spelled through the validated real parent, so every path to one link
+      // (an aliased parent, another Unicode spelling) names it the same way.
+      const link = join(normalizedRealParent, basename(target));
+      this.assertNotSensitiveFile(target, requestedPath);
+      this.assertNotSensitiveFile(link, requestedPath);
+      return link;
     }
-    return normalizedRequested;
+
+    // Not a symlink: resolve to catch path escapes (e.g. /allowed/dir/../../etc)
+    // and block sensitive files. A probe failure (ENOENT and friends) falls
+    // back to the parent check, which is sufficient for a path that does not
+    // exist.
+    let realTarget: string;
+    try {
+      realTarget = normalizePath(await realpath(target));
+    } catch {
+      return target;
+    }
+    if (!isPathWithinDirectories(realTarget, allowedDirs)) {
+      this.throwAccessDenied(requestedPath, accessDeniedHint);
+    }
+    this.assertNotSensitiveFile(realTarget, requestedPath);
+    return realTarget;
   }
 
   async recomputeAllowedDirectories(): Promise<void> {

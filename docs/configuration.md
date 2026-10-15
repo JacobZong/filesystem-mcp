@@ -81,7 +81,9 @@ reading, writing, searching, and listing:
 | Keys and certificates | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `*.cer`                                                                                     |
 | SSH private keys      | `*id_rsa*`, `*id_dsa*`, `*id_ecdsa*`, `*id_ed25519*`                                                                                     |
 
-Matching ignores case, so `.ENV` is blocked too.
+Matching ignores case, so `.ENV` is blocked too. It also ignores Unicode
+spelling: a pattern blocks a name stored decomposed (NFD) or with a
+non-breaking space (U+00A0, U+202F) as it blocks the plain spelling.
 
 Three switches change the list:
 

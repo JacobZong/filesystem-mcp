@@ -15,6 +15,16 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
 
 ### Security
 
+- **A denylist pattern blocks every Unicode spelling of a name.** A
+  `--deny` or `FS_DENYLIST` pattern matched only the bytes it was typed
+  with. So `--deny 'café.txt'` did not block a `café.txt` stored
+  decomposed (NFD), and `--deny 'secret notes.txt'` did not block a name with
+  U+00A0 or U+202F, when a client sent the name exactly as stored. A pattern
+  now also matches after NFC normalization, with every space character read
+  as a plain space, and keeps every match it had. An `--allow` entry still
+  relieves only the spelling it names. The built-in list has no such
+  characters and is unchanged
+  ([#101](https://github.com/j0hanz/filesystem-mcp/issues/101)).
 - **A glob pattern can no longer freeze the server.** `find_files`,
   `search_text` and `replace_text` refuse a pattern that puts `|`, `*` or a
   nested group inside `*(…)` or `+(…)`, or that has more than three `*` runs
@@ -118,6 +128,17 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
 
 ### Fixed
 
+- **A path that differs from the disk only in Unicode spelling resolves.**
+  `café` finds a folder stored decomposed (NFD), and `shot PM.png` finds a
+  macOS screenshot whose name holds U+202F. Both answered `Path not found`
+  although `list` showed them. A name missing as typed is now compared with
+  its folder's entries after NFC normalization, with every space character
+  read as U+0020. One match is used and checked like any other path: root
+  containment after each symlink, and the denylist on the on-disk name. Two
+  matches are refused as ambiguous, and no match is still `NOT_FOUND`. A
+  write to such a name lands on the existing entry, and a move that changes
+  only a name's Unicode form renames it
+  ([#101](https://github.com/j0hanz/filesystem-mcp/issues/101)).
 - **A Windows drive path is refused on Linux and macOS.** `C:\x`, `C:/x`
   and `C:` were relative names there, so `create` made a file named
   `C:\Users\x\f.txt`, or a `C:` folder, inside the root and reported success.

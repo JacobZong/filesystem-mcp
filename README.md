@@ -355,7 +355,9 @@ The basics:
   when that is inside a root, and against the root otherwise. With several
   roots, it must exist under exactly one of them. Absolute paths are never
   ambiguous. Search results are printed relative to the root, so a result
-  can be passed straight back.
+  can be passed straight back. A name that differs from the one on disk only
+  in Unicode form (NFC or NFD) or in its space characters (U+00A0, U+202F)
+  finds that entry.
 - **Confirmations.** Overwrites, recursive deletes, and paths outside the
   roots are questions for the user. Declare the `elicitation` capability and
   answer them in a handler, or, on the 2026-07-28 protocol, take them as data

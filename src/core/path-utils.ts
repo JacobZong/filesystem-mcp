@@ -179,7 +179,7 @@ export function normalizePath(p: string): string {
 
 const IS_CASE_INSENSITIVE_FS = IS_WINDOWS || platform() === 'darwin';
 
-export function normalizeCaseForComparison(value: string): string {
+function normalizeCaseForComparison(value: string): string {
   return IS_CASE_INSENSITIVE_FS ? value.toLowerCase() : value;
 }
 
@@ -193,17 +193,63 @@ export function isSamePath(left: string, right: string): boolean {
 }
 
 /**
- * On a case-insensitive filesystem a write target that already exists is
- * realpathed to its on-disk spelling, so a case-only rename (`foo.txt` ->
- * `Foo.txt`) resolves to the source itself. Returns the resolved target
- * re-spelled with the requested basename when the two differ only by case;
+ * What two names share when they differ only in Unicode form (NFC or NFD) or
+ * in which space character they use (U+0020, U+00A0, U+202F, and every other
+ * Zs), case-folded where the filesystem folds case. A model types back
+ * `caf\u00e9` and `shot PM.png` for the `cafe\u0301` and `shot\u202fPM.png` a
+ * listing showed it (#101).
+ */
+export function unicodeMatchKey(name: string): string {
+  return normalizeCaseForComparison(name.normalize('NFC').replace(/\p{Zs}/gu, ' '));
+}
+
+/**
+ * True when two paths are one path once case (where the filesystem folds it)
+ * and Unicode spelling are folded: the spellings the path guard resolves to
+ * one entry when only one of them is on disk.
+ */
+export function isEquivalentPath(left: string, right: string): boolean {
+  return (
+    isSamePath(left, right) || unicodeMatchKey(resolve(left)) === unicodeMatchKey(resolve(right))
+  );
+}
+
+/**
+ * False for a name of printable ASCII with no space, which no other entry can
+ * share a `unicodeMatchKey` with — except a name holding U+212A, U+037E or
+ * U+1FEF, which NFC maps to ASCII; those stay unmatched. A missed lookup of
+ * such a name skips the directory scan, so creating `new-file.ts` costs what
+ * it did.
+ */
+export function mayHaveEquivalentSpelling(name: string): boolean {
+  return /[^\x21-\x7e]/u.test(name);
+}
+
+/** `name` with each non-ASCII code unit as a `\uXXXX` escape, which a JSON string argument accepts. */
+export function escapeNonAscii(name: string): string {
+  return name.replace(/[^\x20-\x7e]/gu, (char) =>
+    Array.from(
+      { length: char.length },
+      (_, index) => `\\u${char.charCodeAt(index).toString(16).padStart(4, '0')}`,
+    ).join(''),
+  );
+}
+
+/**
+ * A write target that already exists is realpathed to its on-disk spelling,
+ * so a rename that changes only case (`foo.txt` -> `Foo.txt` on a
+ * case-insensitive filesystem) or only Unicode spelling (`cafe\u0301.txt` ->
+ * `caf\u00e9.txt`) resolves to the source itself. Returns the resolved target
+ * re-spelled with the requested basename when the two differ only that way;
  * otherwise the resolved target unchanged. Parent segments are not re-spelled.
  */
-export function respellCaseOnlyTarget(requestedPath: string, resolvedTarget: string): string {
+export function respellSpellingOnlyTarget(requestedPath: string, resolvedTarget: string): string {
   const requestedName = basename(requestedPath);
-  if (requestedName === basename(resolvedTarget)) return resolvedTarget;
-  const respelled = join(dirname(resolvedTarget), requestedName);
-  return isSamePath(respelled, resolvedTarget) ? respelled : resolvedTarget;
+  const resolvedName = basename(resolvedTarget);
+  if (requestedName === resolvedName) return resolvedTarget;
+  return unicodeMatchKey(requestedName) === unicodeMatchKey(resolvedName)
+    ? join(dirname(resolvedTarget), requestedName)
+    : resolvedTarget;
 }
 
 export function normalizeAllowedDirectory(dir: string): string {

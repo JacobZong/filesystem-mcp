@@ -104,10 +104,10 @@ async function findMatchesInDirectory(
   // path, device names, the sensitive list, is-a-directory. A refusal is
   // "nothing to list", never an error, so root suggestions survive it.
   const listable = await pathGuard.validateExistingDirectory(searchDir).then(
-    () => true,
-    () => false,
+    (validated) => validated,
+    () => undefined,
   );
-  if (!listable) return matches;
+  if (listable === undefined) return matches;
   try {
     // Stream via opendir and collect every match. Do not cap here: the
     // SDK's completion result keeps the first 100 values and reports the
@@ -115,7 +115,9 @@ async function findMatchesInDirectory(
     // and already sorted (mergeCompletionMatches). Capping here would
     // keep the opendir-first 100, not the alphabetically-first 100, and
     // hide the true count from the client.
-    const dir = await opendir(searchDir);
+    // The directory the guard validated: a spelling that differs from the
+    // disk only in Unicode (#101) passes validation but is not on disk as typed.
+    const dir = await opendir(listable);
     try {
       const lowerPrefix = prefix.toLowerCase();
       for await (const entry of dir) {
