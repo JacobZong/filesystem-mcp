@@ -397,6 +397,18 @@ describe('outbound result limits', { timeout: 60_000 }, () => {
     assert.match(firstTextBlock(text).text ?? '', /TOO_LARGE[^]*head, tail, or startLine\/endLine/);
   });
 
+  it('read with binary over stdio refuses an oversize resource with an HTTP remedy', async () => {
+    const result = await harness.client.callTool(
+      { name: 'read', arguments: { path: binaryFile, binary: true } },
+      { timeout: 5000 },
+    );
+    assert.strictEqual(result.isError, true);
+    const text = firstTextBlock(result).text ?? '';
+    assert.match(text, /^TOO_LARGE: .*stdio message limit\)\.\nThis binary file is too large/);
+    assert.doesNotMatch(text, /head, tail/);
+    await assertRecovery();
+  });
+
   it('returns a large result whose bound exceeds the limit but whose encoding does not', async () => {
     const result = await harness.client.callTool(
       { name: 'read', arguments: { path: mediumFile } },

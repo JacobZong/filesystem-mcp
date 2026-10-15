@@ -47,6 +47,13 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
   ignored entries count. Secret files, and symlinks to them or to anything
   outside the allowed folders, do not, so the count never reveals what `list`
   hides.
+- **`read` can return any binary file.** With `binary: true`, a full read of a
+  file that is not text, an image or audio (a PDF, zip, sqlite database, font,
+  …) returns it as an embedded `resource` block with its MIME type and base64
+  bytes, instead of refusing it as binary. The size limit is unchanged. Line
+  ranges of a binary file are still refused, and without the flag the refusal
+  now names it
+  ([#98](https://github.com/j0hanz/filesystem-mcp/issues/98)).
 
 ### Changed
 
@@ -106,6 +113,8 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
   and a case-insensitive pattern with a `k` or `s` in a file that holds the
   Kelvin sign or the long s, which RE2 matches as those letters; there a line
   over 4 MiB still counts its file in `skippedTooLarge`.
+- **A batched `read` counts image, audio and binary files at their base64
+  size** against its 512 KiB budget, because that is what it returns.
 
 ### Fixed
 

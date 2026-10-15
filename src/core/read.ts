@@ -415,6 +415,17 @@ async function readFullContent(
   return { content, totalLines: countLines(content) };
 }
 
+/** The text path's binary refusal; `read` matches it to offer `binary: true`. */
+export const BINARY_FILE_MESSAGE = 'Binary file detected.';
+
+export function isBinaryRefusal(error: unknown): error is FsError {
+  return (
+    error instanceof FsError &&
+    error.code === ErrorCode.INVALID_INPUT &&
+    error.message === BINARY_FILE_MESSAGE
+  );
+}
+
 async function assertNotBinary(
   validPath: string,
   filePath: string,
@@ -423,7 +434,7 @@ async function assertNotBinary(
 ): Promise<void> {
   normalized.signal?.throwIfAborted();
   if (isKnownBinaryExtension(validPath)) {
-    throw new FsError(ErrorCode.INVALID_INPUT, 'Binary file detected.', filePath);
+    throw new FsError(ErrorCode.INVALID_INPUT, BINARY_FILE_MESSAGE, filePath);
   }
   const probe = await readProbe(handle, normalized.signal);
   // A UTF-16 BOM passes the binary probe (it is text), but every reader
@@ -437,7 +448,7 @@ async function assertNotBinary(
     );
   }
   if (isBinarySample(probe)) {
-    throw new FsError(ErrorCode.INVALID_INPUT, 'Binary file detected.', filePath);
+    throw new FsError(ErrorCode.INVALID_INPUT, BINARY_FILE_MESSAGE, filePath);
   }
 }
 

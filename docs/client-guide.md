@@ -318,7 +318,10 @@ Notes on individual tools:
   `_meta.results[].value.continuation` holds the arguments for the next
   chunk. `includeHash: true` adds `contentHash` (SHA-256). Images and audio
   come back as `image` and `audio` content blocks; other binary files fail
-  with `Binary file detected.`
+  with `Binary file detected.` unless the call passes `binary: true`. Then a
+  full read returns the file as a `resource` block (`resource.blob` is base64,
+  `resource.mimeType` the type), and `_meta.results[].value` holds `size` and
+  `kind`. Line ranges are refused for binary files.
 - `read` and `create` add a `resource_link` block per file, pointing at its
   `filesystem-mcp://file/...` resource.
 - `stat` on a folder has no `size`; its `entryCount` is the number of entries

@@ -209,7 +209,10 @@ These variables are for HTTP only:
 | Cached results and page cursors                         | Expire after about 60 seconds                                                      |
 
 `read` handles text files and returns images and audio as media. It refuses
-other binary files and UTF-16 text files.
+other binary files unless the call passes `binary: true`, which returns them
+whole as an embedded resource under the same `--max-file-size` cap; over
+stdio, a file above about 7 MiB is too large once base64-encoded. It refuses
+UTF-16 text files.
 
 A stdio request ID may take at most 1024 bytes when JSON-encoded, counting
 quotes and escapes. The server rejects a longer ID before running the request,

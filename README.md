@@ -261,7 +261,7 @@ npm install -g @j0hanz/filesystem-mcp
 | `find_files`     | Finds files by name or glob, such as `**/*.test.ts`.                                                          |
 | `search_text`    | Searches inside files for text or a regex, like `grep`, with optional context lines.                          |
 | `stat`           | Gets size, dates, type, permissions, and a token estimate without reading the file.                           |
-| `read`           | Reads one or many text files, whole or by line range, head, or tail. Images and audio come back as media.     |
+| `read`           | Reads text files whole or by lines, head, or tail. Images and audio come back as media; others with `binary`. |
 | `diff`           | Compares two files and returns a unified diff.                                                                |
 | `create` ✎       | Writes new files, appends, or makes empty folders. Asks before replacing a file, unless `overwrite: true`.    |
 | `edit` ✎         | Replaces exact text in files. All edits to a file apply, or none do. `dryRun` shows the diff first.           |
