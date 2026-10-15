@@ -384,9 +384,15 @@ async function createOne(
       signal: ctx.signal,
     });
     validPath = written.validPath;
-    const fileStats = (await ctx.fs.stat(path, { signal: ctx.signal })).stats;
-    created = fileStats.birthtime.toISOString();
-    modified = fileStats.mtime.toISOString();
+    const nowIso = new Date().toISOString();
+    let fileStats: Stats | undefined;
+    try {
+      fileStats = (await ctx.fs.stat(written.validPath)).stats;
+    } catch {
+      /* post-commit metadata only */
+    }
+    created = fileStats?.birthtime.toISOString() ?? nowIso;
+    modified = fileStats?.mtime.toISOString() ?? nowIso;
     meta = buildWrittenFileMeta({
       validPath: written.validPath,
       content,

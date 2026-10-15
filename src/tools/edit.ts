@@ -381,9 +381,14 @@ async function editOnce(
   // writer it may reflect that writer's mtime while `size`/content below come from
   // this edit's atomic write. The file content itself is always consistent. A dry
   // run wrote nothing, so it reports the time of the preview.
-  const modified = options.dryRun
-    ? new Date().toISOString()
-    : (await ctx.fs.stat(filePath, { signal: ctx.signal })).stats.mtime.toISOString();
+  let modified = new Date().toISOString();
+  if (!options.dryRun) {
+    try {
+      modified = (await ctx.fs.stat(validPath)).stats.mtime.toISOString();
+    } catch {
+      /* post-commit metadata only */
+    }
+  }
   const meta = buildWrittenFileMeta({
     validPath,
     content: editResult.content,

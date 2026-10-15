@@ -42,6 +42,9 @@ import { parseTrueEnvFlag, ROOTS_TIMEOUT_MS } from './util.ts';
 // primitives (IS_WINDOWS, isAlpha, isSlash, toPosixPath) live in
 // path-utils.ts.
 
+/** Links followed, or respelling rounds run, before a path is refused (Linux ELOOP's 40). */
+const MAX_SYMLINK_HOPS = 40;
+
 export interface ValidatedPathDetails {
   requestedPath: string;
   resolvedPath: string;
@@ -382,10 +385,16 @@ export class PathGuard {
       }
       // Validation refuses it for its shape whatever is granted, so asking the
       // user to grant the working directory it resolves under is pointless.
-      if (isUnresolvableDrivePath(requested)) {
+      if (
+        isUnresolvableDrivePath(requested) ||
+        (IS_WINDOWS && getReservedDeviceNameForPath(requested) !== undefined)
+      ) {
         continue;
       }
       const normalized = normalizePath(requested);
+      if (this.isSensitive(requested) || this.isSensitive(normalized)) {
+        continue;
+      }
       if (isPathWithinDirectories(normalized, allowedDirs)) {
         continue;
       }
@@ -397,7 +406,7 @@ export class PathGuard {
       if (await this.isUnsafeGrantTarget(targetDir)) {
         continue;
       }
-      if (grantDirs.includes(targetDir)) {
+      if (grantDirs.some((dir) => isSamePath(dir, targetDir))) {
         continue;
       }
       if (!(await this.isWithinBoundary(targetDir))) {
@@ -860,6 +869,7 @@ export class PathGuard {
   ): Promise<{ realAncestor: string; resolvedTarget: string }> {
     const missingSegments: string[] = [];
     let current = currentPath;
+    let hops = 0;
     for (;;) {
       try {
         const realAncestor = normalizePath(await realpath(current));
@@ -872,16 +882,33 @@ export class PathGuard {
         try {
           const stats = await lstat(current);
           if (stats.isSymbolicLink()) {
-            const target = await readlink(current);
-            const resolvedTarget = isAbsolute(target) ? target : resolve(dirname(current), target);
-            const normalizedTarget = normalizePath(resolvedTarget);
+            if (++hops > MAX_SYMLINK_HOPS) {
+              throw new FsError(
+                ErrorCode.SYMLINK_NOT_ALLOWED,
+                'Too many symbolic links encountered',
+                requestedPath,
+              );
+            }
             const allowedDirs = this.getAllowedDirectories();
+            const linkParent = normalizePath(await realpath(dirname(current)));
+            if (!isPathWithinDirectories(linkParent, allowedDirs)) {
+              this.throwAccessDenied(requestedPath);
+            }
+            const target = await readlink(current);
+            const resolvedTarget = isAbsolute(target) ? target : resolve(linkParent, target);
+            const normalizedTarget = normalizePath(resolvedTarget);
             if (!isPathWithinDirectories(normalizedTarget, allowedDirs)) {
               this.throwAccessDenied(requestedPath);
             }
+            current =
+              missingSegments.length === 0
+                ? normalizedTarget
+                : normalizePath(join(normalizedTarget, ...missingSegments.reverse()));
+            missingSegments.length = 0;
+            continue;
           }
         } catch (lstatErr) {
-          if (isFsError(lstatErr) && lstatErr.code === ErrorCode.ACCESS_DENIED) {
+          if (isFsError(lstatErr)) {
             throw lstatErr;
           }
           // ENOENT is expected during ancestor walk — the entry simply doesn't exist.
@@ -1027,23 +1054,30 @@ export class PathGuard {
       }
     };
     assertInside();
-    if (realAncestor !== resolvedTarget) {
-      // Part of it is not on disk as typed; it may be under another Unicode
-      // spelling (#101). Re-run the same checks on the on-disk spelling.
-      const respelled = await this.respellMissing(
-        normalizedRequested,
-        allowedDirs,
-        accessDeniedHint,
+    // Part of it is not on disk as typed; it may be under another Unicode
+    // spelling (#101). A followed link may also name a missing target spelled
+    // differently on disk, and respelling a parent can expose such a link, so
+    // repeat until the resolution settles, re-running the checks each round.
+    let candidate = normalizedRequested;
+    for (let round = 0; realAncestor !== resolvedTarget && round < MAX_SYMLINK_HOPS; round++) {
+      const respelled =
+        (await this.respellMissing(candidate, allowedDirs, accessDeniedHint, requestedPath)) ??
+        (isSamePath(resolvedTarget, candidate)
+          ? undefined
+          : await this.respellMissing(
+              resolvedTarget,
+              allowedDirs,
+              accessDeniedHint,
+              requestedPath,
+            ));
+      if (respelled === undefined) break;
+      this.assertNotSensitiveFile(respelled, requestedPath);
+      ({ realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
         requestedPath,
-      );
-      if (respelled !== undefined) {
-        this.assertNotSensitiveFile(respelled, requestedPath);
-        ({ realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
-          requestedPath,
-          respelled,
-        ));
-        assertInside();
-      }
+        respelled,
+      ));
+      assertInside();
+      candidate = respelled;
     }
     // Re-check the resolved target: a symlink inside an allowed root may point
     // at a sensitive file. Writing through such a link must be blocked too.

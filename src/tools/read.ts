@@ -181,6 +181,7 @@ function buildReadContinuation(
  */
 type PerPathReadValue = ReadPerPathValue & {
   content?: string;
+  fileSize?: number;
   mediaData?: string;
   blobData?: string;
 };
@@ -274,8 +275,11 @@ function buildPerPathReadValue(
     ? createHash('sha256').update(result.content, 'utf-8').digest('hex')
     : undefined;
 
+  const canLink = result.fileSize === undefined || result.fileSize <= getMaxTextFileSize();
+
   return {
     content: result.content,
+    ...(result.fileSize !== undefined ? { fileSize: result.fileSize } : {}),
     mimeType: mimeInfo.mimeType,
     kind: mimeInfo.kind,
     ...(continuation ? { continuation } : {}),
@@ -287,7 +291,7 @@ function buildPerPathReadValue(
     ...(result.startLine !== undefined ? { startLine: result.startLine } : {}),
     ...(result.endLine !== undefined ? { endLine: result.endLine } : {}),
     ...(contentHash !== undefined ? { contentHash } : {}),
-    resourceUri: buildFileResourceUri(result.path),
+    ...(canLink ? { resourceUri: buildFileResourceUri(result.path) } : {}),
     modified: result.modified,
   };
 }
@@ -366,7 +370,12 @@ async function readOnePath(
           mimeType: raw.mimeType,
           kind: mime.kind,
           size: raw.content.length,
+          resourceUri: buildFileResourceUri(raw.validPath),
+          modified: raw.modified,
           mediaData: raw.content.toString('base64'),
+          ...(args.includeHash
+            ? { contentHash: createHash('sha256').update(raw.content).digest('hex') }
+            : {}),
         };
       }
     }
@@ -472,7 +481,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
         );
         continue;
       }
-      if (!v.resourceUri || !v.content) continue;
+      if (!v.resourceUri || v.content === undefined) continue;
       // `result.path` is the path as *requested*; `v.resourceUri` was built from
       // the *validated* one. Rebuilding from the request would emit a second URI
       // for the same file whenever the two differ in case — subscribe by one and
@@ -482,7 +491,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
           v.resourceUri,
           basename(result.path),
           v.mimeType ?? 'application/octet-stream',
-          Buffer.byteLength(v.content, 'utf8'),
+          v.fileSize ?? Buffer.byteLength(v.content, 'utf8'),
           v.modified,
         ),
       );
@@ -520,6 +529,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       if ('error' in result) return result;
       const {
         content: _content,
+        fileSize: _fileSize,
         mediaData: _mediaData,
         blobData: _blobData,
         ...value

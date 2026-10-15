@@ -1,9 +1,6 @@
-import { dirname } from 'node:path';
-
 import * as z from 'zod/v4';
 
 import { pageQueryKey, paginate } from '../core/cursor.ts';
-import { ErrorCode, FsError } from '../core/errors.ts';
 import { formatCount, pageTrailer, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { ResultPaths } from '../core/path.ts';
 import {
@@ -17,11 +14,11 @@ import {
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import { searchContent } from '../core/search.ts';
+import { resolveSearchScope, searchContent } from '../core/search.ts';
 import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
 import { DEFAULT_SEARCH_CONTENT_RESULTS, MAX_SEARCH_RESULTS } from '../core/util.ts';
-import { defineTool, type ToolCtx } from './define.ts';
+import { defineTool } from './define.ts';
 
 // Type Definitions
 type SearchResultValue = Awaited<ReturnType<typeof searchContent>>;
@@ -177,29 +174,6 @@ function buildSortedPayloads(result: SearchResultValue, paths: ResultPaths): Sea
   return payloads;
 }
 
-/** Explicit files bypass glob filtering; their parent is the directory walked. */
-async function resolveSearchScope(
-  path: string | undefined,
-  ctx: ToolCtx,
-): Promise<{ basePath: string; explicitFile?: string }> {
-  const requested = ctx.fs.pathGuard.resolvePathOrRoot(path);
-  // One resolution, one stat: validateExistingDirectory would redo both.
-  const { stats, validPath: resolved } = await ctx.fs.stat(requested, { signal: ctx.signal });
-  if (!stats.isFile()) {
-    if (!stats.isDirectory()) {
-      throw new FsError(ErrorCode.NOT_DIRECTORY, 'Not a directory', requested);
-    }
-    return { basePath: resolved };
-  }
-  return {
-    basePath: dirname(resolved),
-    // The name is NOT turned into a glob: `[slug].tsx` would read as a
-    // character class. searchContent scans exactly this file instead, and
-    // hidden/ignored filtering is moot for a file the caller named.
-    explicitFile: resolved,
-  };
-}
-
 export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   name: 'search_text',
   title: 'Search Content',
@@ -229,7 +203,11 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
         cursor: args.cursor,
         pageSize: args.maxResults,
         produce: async () => {
-          const { basePath, explicitFile } = await resolveSearchScope(args.path, ctx);
+          const { basePath, explicitFile } = await resolveSearchScope(
+            args.path,
+            ctx.fs,
+            ctx.signal,
+          );
 
           const result = await searchContent(
             basePath,

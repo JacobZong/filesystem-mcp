@@ -120,8 +120,8 @@ export async function processInParallel<T, R>(
  * loop breaks on the first that fires. `undefined` means every entry was
  * dispatched.
  */
-export async function processEntriesConcurrently(
-  entries: AsyncIterable<{ path: string }> | Iterable<{ path: string }>,
+export async function processEntriesConcurrently<E extends { path: string } = { path: string }>(
+  entries: AsyncIterable<E> | Iterable<E>,
   options: {
     signal: AbortSignal | undefined;
     concurrency: number;
@@ -129,7 +129,7 @@ export async function processEntriesConcurrently(
     shouldStop?: () => boolean;
     onEntry: () => void;
     onError?: (entryPath: string, err: unknown) => void;
-    runEntry: (entryPath: string) => Promise<void>;
+    runEntry: (entryPath: string, entry: E) => Promise<void>;
   },
 ): Promise<StoppedReason | undefined> {
   const pending = new Set<Promise<void>>();
@@ -178,7 +178,7 @@ export async function processEntriesConcurrently(
       // drain below (which would silently abandon other in-flight tasks).
       // runEntry is expected to catch its own errors; if it unexpectedly throws,
       // record it as a failure rather than silently dropping it.
-      const tracked = runEntry(entry.path).catch((err: unknown) => {
+      const tracked = runEntry(entry.path, entry).catch((err: unknown) => {
         onError?.(entry.path, err);
       });
       pending.add(tracked);

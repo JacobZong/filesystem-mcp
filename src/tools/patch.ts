@@ -140,14 +140,19 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
   // `modified` is read from a post-write stat and is advisory: under a concurrent
   // writer it may reflect that writer's mtime while `size`/content come from this
   // patch's atomic write. The file content itself is always consistent.
-  const fileStats = args.dryRun
-    ? stats
-    : (await ctx.fs.stat(args.path, { signal: ctx.signal })).stats;
+  let modified = stats.mtime.toISOString();
+  if (!args.dryRun) {
+    try {
+      modified = (await ctx.fs.stat(validPath)).stats.mtime.toISOString();
+    } catch {
+      modified = new Date().toISOString();
+    }
+  }
   const meta = buildWrittenFileMeta({
     validPath,
     content: patched,
     dryRun: args.dryRun,
-    lastModified: fileStats.mtime.toISOString(),
+    lastModified: modified,
     transport: ctx.transport,
   });
   const { resourceLink, ...fileMeta } = meta;
@@ -155,7 +160,7 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
     structured: {
       path: validPath,
       ...fileMeta,
-      modified: fileStats.mtime.toISOString(),
+      modified,
       linesAdded,
       linesRemoved,
       ...(args.dryRun ? { diff: args.diff } : {}),

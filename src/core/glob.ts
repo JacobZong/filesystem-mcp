@@ -299,6 +299,7 @@ class GitignoreManager {
   private matchers = new Map<string, Ignore>();
   /** Rules from directories above the walk root, farthest first; `prefix` re-bases a walk-relative path to that directory. */
   private ancestors: { prefix: string; matcher: Ignore }[] = [];
+  private dirCache = new Map<string, boolean>();
 
   addMatcher(dir: string, matcher: Ignore): void {
     this.matchers.set(dir, matcher);
@@ -366,13 +367,21 @@ class GitignoreManager {
       if (!part) continue;
       currentDir = currentDir ? `${currentDir}/${part}` : part;
 
-      if (this.checkPath(currentDir, true)) {
+      if (this.checkDir(currentDir)) {
         return true;
       }
     }
 
     // 2. Check the file/directory itself
-    return this.checkPath(normalized, isDirectory);
+    return isDirectory ? this.checkDir(normalized) : this.checkPath(normalized, false);
+  }
+
+  private checkDir(dir: string): boolean {
+    const cached = this.dirCache.get(dir);
+    if (cached !== undefined) return cached;
+    const res = this.checkPath(dir, true);
+    this.dirCache.set(dir, res);
+    return res;
   }
 
   private checkPath(posixPath: string, isDirectory: boolean): boolean {

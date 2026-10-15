@@ -1,9 +1,10 @@
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { processEntriesConcurrently, resolveStopReason } from './concurrency.ts';
+import { ErrorCode, FsError, isFsError } from './errors.ts';
 import { GuardedFileSystem } from './fs.ts';
 import { globEntries } from './glob.ts';
 import type { PathGuard } from './path.ts';
@@ -330,6 +331,7 @@ export interface SearchContentOutcome {
 }
 
 type FileScan =
+  | { kind: 'sensitive' }
   | { kind: 'inaccessible' }
   | { kind: 'tooLarge' }
   | { kind: 'binary' }
@@ -381,6 +383,12 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
     }
   } catch (error) {
     if (scanCtx.signal?.aborted) throw error;
+    if (
+      scanCtx.fs.pathGuard.isSensitive(entryPath) ||
+      (isFsError(error) && error.message.startsWith('Sensitive file'))
+    ) {
+      return { kind: 'sensitive' };
+    }
     return { kind: 'inaccessible' };
   }
 
@@ -531,6 +539,8 @@ export async function searchContent(
       const scan = perFile.get(i);
       if (!scan) continue;
       switch (scan.kind) {
+        case 'sensitive':
+          break;
         case 'inaccessible':
           skippedInaccessible++;
           break;
@@ -627,31 +637,46 @@ export async function searchFiles(
   const results: { path: string }[] = [];
   let filesScanned = 0;
   let skippedInaccessible = 0;
-  let stoppedByAbort = false;
-
-  // The signal carries both client cancellation and the tool's search timeout,
-  // so an abort means "return what we have, marked incomplete" rather than
-  // throw — but it must never be reported as a finished scan. The walk itself
-  // throws when the signal stops it before a single entry is yielded.
-  try {
-    for await (const entry of entries) {
-      if (options.signal?.aborted) {
-        stoppedByAbort = true;
-        break;
-      }
+  const perFile = new Map<number, { path: string } | 'inaccessible' | 'sensitive'>();
+  let dispatched = 0;
+  let collected = 0;
+  const stopped = await processEntriesConcurrently(entries, {
+    signal: options.signal,
+    concurrency: PARALLEL_CONCURRENCY,
+    shouldStop: () => collected >= maxResults,
+    onEntry: () => {
+      dispatched++;
+    },
+    onError: () => undefined,
+    runEntry: async (entryPath) => {
+      const index = dispatched - 1;
       try {
-        await pathGuard.validateExistingPath(entry.path);
-      } catch {
-        skippedInaccessible++;
-        continue;
+        await pathGuard.validateExistingPath(entryPath);
+        perFile.set(index, { path: entryPath });
+        collected++;
+      } catch (error) {
+        if (
+          pathGuard.isSensitive(entryPath) ||
+          (isFsError(error) && error.message.startsWith('Sensitive file'))
+        ) {
+          perFile.set(index, 'sensitive');
+        } else {
+          perFile.set(index, 'inaccessible');
+        }
       }
-      if (results.length >= maxResults) break;
-      filesScanned++;
-      results.push({ path: entry.path });
+    },
+  });
+
+  for (let i = 0; i < dispatched; i++) {
+    const item = perFile.get(i);
+    if (!item || item === 'sensitive') continue;
+    if (item === 'inaccessible') {
+      skippedInaccessible++;
+      continue;
     }
-  } catch (error) {
-    if (!options.signal?.aborted) throw error;
-    stoppedByAbort = true;
+    if (results.length >= maxResults) break;
+    filesScanned++;
+    results.push(item);
   }
 
   // Sorting — only name / path are supported; size / modified were removed
@@ -663,7 +688,10 @@ export async function searchFiles(
   }
 
   // Same precedence as above: the result cap wins over a same-iteration abort.
-  const stoppedReason = resolveStopReason(results.length >= maxResults, stoppedByAbort);
+  const stoppedReason = resolveStopReason(
+    results.length >= maxResults,
+    stopped === 'timeout' || Boolean(options.signal?.aborted),
+  );
 
   return {
     basePath: directory,
@@ -675,5 +703,29 @@ export async function searchFiles(
       skippedInaccessible,
       ...(stoppedReason ? { stoppedReason } : {}),
     },
+  };
+}
+
+/** Explicit files bypass glob filtering; their parent is the directory walked. */
+export async function resolveSearchScope(
+  path: string | undefined,
+  fs: GuardedFileSystem,
+  signal?: AbortSignal,
+): Promise<{ basePath: string; explicitFile?: string }> {
+  const requested = fs.pathGuard.resolvePathOrRoot(path);
+  // One resolution, one stat: validateExistingDirectory would redo both.
+  const { stats, validPath: resolved } = await fs.stat(requested, { signal });
+  if (!stats.isFile()) {
+    if (!stats.isDirectory()) {
+      throw new FsError(ErrorCode.NOT_DIRECTORY, 'Not a directory', requested);
+    }
+    return { basePath: resolved };
+  }
+  return {
+    basePath: dirname(resolved),
+    // The name is NOT turned into a glob: `[slug].tsx` would read as a
+    // character class. searchContent scans exactly this file instead, and
+    // hidden/ignored filtering is moot for a file the caller named.
+    explicitFile: resolved,
   };
 }

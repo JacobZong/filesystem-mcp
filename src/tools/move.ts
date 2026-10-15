@@ -338,7 +338,9 @@ async function runTransfers(
   // race over shared descendants even when their destination paths differ.
   // Refuse both sides so the survivors are independent and can run concurrently.
   // isPathInsideDirectory covers equality and containment, case-folded; the
-  // keys fold Unicode spelling too, parents included.
+  // keys fold Unicode spelling too, parents included. Two moves compare the
+  // entries they rename (opSource), not where a link points, and unfolded:
+  // validated sources are on-disk names, so two that fold alike are distinct.
   const touches = (x: string, y: string): boolean => {
     const [keyX, keyY] = [unicodeMatchKey(x), unicodeMatchKey(y)];
     return isPathInsideDirectory(keyX, keyY) || isPathInsideDirectory(keyY, keyX);
@@ -347,6 +349,9 @@ async function runTransfers(
   for (const [i, a] of ready.entries()) {
     for (const b of ready.slice(i + 1)) {
       if (
+        (op === 'move' &&
+          (isPathInsideDirectory(a.opSource, b.opSource) ||
+            isPathInsideDirectory(b.opSource, a.opSource))) ||
         touches(a.resolvedSource, b.validDest) ||
         touches(b.resolvedSource, a.validDest) ||
         touches(a.validDest, b.validDest)
@@ -476,9 +481,20 @@ async function validateTransferSource(
   signal: AbortSignal | undefined,
 ): Promise<TransferSource> {
   try {
+    if (op === 'move') {
+      const opSource = await fs.pathGuard.validatePathForDelete(source);
+      try {
+        const { stats, validPath: realSource } = await fs.stat(source, { signal });
+        return { realSource, opSource, isDirectory: stats.isDirectory() };
+      } catch (err) {
+        if (!isFsError(err) || err.code !== ErrorCode.NOT_FOUND) throw err;
+        const { stats } = await fs.lstat(source, { signal });
+        if (!stats.isSymbolicLink()) throw err;
+        return { realSource: opSource, opSource, isDirectory: false };
+      }
+    }
     const { stats, validPath: realSource } = await fs.stat(source, { signal });
-    const opSource = op === 'move' ? await fs.pathGuard.validatePathForDelete(source) : realSource;
-    return { realSource, opSource, isDirectory: stats.isDirectory() };
+    return { realSource, opSource: realSource, isDirectory: stats.isDirectory() };
   } catch (error) {
     if (isFsError(error) || signal?.aborted) throw error;
     throw new FsError(ErrorCode.ACCESS_DENIED, `${VERB[op]} failed for ${source}`, source);

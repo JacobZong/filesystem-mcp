@@ -1,14 +1,13 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import { Buffer, isUtf8 } from 'node:buffer';
-import { dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
 import type { StoppedReason } from '../core/concurrency.ts';
 import { processEntriesConcurrently } from '../core/concurrency.ts';
 import { unifiedPatch } from '../core/diff.ts';
-import { ErrorCode, FsError, Problem } from '../core/errors.ts';
+import { ErrorCode, FsError, isFsError, isSkippableErrno, Problem } from '../core/errors.ts';
 import { buildWrittenFileMeta } from '../core/file-uri.ts';
 import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
@@ -32,6 +31,7 @@ import {
   execMatches,
   freeRegex,
   RE2_MAX_INPUT_BYTES,
+  resolveSearchScope,
 } from '../core/search.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
@@ -284,6 +284,9 @@ interface ReplacementPlan {
 
 async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<void> {
   const { dryRun, returnDiff, signal, summary } = ctx;
+  // Discovery/read failures on a walked file are skipped silently; a failed
+  // write is the caller's edit not landing, so it is always reported.
+  const write = { started: false };
 
   try {
     // Lock the read→write per file so a concurrent writer is not lost; a dry
@@ -292,7 +295,10 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
       ? await readReplacementPlan(entryPath, ctx)
       : await ctx.fs.lockForWrite(entryPath, async () => {
           const planned = await readReplacementPlan(entryPath, ctx);
-          if (planned) await ctx.fs.writeFile(entryPath, planned.updatedContent, { signal });
+          if (planned) {
+            write.started = true;
+            await ctx.fs.writeFile(entryPath, planned.updatedContent, { signal });
+          }
           return planned;
         });
     if (!plan) {
@@ -317,6 +323,18 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
     // it as a per-file failure. processEntriesConcurrently reports the run as
     // stoppedReason 'timeout' instead.
     if (signal?.aborted) return;
+    if (
+      !ctx.singleFile &&
+      !write.started &&
+      ((isFsError(error) &&
+        (error.code === ErrorCode.ACCESS_DENIED ||
+          error.code === ErrorCode.NOT_FOUND ||
+          error.code === ErrorCode.SYMLINK_NOT_ALLOWED)) ||
+        isSkippableErrno(error))
+    ) {
+      summary.processedFiles--;
+      return;
+    }
     recordFailure(summary, entryPath, error);
   }
 }
@@ -418,28 +436,6 @@ function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
   };
 }
 
-async function resolveSearchRoot(
-  pathValue: string | undefined,
-  fs: GuardedFileSystem,
-): Promise<{ root: string; singleFile?: string }> {
-  if (!pathValue) {
-    return { root: fs.pathGuard.resolvePathOrRoot(undefined) };
-  }
-  const resolvedPath = await fs.pathGuard.validateExistingPath(pathValue);
-  const { stats: fileStats } = await fs.stat(resolvedPath);
-  if (fileStats.isFile()) {
-    // A single explicit file target bypasses the glob machinery entirely:
-    // routing it through globEntries with baseNameMatch would rewrite the
-    // escaped basename to `**/${basename}` and match every same-named file
-    // under the parent tree, not just this one.
-    return {
-      root: dirname(resolvedPath),
-      singleFile: resolvedPath,
-    };
-  }
-  return { root: resolvedPath };
-}
-
 function buildSearchPattern(args: SearchAndReplaceArgs): string {
   if (args.isRegex) {
     return args.wholeWord ? `\\b(?:${args.searchPattern})\\b` : args.searchPattern;
@@ -497,7 +493,7 @@ async function handleSearchAndReplace(
   link?: ContentBlock;
 }> {
   const maxFileSize = getMaxTextFileSize();
-  const { root, singleFile } = await resolveSearchRoot(args.path, ctx.fs);
+  const { basePath: root, explicitFile: singleFile } = await resolveSearchScope(args.path, ctx.fs);
   const effectivePattern = args.pattern ?? '**/*';
   const ceiling = ctx.fs.pathGuard.allowedRootContaining(root);
 

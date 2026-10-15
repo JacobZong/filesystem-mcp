@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -10,6 +10,7 @@ import {
   createTestClientPair,
   createTestRoot,
   firstTextBlock,
+  trySymlink,
   withEnv,
   writeTestFile,
 } from './helpers.ts';
@@ -194,5 +195,136 @@ describe('Data-loss guards', () => {
         await cleanupTestRoot(outside);
       }
     });
+  });
+
+  it('GUARD-006: a broken symlink to .env or a two-hop symlink escape is blocked by PathGuard', async (t) => {
+    const outside = await createTestRoot();
+    try {
+      const envLink = join(root, 'g006-env-link');
+      if (
+        !(await trySymlink(
+          join(root, '.env'),
+          envLink,
+          () => t.skip('symlinks not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      const guard = new PathGuard({ cliAllowedDirs: [root] });
+      await guard.recomputeAllowedDirectories();
+      await assert.rejects(guard.validatePathForWrite(envLink), /Sensitive file/);
+
+      const escapeLink = join(root, 'g006-escape');
+      const hopLink = join(root, 'g006-hop');
+      await trySymlink(outside, escapeLink, () => {});
+      await trySymlink(join(escapeLink, 'missing.txt'), hopLink, () => {}, 'file');
+      await assert.rejects(guard.validateExistingPath(hopLink), /Outside allowed directories/);
+    } finally {
+      await cleanupTestRoot(outside);
+    }
+  });
+
+  it('GUARD-007: precheckAccess skips sensitive files and two move entries with overlapping sources fail closed', async () => {
+    const outside = await createTestRoot();
+    const h = await createTestClientPair([root]);
+    try {
+      const guard = new PathGuard({ cliAllowedDirs: [root] });
+      await guard.recomputeAllowedDirectories();
+      assert.deepStrictEqual(await guard.precheckAccess([join(outside, '.env')]), []);
+
+      const src = await writeTestFile(root, 'g007/src.txt', 'hello');
+      const d1 = join(root, 'g007', 'd1.txt');
+      const d2 = join(root, 'g007', 'd2.txt');
+      const moved = await h.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [
+            { source: src, destination: d1 },
+            { source: src, destination: d2 },
+          ],
+        },
+      });
+      assert.strictEqual(moved.isError, true);
+      assert.strictEqual(await exists(src), true, 'overlapping source move leaves source intact');
+
+      const dupDel = await writeTestFile(root, 'g007/del.txt', 'bye');
+      const deleted = await h.client.callTool({
+        name: 'delete',
+        arguments: { paths: [dupDel, join(root, 'g007', '.', 'del.txt')] },
+      });
+      assert.notStrictEqual(deleted.isError, true);
+      assert.strictEqual((deleted._meta as { summary?: { failed?: number } }).summary?.failed, 0);
+    } finally {
+      await h.close();
+      await cleanupTestRoot(outside);
+    }
+  });
+
+  it('GUARD-008: two moves of separate links to one target both run', async (t) => {
+    const h = await createTestClientPair([root]);
+    try {
+      const target = await writeTestFile(root, 'g008/target.txt', 't');
+      const l1 = join(root, 'g008', 'l1');
+      const l2 = join(root, 'g008', 'l2');
+      if (!(await trySymlink(target, l1, () => t.skip('no symlinks'), 'file'))) return;
+      await trySymlink(target, l2, () => {}, 'file');
+      const moved = await h.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [
+            { source: l1, destination: join(root, 'g008', 'm1') },
+            { source: l2, destination: join(root, 'g008', 'm2') },
+          ],
+        },
+      });
+      assert.notStrictEqual(moved.isError, true, firstTextBlock(moved).text);
+      assert.strictEqual(await exists(l1), false);
+      assert.strictEqual(await exists(l2), false);
+      assert.strictEqual(await readFile(join(root, 'g008', 'm1'), 'utf-8'), 't');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('GUARD-009: replace_text reports a walked file it could read but not write', async (t) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) {
+      t.skip('needs POSIX directory permissions as non-root');
+      return;
+    }
+    const h = await createTestClientPair([root]);
+    const dir = join(root, 'g009');
+    const file = await writeTestFile(root, 'g009/a.txt', 'needle');
+    await chmod(dir, 0o555);
+    try {
+      const res = await h.client.callTool({
+        name: 'replace_text',
+        arguments: { path: dir, searchPattern: 'needle', replacement: 'pin' },
+      });
+      const summary = ((res.structuredContent ?? res._meta) as { summary?: { failed?: number } })
+        .summary;
+      assert.strictEqual(summary?.failed, 1, firstTextBlock(res).text);
+      assert.strictEqual(await readFile(file, 'utf-8'), 'needle');
+    } finally {
+      await chmod(dir, 0o755);
+      await h.close();
+    }
+  });
+
+  it('GUARD-010: a delete batch naming a directory and its child refuses both', async () => {
+    const h = await createTestClientPair([root]);
+    try {
+      const child = await writeTestFile(root, 'g010/sub/child.txt', 'c');
+      const parent = join(root, 'g010');
+      const res = await h.client.callTool({
+        name: 'delete',
+        arguments: { paths: [parent, child], recursive: true },
+      });
+      assert.strictEqual(res.isError, true, firstTextBlock(res).text);
+      assert.match(JSON.stringify(res.structuredContent ?? res._meta), /inside, another path/);
+      assert.strictEqual(await exists(child), true);
+    } finally {
+      await h.close();
+    }
   });
 });
