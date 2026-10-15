@@ -209,6 +209,42 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       }
     });
 
+    it('never reveals entries the denylist hides', async (t) => {
+      await mkdir(join(root, 'secrets'));
+      await writeFile(join(root, 'secrets', NBSP_NAME), 's1');
+      await writeFile(join(root, 'secrets', NNBSP_NAME), 's2');
+      await mkdir(join(root, 'vault.key'));
+      await writeFile(join(root, 'vault.key', NBSP_NAME), 'k1');
+      await writeFile(join(root, 'vault.key', NNBSP_NAME), 'k2');
+      // A directory whose own name is denylisted is never scanned: its
+      // entries would show in the ambiguity error.
+      await assert.rejects(
+        guard.validateExistingPath(join(root, 'vault.key', ASCII_NAME)),
+        fsErrorMatcher(ErrorCode.NOT_FOUND),
+      );
+      if (
+        !(await trySymlink(join(root, 'secrets'), join(root, 'alias'), () =>
+          t.skip('symlink not permitted'),
+        ))
+      ) {
+        return;
+      }
+      // Through an alias the typed path is not denylisted, but where it
+      // resolves is: refused as the exact spelling is, naming nothing inside.
+      const denying = await withEnv({ FS_DENYLIST: 'secrets/**' }, () => makeGuard([root]));
+      for (const validate of [
+        (path: string) => denying.validateExistingPath(path),
+        (path: string) => denying.validatePathForWrite(path),
+        (path: string) => denying.validatePathForDelete(path),
+      ]) {
+        await assert.rejects(validate(join(root, 'alias', ASCII_NAME)), (error: unknown) => {
+          fsErrorMatcher(ErrorCode.ACCESS_DENIED, /denylist/)(error);
+          assert.doesNotMatch(String(error), /secrets|\\u00a0|\\u202f/u);
+          return true;
+        });
+      }
+    });
+
     it('writes into the existing NFD directory, not a new NFC sibling', async (t) => {
       if (!(await isNormalizationSensitive(root))) {
         t.skip('filesystem is normalization-insensitive');
@@ -308,8 +344,11 @@ describe('Unicode-equivalent path lookup (#101)', () => {
     it('a symlink moved onto a Unicode variant of its own target is left alone', async (t) => {
       await writeFile(join(root, NBSP_NAME), 'target');
       if (
-        !(await trySymlink(join(root, NBSP_NAME), join(root, 'lnk'), () =>
-          t.skip('symlink not permitted'),
+        !(await trySymlink(
+          join(root, NBSP_NAME),
+          join(root, 'lnk'),
+          () => t.skip('symlink not permitted'),
+          'file',
         ))
       ) {
         return;
@@ -325,6 +364,35 @@ describe('Unicode-equivalent path lookup (#101)', () => {
         assert.strictEqual((await lstat(join(root, NBSP_NAME))).isSymbolicLink(), false);
         assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'target');
         assert.strictEqual((await lstat(join(root, 'lnk'))).isSymbolicLink(), true);
+      } finally {
+        await pair.close();
+      }
+    });
+
+    it('a symlink renamed to another Unicode spelling of its own name is renamed', async (t) => {
+      await writeFile(join(root, 'target.txt'), 'target');
+      if (
+        !(await trySymlink(
+          join(root, 'target.txt'),
+          join(root, NBSP_NAME),
+          () => t.skip('symlink not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      const pair = await createTestClientPair([root]);
+      try {
+        const move = await pair.client.callTool({
+          name: 'move',
+          arguments: {
+            moves: [{ source: join(root, NBSP_NAME), destination: join(root, ASCII_NAME) }],
+          },
+        });
+        assert.notStrictEqual(move.isError, true, firstTextBlock(move).text);
+        assert.deepStrictEqual((await readdir(root)).sort(), [ASCII_NAME, 'target.txt']);
+        assert.strictEqual((await lstat(join(root, ASCII_NAME))).isSymbolicLink(), true);
+        assert.strictEqual(await readFile(join(root, 'target.txt'), 'utf8'), 'target');
       } finally {
         await pair.close();
       }

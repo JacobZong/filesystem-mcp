@@ -127,23 +127,25 @@ async function planTransfer(
   const resolvedSource = resolve(realSource);
   let resolvedDest = resolve(validDest);
 
-  // validatePathForWrite realpaths an existing destination to its on-disk
-  // spelling, so a rename that changes only case or Unicode spelling resolves
-  // to the source itself; re-spell it with the requested basename before
-  // deciding self vs. rename. A moved symlink is not its target: onto its
-  // own target in any spelling it stays the self-move no-op below, or the
+  // The entry the destination names, without following a final link. When it
+  // is the source's own entry in another case or Unicode spelling, this is a
+  // rename of that entry, re-spelled with the requested basename: of the link
+  // itself when the source is a link, which validatePathForWrite resolved to
+  // its target. Onto its target, in any spelling, a link is a self-move: a
   // rename would replace that file with the link.
-  const destIsSource = resolvedSource === resolvedDest && opSource === realSource;
-  if (destIsSource) {
-    validDest = respellSpellingOnlyTarget(pair.destination, validDest);
+  const destEntry = await fs.pathGuard
+    .validatePathForDelete(pair.destination)
+    .catch(() => undefined);
+  const sameEntry = destEntry !== undefined && destEntry === opSource;
+  if (sameEntry) {
+    validDest = respellSpellingOnlyTarget(pair.destination, opSource);
     resolvedDest = resolve(validDest);
   }
 
-  const isSelf = resolvedSource === resolvedDest;
-  // Only a destination that resolved to the source is renamed in place: onto
-  // a separate `a\u202fb.txt`, a move of `a\u00a0b.txt` is an overwrite.
-  const isSpellingOnlyRename =
-    !isSelf && (destIsSource || isSamePath(resolvedSource, resolvedDest));
+  const isSelf = sameEntry ? resolvedDest === resolve(opSource) : resolvedSource === resolvedDest;
+  // Only a destination naming the source's own entry is renamed in place:
+  // onto a separate `a\u202fb.txt`, a move of `a\u00a0b.txt` is an overwrite.
+  const isSpellingOnlyRename = !isSelf && (sameEntry || isSamePath(resolvedSource, resolvedDest));
 
   // A copy onto a case-only or Unicode-only variant of its own source is the
   // same file, so it is a no-op; the same rename is real work for move and

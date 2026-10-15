@@ -951,9 +951,15 @@ export class PathGuard {
 
     const spelled: string[] = [];
     for (const [index, name] of missing.entries()) {
-      const onDisk = mayHaveEquivalentSpelling(name)
-        ? await this.findEquivalentEntry(real, name, requestedPath)
-        : name;
+      let onDisk: string | undefined = name;
+      if (mayHaveEquivalentSpelling(name)) {
+        // The scan must not reveal what the denylist hides: a name it covers
+        // under the resolved parent is refused as the exact spelling is, and
+        // a directory `list` would refuse is never read.
+        this.assertNotSensitiveFile(join(real, ...missing.slice(index)), requestedPath);
+        if (this.isSensitive(real)) break;
+        onDisk = await this.findEquivalentEntry(real, name, requestedPath);
+      }
       if (onDisk === undefined) break;
       spelled.push(onDisk);
       if (!resolveLast && index === missing.length - 1) break;

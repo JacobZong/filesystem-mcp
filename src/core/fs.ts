@@ -235,8 +235,17 @@ export class GuardedFileSystem {
     // link would rename its target and leave the link dangling.
     const validOld = await this.pathGuard.validatePathForDelete(oldPath);
     let validNew = await this.pathGuard.validatePathForWrite(newPath);
-    // Renaming a path onto itself is only meaningful as a case- or Unicode-only rename.
-    if (validOld === validNew) validNew = respellSpellingOnlyTarget(newPath, validNew);
+    // A new path naming the old entry itself, in another case or Unicode
+    // spelling, renames that entry. Probed without following a final link:
+    // validatePathForWrite resolved a link to its target, and renaming onto
+    // that would replace the target with the link.
+    const sameEntry = await this.pathGuard.validatePathForDelete(newPath).then(
+      (entry) => entry === validOld,
+      () => false,
+    );
+    if (sameEntry || validOld === validNew) {
+      validNew = respellSpellingOnlyTarget(newPath, sameEntry ? validOld : validNew);
+    }
     await fsRename(validOld, validNew);
   }
 
