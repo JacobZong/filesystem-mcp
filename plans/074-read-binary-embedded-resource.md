@@ -219,48 +219,33 @@ branch. One step, one agent, one commit. The dispatcher reads the diff and
 the Verify output before sending the next step. An agent that hits a STOP
 condition reports it and makes no commit. Before each commit, run Prettier
 on the files the step touched; the pasted snippets are not pre-formatted.
+Every commit must also pass `npm run check:static` (build, lint, Prettier,
+knip), so a step never adds an export that only a later step uses.
 
 Order: 1 → 2 → 3 → 4 → 5 → 6, then 7 and 8 in parallel, then 9.
 Steps 2–6 all edit `src/tools/read.ts`, so they must not run concurrently.
 
 ## Steps
 
-### Step 1: Core hooks (no behaviour change)
+### Step 1: `readRaw` reports path, kind and mtime (no behaviour change)
 
-**Files**: `src/core/read.ts`, `src/core/fs.ts`.
+**Files**: `src/core/fs.ts`.
 
-**Change**:
+**Change**: in `src/core/fs.ts` `readRaw`, widen the return type to
+`{ content: Buffer; mimeType: string; kind: FileKind; isBinary: boolean; validPath: string; modified: string }`.
+Return `kind: mimeInfo.kind`, `validPath` and
+`modified: stats.mtime.toISOString()` as well. Import `type FileKind` from
+`./mime.ts` if it is not imported already.
 
-1. In `src/core/read.ts`, above `assertNotBinary`, add:
+The binary-refusal exports land in step 3, next to their first caller: knip
+fails `check:static` on an export nothing imports, so every step adds an
+export together with its first use.
 
-   ```ts
-   /** The text path's binary refusal; `read` matches it to offer `binary: true`. */
-   export const BINARY_FILE_MESSAGE = 'Binary file detected.';
-
-   export function isBinaryRefusal(error: unknown): error is FsError {
-     return (
-       error instanceof FsError &&
-       error.code === ErrorCode.INVALID_INPUT &&
-       error.message === BINARY_FILE_MESSAGE
-     );
-   }
-   ```
-
-   Use `BINARY_FILE_MESSAGE` in both `throw`s inside `assertNotBinary`
-   (`:426`, `:440`). Leave the UTF-16 throw and the strict-UTF-8
-   `'Binary or non-UTF-8 file detected.'` throw unchanged.
-
-2. In `src/core/fs.ts` `readRaw`, widen the return type to
-   `{ content: Buffer; mimeType: string; kind: FileKind; isBinary: boolean; validPath: string; modified: string }`.
-   Return `kind: mimeInfo.kind`, `validPath` and
-   `modified: stats.mtime.toISOString()` as well. Import `type FileKind` from
-   `./mime.ts` if it is not imported already.
-
-**Test**: none new. This step only adds exports.
+**Test**: none new. The fields are additive.
 
 **Verify**: `npm run check:static` → exit 0. The core fs tests → all pass.
 
-**Commit**: `refactor(read): export the binary refusal and readRaw's path, kind and mtime`
+**Commit**: `refactor(fs): readRaw also returns the real path, kind and mtime`
 
 ### Step 2: The `binary` input field
 
@@ -320,7 +305,7 @@ fixed in step 7.
 
 ### Step 3: The refusal names the flag
 
-**Files**: `src/tools/read.ts`, `__tests__/tools.test.ts`.
+**Files**: `src/core/read.ts`, `src/tools/read.ts`, `__tests__/tools.test.ts`.
 
 **Test first**:
 
@@ -346,27 +331,48 @@ it('read without binary refuses a binary file and names the flag', async () => {
 
 It must fail on the first `match`. If it passes, STOP.
 
-**Change**: in `readOnePath`, wrap the `ctx.fs.readFile` call:
+**Change**:
 
-```ts
-let result: ReadFileResult;
-try {
-  result = await ctx.fs.readFile(filePath, spec);
-} catch (error: unknown) {
-  if (!isBinaryRefusal(error)) throw error;
-  throw new FsError(
-    ErrorCode.INVALID_INPUT,
-    isRangeRead
-      ? `${BINARY_FILE_MESSAGE} It has no lines; read it whole with binary: true to get it as a base64 embedded resource.`
-      : `${BINARY_FILE_MESSAGE} Pass binary: true to get it as a base64 embedded resource.`,
-    filePath,
-    error,
-  );
-}
-```
+1. In `src/core/read.ts`, above `assertNotBinary`, add:
 
-Import `BINARY_FILE_MESSAGE` and `isBinaryRefusal` from `../core/read.ts`.
-`ReadFileResult` is already imported as a type.
+   ```ts
+   /** The text path's binary refusal; `read` matches it to offer `binary: true`. */
+   export const BINARY_FILE_MESSAGE = 'Binary file detected.';
+
+   export function isBinaryRefusal(error: unknown): error is FsError {
+     return (
+       error instanceof FsError &&
+       error.code === ErrorCode.INVALID_INPUT &&
+       error.message === BINARY_FILE_MESSAGE
+     );
+   }
+   ```
+
+   Use `BINARY_FILE_MESSAGE` in both `throw`s inside `assertNotBinary`
+   (`:426`, `:440`). Leave the UTF-16 throw and the strict-UTF-8
+   `'Binary or non-UTF-8 file detected.'` throw unchanged.
+
+2. In `src/tools/read.ts` `readOnePath`, wrap the `ctx.fs.readFile` call:
+
+   ```ts
+   let result: ReadFileResult;
+   try {
+     result = await ctx.fs.readFile(filePath, spec);
+   } catch (error: unknown) {
+     if (!isBinaryRefusal(error)) throw error;
+     throw new FsError(
+       ErrorCode.INVALID_INPUT,
+       isRangeRead
+         ? `${BINARY_FILE_MESSAGE} It has no lines; read it whole with binary: true to get it as a base64 embedded resource.`
+         : `${BINARY_FILE_MESSAGE} Pass binary: true to get it as a base64 embedded resource.`,
+       filePath,
+       error,
+     );
+   }
+   ```
+
+   Import `BINARY_FILE_MESSAGE` and `isBinaryRefusal` from `../core/read.ts`.
+   `ReadFileResult` is already imported as a type.
 
 **Verify**: the read tests → pass. Then
 `npm test -- --test-name-pattern="Binary|binary"` → all pass. If an existing
