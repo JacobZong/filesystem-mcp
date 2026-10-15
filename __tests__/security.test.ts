@@ -264,6 +264,23 @@ describe('Security (P0)', () => {
       );
     });
 
+    it('TC-SENS-008: folding leaves classes as typed and never revokes an allow match', () => {
+      // Folded endpoints would make these ranges reversed, and construction throw.
+      const nbspRange = new SensitiveMatcher(['[a-\u00a0].txt']);
+      assert.strictEqual(nbspRange.isSensitive('/w/b.txt'), true, 'range up to U+00A0');
+      const singletonRange = new SensitiveMatcher(['[z-\u037e].txt']);
+      assert.strictEqual(singletonRange.isSensitive('/w/\u00e9.txt'), true, 'range up to U+037E');
+      // An allow entry still relieves every spelling it relieved before folding.
+      const anyChar = new SensitiveMatcher(['*.key'], ['cafe?.key']);
+      assert.strictEqual(
+        anyChar.isSensitive('/w/cafe\u0301.key'),
+        false,
+        '? over a combining mark',
+      );
+      const classAllow = new SensitiveMatcher(['*.key'], ['caf[e\u0301].key']);
+      assert.strictEqual(classAllow.isSensitive('/w/cafe.key'), false, 'class member e');
+    });
+
     it('TC-SENS-006: a pattern matches every Unicode spelling of a name', () => {
       const matcher = new SensitiveMatcher(['caf\u00e9.txt', 'secret notes.txt']);
       assert.strictEqual(matcher.isSensitive('/w/cafe\u0301.txt'), true, 'NFD name, NFC pattern');

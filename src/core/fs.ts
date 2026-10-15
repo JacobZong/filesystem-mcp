@@ -240,7 +240,7 @@ export class GuardedFileSystem {
     // validatePathForWrite resolved a link to its target, and renaming onto
     // that would replace the target with the link.
     const sameEntry = await this.pathGuard.validatePathForDelete(newPath).then(
-      (entry) => entry === validOld,
+      (entry) => isSamePath(entry, validOld),
       () => false,
     );
     if (sameEntry || validOld === validNew) {

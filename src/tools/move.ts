@@ -110,13 +110,11 @@ async function planTransfer(
   let realSource: string;
   let opSource: string;
   let validDest: string;
+  let isDirectory: boolean;
   try {
     const source = await validateTransferSource(op, pair.source, fs, signal);
-    ({ realSource, opSource } = source);
+    ({ realSource, opSource, isDirectory } = source);
     validDest = await fs.pathGuard.validatePathForWrite(pair.destination);
-    if (!(op === 'move' && opSource !== realSource) && source.isDirectory) {
-      await assertTreeHasNoProtectedEntries(op, realSource, pair.source, validDest, fs, signal);
-    }
   } catch (error) {
     return { status: 'fail', failure: pairFailure(pair, error) };
   }
@@ -136,10 +134,20 @@ async function planTransfer(
   const destEntry = await fs.pathGuard
     .validatePathForDelete(pair.destination)
     .catch(() => undefined);
-  const sameEntry = destEntry !== undefined && destEntry === opSource;
+  const sameEntry = destEntry !== undefined && isSamePath(destEntry, opSource);
   if (sameEntry) {
     validDest = respellSpellingOnlyTarget(pair.destination, opSource);
     resolvedDest = resolve(validDest);
+  }
+
+  // On the final destination spelling: a re-spelled directory moves its
+  // entries in or out of a spelling-specific allow or deny rule.
+  if (!(op === 'move' && opSource !== realSource) && isDirectory) {
+    try {
+      await assertTreeHasNoProtectedEntries(op, realSource, pair.source, validDest, fs, signal);
+    } catch (error) {
+      return { status: 'fail', failure: pairFailure(pair, error) };
+    }
   }
 
   const isSelf = sameEntry ? resolvedDest === resolve(opSource) : resolvedSource === resolvedDest;

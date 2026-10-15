@@ -476,6 +476,56 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       }
     });
 
+    it('a directory re-spelled out of an allow rule keeps its protected entries', async (t) => {
+      if (!(await isNormalizationSensitive(root))) {
+        t.skip('filesystem is normalization-insensitive');
+        return;
+      }
+      await mkdir(join(root, NFD_CAFE));
+      await writeFile(join(root, NFD_CAFE, '.env'), 'secret');
+      // `.env` is denied under the NFD spelling and allowed under the NFC one.
+      const pair = await withEnv({ FS_ALLOWLIST: `${NFC_CAFE}/.env` }, () =>
+        createTestClientPair([root]),
+      );
+      try {
+        const move = await pair.client.callTool({
+          name: 'move',
+          arguments: {
+            moves: [{ source: join(root, NFD_CAFE), destination: join(root, NFC_CAFE) }],
+          },
+        });
+        assert.match(JSON.stringify(move), /protected entries/u);
+        assert.deepStrictEqual(await readdir(join(root, NFD_CAFE)), ['.env']);
+      } finally {
+        await pair.close();
+      }
+    });
+
+    it('a link renamed from a differently cased spelling is renamed', async (t) => {
+      if (process.platform !== 'win32' && process.platform !== 'darwin') {
+        t.skip('case folding applies on a case-insensitive filesystem');
+        return;
+      }
+      await writeFile(join(root, 'target.txt'), 'target');
+      if (
+        !(await trySymlink(
+          join(root, 'target.txt'),
+          join(root, NBSP_NAME),
+          () => t.skip('symlink not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      await new GuardedFileSystem(await makeGuard([root])).rename(
+        join(root, NBSP_NAME.toUpperCase()),
+        join(root, ASCII_NAME),
+      );
+      assert.deepStrictEqual((await readdir(root)).sort(), [ASCII_NAME, 'target.txt']);
+      assert.strictEqual((await lstat(join(root, ASCII_NAME))).isSymbolicLink(), true);
+      assert.strictEqual(await readFile(join(root, 'target.txt'), 'utf8'), 'target');
+    });
+
     it('path completion lists a directory typed in another Unicode spelling', async (t) => {
       if (!(await isNormalizationSensitive(root))) {
         t.skip('filesystem is normalization-insensitive');

@@ -43,9 +43,8 @@ interface GlobSet {
 
 /**
  * Every pattern twice: as typed, and folded. Each form is matched on its own
- * (see `isSensitive`), because folding a glob can also lose a match: in
- * `caf[e\u0301].txt` the class composes to `[\u00e9]` and stops matching
- * `cafe.txt`.
+ * (see `isSensitive`), because folding can also lose a match: `cafe?.txt`
+ * matches `cafe\u0301.txt` as typed, but not the composed `caf\u00e9.txt`.
  */
 interface CompiledPatternSet {
   raw: GlobSet;
@@ -207,10 +206,31 @@ function compilePatternGlobs(normalizedPattern: string): readonly string[] {
   return withoutRoot ? [normalizedPattern, `**/${withoutRoot}`] : [normalizedPattern];
 }
 
+/**
+ * `foldForMatch` for a glob: the text outside `[...]` classes is folded and
+ * every class stays as typed, so a range's endpoints never move (folded,
+ * `[a-\u00a0]` would become the reversed `[a- ]` and fail to compile).
+ */
+function foldPattern(normalized: string): string {
+  let folded = '';
+  let text = '';
+  for (let i = 0; i < normalized.length; i++) {
+    const close = normalized.charAt(i) === '[' ? classEnd(normalized, i) : -1;
+    if (close === -1) {
+      text += normalized.charAt(i);
+      continue;
+    }
+    folded += foldForMatch(text) + normalized.slice(i, close + 1);
+    text = '';
+    i = close;
+  }
+  return folded + foldForMatch(text);
+}
+
 function toPatternSet(patterns: readonly string[]): CompiledPatternSet {
   const deduped = Array.from(new Set(patterns.map((p) => p.trim()).filter((p) => p.length > 0)));
   const raw = deduped.map(normalizeForMatch);
-  const folded = raw.map(foldForMatch);
+  const folded = raw.map(foldPattern);
   return {
     raw: compileGlobSet(raw),
     folded: compileGlobSet(folded),
@@ -424,9 +444,9 @@ export class SensitiveMatcher {
     const builtin = hits(this.builtin);
     if (!builtin.raw && !builtin.folded) return false;
     // A built-in hit is lifted only by an allow entry that matches the same
-    // normalized candidate in the same form — a pattern that matches nothing
-    // relieves nothing, and folding never widens what --allow relieves.
-    const allow = hits(this.allow);
-    return (builtin.raw && !allow.raw) || (builtin.folded && !allow.folded);
+    // normalized candidate as typed — a pattern that matches nothing relieves
+    // nothing. Folding never widens what --allow relieves, and never revokes
+    // a spelling it already relieved.
+    return !inForm(this.allow.raw, rawPath, rawName);
   }
 }
