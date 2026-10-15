@@ -139,6 +139,24 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
   });
 
+  it('read without binary refuses a binary file and names the flag', async () => {
+    const dir = join(tmpDir, 'binary-flag');
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, 'hint.zip');
+    await writeFile(file, Buffer.from([0x50, 0x4b, 3, 4, 0, 0, 0, 0]));
+    const whole = await harness.client.callTool({ name: 'read', arguments: { path: file } });
+    assert.strictEqual(whole.isError, true);
+    assert.strictEqual(failedSummary(whole)?.results?.[0]?.error?.code, 'INVALID_INPUT');
+    assert.match(firstTextBlock(whole).text ?? '', /^Binary file detected\. Pass binary: true/);
+
+    const ranged = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: file, head: 1 },
+    });
+    assert.strictEqual(ranged.isError, true);
+    assert.match(firstTextBlock(ranged).text ?? '', /no lines; read it whole with binary: true/);
+  });
+
   it('TC-FUNC-007: Read path outside allowed root returns isError: true with ACCESS_DENIED', async () => {
     const outsideDir = await createTestRoot();
     const outsideFile = await writeTestFile(outsideDir, 'outside_test.txt', 'secret');

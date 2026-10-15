@@ -9,7 +9,12 @@ import { processInParallel } from '../core/concurrency.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
 import { detectMimeFromContent, detectMimeType, type FileKind } from '../core/mime.ts';
-import type { ReadFileResult, ReadSpec } from '../core/read.ts';
+import {
+  BINARY_FILE_MESSAGE,
+  isBinaryRefusal,
+  type ReadFileResult,
+  type ReadSpec,
+} from '../core/read.ts';
 import {
   defaultFalseBoolean,
   mapSingleOrBatchPaths,
@@ -308,7 +313,20 @@ async function readOnePath(
   const spec = buildReadSpec(args, ctx.signal);
   // The read re-validates and re-stats: the budget pass's stat is only a
   // size estimate, never a substitute for the guarded open.
-  const result = await ctx.fs.readFile(filePath, spec);
+  let result: ReadFileResult;
+  try {
+    result = await ctx.fs.readFile(filePath, spec);
+  } catch (error: unknown) {
+    if (!isBinaryRefusal(error)) throw error;
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      isRangeRead
+        ? `${BINARY_FILE_MESSAGE} It has no lines; read it whole with binary: true to get it as a base64 embedded resource.`
+        : `${BINARY_FILE_MESSAGE} Pass binary: true to get it as a base64 embedded resource.`,
+      filePath,
+      error,
+    );
+  }
 
   return buildPerPathReadValue(result, {
     includeHash: args.includeHash,
