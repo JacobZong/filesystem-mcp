@@ -196,7 +196,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       assert.strictEqual(blocks.filter((b) => b.type === 'resource_link').length, 0, c.name);
       const block = blocks.find((b) => b.type === 'resource');
       assert.ok(block?.resource, `${c.name}: expected an embedded resource`);
-      assert.strictEqual(block.resource.uri, buildFileResourceUri(file));
+      assert.strictEqual(block.resource.uri, buildFileResourceUri(normalizePath(file)));
       assert.strictEqual(block.resource.mimeType, c.mimeType);
       assert.ok(Buffer.from(block.resource.blob ?? '', 'base64').equals(c.bytes), c.name);
       assert.match(firstTextBlock(result).text ?? '', /returned as an embedded resource block/);
@@ -206,7 +206,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       assert.strictEqual(value?.['kind'], c.kind);
       assert.strictEqual(value?.['mimeType'], c.mimeType);
       assert.strictEqual(value?.['size'], c.bytes.length);
-      assert.strictEqual(value?.['resourceUri'], buildFileResourceUri(file));
+      assert.strictEqual(value?.['resourceUri'], buildFileResourceUri(normalizePath(file)));
       assert.strictEqual(value?.['blobData'], undefined, 'bytes never ride _meta');
     }
   });
@@ -277,6 +277,22 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(results?.[0]?.error, undefined);
     assert.strictEqual(results?.[1]?.error?.code, 'TOO_LARGE');
     assert.match(results?.[1]?.error?.message ?? '', /maxTotalSize/);
+  });
+
+  it('batch slice of an svg is charged its raw size, not base64', async () => {
+    // 400 KiB fits the 512 KiB budget raw; as base64 it would not. A slice is text.
+    const svg = await writeTestFile(
+      tmpDir,
+      'binary-flag/large.svg',
+      `<svg xmlns="http://www.w3.org/2000/svg">\n${'<g/>\n'.repeat(80 * 1024)}</svg>\n`,
+    );
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [svg], head: 1 },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.strictEqual(failedSummary(result)?.results?.[0]?.error, undefined);
+    assert.match(firstTextBlock(result).text ?? '', /<svg xmlns/);
   });
 
   it('TC-FUNC-007: Read path outside allowed root returns isError: true with ACCESS_DENIED', async () => {

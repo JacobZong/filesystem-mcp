@@ -57,6 +57,21 @@ const readRangeFields = {
   endLine: rangeField('End line (1-indexed); requires startLine'),
 };
 
+/** A slice read: only a full read returns media or a binary resource. */
+function hasLineRange(args: {
+  head?: number | undefined;
+  tail?: number | undefined;
+  startLine?: number | undefined;
+  endLine?: number | undefined;
+}): boolean {
+  return (
+    args.head !== undefined ||
+    args.tail !== undefined ||
+    args.startLine !== undefined ||
+    args.endLine !== undefined
+  );
+}
+
 const ReadFileInputSchema = singleOrBatchPathsInput({
   includeHash: defaultFalseBoolean('Include SHA-256 hash of the returned content in the response'),
   binary: defaultFalseBoolean(
@@ -73,12 +88,7 @@ const ReadFileInputSchema = singleOrBatchPathsInput({
     },
     ctx,
   );
-  const hasRange =
-    value.head !== undefined ||
-    value.tail !== undefined ||
-    value.startLine !== undefined ||
-    value.endLine !== undefined;
-  if (value.binary && hasRange) {
+  if (value.binary && hasLineRange(value)) {
     ctx.addIssue({
       code: 'custom',
       path: ['binary'],
@@ -185,8 +195,17 @@ interface BudgetItem {
   skip?: FsError;
 }
 
-/** What a file costs the batch: one whose bytes ship as base64 costs that size. */
-function budgetBytes(path: string, size: number, binary: boolean): number {
+interface BudgetMode {
+  fullRead: boolean;
+  binary: boolean;
+}
+
+/**
+ * What a file costs the batch: one whose bytes ship as base64 costs that size.
+ * Only a full read ships base64; a slice of an svg is text.
+ */
+function budgetBytes(path: string, size: number, { fullRead, binary }: BudgetMode): number {
+  if (!fullRead) return size;
   const { kind } = detectMimeType(path);
   const base64 = kind === 'image' || kind === 'audio' || (binary && isKnownBinaryExtension(path));
   return base64 ? 4 * Math.ceil(size / 3) : size;
@@ -197,7 +216,7 @@ async function collectFileBudget(
   maxTotalSize: number,
   maxSize: number,
   ctx: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
-  binary: boolean,
+  mode: BudgetMode,
 ): Promise<BudgetItem[]> {
   const indexed = filePaths.map((path, index) => ({ path, index }));
   const { results } = await processInParallel(
@@ -205,7 +224,7 @@ async function collectFileBudget(
     async ({ path, index }): Promise<BatchFileInfo | undefined> => {
       try {
         const out = await ctx.fs.stat(path);
-        return { index, size: budgetBytes(path, Math.min(out.stats.size, maxSize), binary) };
+        return { index, size: budgetBytes(path, Math.min(out.stats.size, maxSize), mode) };
       } catch (err: unknown) {
         ctx.log('debug', `collectFileBudget: stat failed for "${path}": ${String(err)}`, 'read');
         return undefined;
@@ -336,11 +355,7 @@ async function readOnePath(
   // the text path (getMaxTextFileSize), so a too-large image surfaces TOO_LARGE
   // rather than blowing memory. svg is kind 'image' in EXT_MAP, so readRaw
   // reports it binary and it returns as an image block.
-  const isRangeRead =
-    args.head !== undefined ||
-    args.tail !== undefined ||
-    args.startLine !== undefined ||
-    args.endLine !== undefined;
+  const isRangeRead = hasLineRange(args);
   if (!isRangeRead) {
     const mime = detectMimeType(filePath);
     if (mime.kind === 'image' || mime.kind === 'audio') {
@@ -423,7 +438,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
             READ_MANY_MAX_TOTAL_BYTES,
             getMaxTextFileSize(),
             ctx,
-            args.binary,
+            { fullRead: !hasLineRange(args), binary: args.binary },
           )
         : [{ path: args.path ?? '' }];
     const { results: ordered, summary } = await runOverPaths(
