@@ -7,6 +7,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
+import { formatByteSize } from '../src/core/fmt.ts';
 import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { RE2_MAX_INPUT_BYTES, searchContent } from '../src/core/search.ts';
@@ -2184,6 +2185,168 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.match(allText, /buried\.txt/);
   });
 
+  it('list includeSizes shows sizes and a totals line (#99)', async () => {
+    const sub = join(tmpDir, 'sizes_dir');
+    await mkdir(join(sub, 'dir1'), { recursive: true });
+    await writeFile(join(sub, 'a.txt'), '12345');
+    await writeFile(join(sub, 'b.txt'), 'x'.repeat(1024));
+    await writeFile(join(sub, 'c.txt'), 'x'.repeat(1536));
+
+    const result = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: sub, includeSizes: true },
+    });
+    const text = firstTextBlock(result).text ?? '';
+    assert.match(text, /a\.txt \(5 B\)/);
+    assert.match(text, /b\.txt \(1 KiB\)/);
+    assert.match(text, /c\.txt \(1\.5 KiB\)/);
+    assert.match(text, /dir1\/$/m);
+    assert.match(text, /^\/\/ 3 files, 1 directory, 2\.5 KiB total$/m);
+
+    const meta = result._meta as {
+      totalFiles?: number;
+      totalDirectories?: number;
+      totalBytes?: number;
+      entries?: { name: string; type: string; size?: number }[];
+    };
+    assert.strictEqual(meta.totalFiles, 3);
+    assert.strictEqual(meta.totalDirectories, 1);
+    assert.strictEqual(meta.totalBytes, 2565);
+    const fileSizes = meta.entries
+      ?.filter((e) => e.type === 'file')
+      .map((e) => ({ name: e.name, size: e.size }));
+    assert.deepStrictEqual(fileSizes, [
+      { name: 'a.txt', size: 5 },
+      { name: 'b.txt', size: 1024 },
+      { name: 'c.txt', size: 1536 },
+    ]);
+    assert.strictEqual(formatByteSize(1024 * 1024 - 1), '1 MiB');
+  });
+
+  it('list sortBy size orders files largest first within each directory (#99)', async () => {
+    const sub = join(tmpDir, 'sort_dir');
+    await mkdir(join(sub, 'mid'), { recursive: true });
+    await writeFile(join(sub, 'big.txt'), 'x'.repeat(2000));
+    await writeFile(join(sub, 'small.txt'), 'x'.repeat(10));
+    await writeFile(join(sub, 'zero.txt'), '');
+    await writeFile(join(sub, 'mid', 'mid.txt'), 'x'.repeat(100));
+
+    const result = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: sub, maxDepth: 2, includeSizes: true, sortBy: 'size' },
+    });
+    const text = firstTextBlock(result).text ?? '';
+    assert.match(text, /mid\/\n│ {3}└── mid\.txt \(100 B\)/);
+    assert.match(text, /big\.txt \(2 KiB\)[\s\S]*small\.txt \(10 B\)[\s\S]*zero\.txt \(0 B\)/);
+  });
+
+  it('list default output carries no sizes and no totals line (#99)', async () => {
+    const sub = join(tmpDir, 'default_dir');
+    await mkdir(join(sub, 'dir1'), { recursive: true });
+    await writeFile(join(sub, 'a.txt'), '12345');
+
+    const result = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: sub },
+    });
+    const text = firstTextBlock(result).text ?? '';
+    assert.doesNotMatch(text, /\(\d/);
+    assert.doesNotMatch(text, /\/\//);
+
+    const meta = result._meta as {
+      totalBytes?: number;
+      entries?: { name: string; size?: number }[];
+    };
+    assert.strictEqual('totalBytes' in meta, false);
+    assert.strictEqual(meta.entries?.[0]?.size, undefined);
+  });
+
+  it('list includeSizes leaves secret files out of the totals (#99)', async () => {
+    const sub = join(tmpDir, 'secrets_dir');
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(sub, '.env'), 'SECRET=1');
+    await writeFile(join(sub, 'plain.txt'), 'x');
+
+    const result = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: sub, includeHidden: true, includeSizes: true },
+    });
+    const text = firstTextBlock(result).text ?? '';
+    assert.doesNotMatch(text, /\.env/);
+
+    const meta = result._meta as {
+      totalFiles?: number;
+      totalBytes?: number;
+      entries?: { name: string }[];
+    };
+    assert.strictEqual(meta.totalFiles, 1);
+    assert.strictEqual(meta.totalBytes, 1);
+    assert.deepStrictEqual(
+      meta.entries?.map((e) => e.name),
+      ['plain.txt'],
+    );
+  });
+
+  it('list includeSizes pages with sizes intact (#99)', async () => {
+    const sub = join(tmpDir, 'pages_dir');
+    await mkdir(sub, { recursive: true });
+    for (let i = 0; i < 4; i++) {
+      await writeFile(join(sub, `f${String(i)}.txt`), 'x'.repeat(i + 1));
+    }
+
+    const first = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: sub, maxEntries: 2, includeSizes: true, sortBy: 'size' },
+    });
+    const m1 = first._meta as {
+      totalBytes?: number;
+      entryCount?: number;
+      nextCursor?: string;
+      entries?: { name: string; size?: number }[];
+    };
+    assert.strictEqual(m1.totalBytes, 10);
+    assert.strictEqual(m1.entryCount, 2);
+    assert.deepStrictEqual(
+      m1.entries?.map((e) => e.name),
+      ['f3.txt', 'f2.txt'],
+    );
+    assert.match(firstTextBlock(first).text ?? '', /f3\.txt \(4 B\)[\s\S]*f2\.txt \(3 B\)/);
+
+    const second = await harness.client.callTool({
+      name: 'list',
+      arguments: {
+        path: sub,
+        maxEntries: 2,
+        includeSizes: true,
+        sortBy: 'size',
+        cursor: m1.nextCursor,
+      },
+    });
+    const m2 = second._meta as {
+      totalBytes?: number;
+      entries?: { name: string; size?: number }[];
+    };
+    assert.deepStrictEqual(
+      m2.entries?.map((e) => e.name),
+      ['f1.txt', 'f0.txt'],
+    );
+    assert.match(firstTextBlock(second).text ?? '', /f1\.txt \(2 B\)[\s\S]*f0\.txt \(1 B\)/);
+    assert.strictEqual(m2.totalBytes, 10);
+
+    const replay = await harness.client.callTool({
+      name: 'list',
+      arguments: {
+        path: sub,
+        maxEntries: 2,
+        includeSizes: false,
+        sortBy: 'size',
+        cursor: m1.nextCursor,
+      },
+    });
+    assert.strictEqual(replay.isError, true);
+    assert.match(firstTextBlock(replay).text ?? '', /Invalid cursor/);
+  });
+
   it('TC-FUNC-075c: find_files drops a gitignored file below the top level', async () => {
     const sub = join(tmpDir, 'gitignore_file_dir');
     await mkdir(join(sub, 'nested'), { recursive: true });
@@ -3912,9 +4075,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // Raised 2026-10-06 to 18620 full (read-only unchanged): `edit` inlines
   // EditSpec at both use sites instead of a `$ref`, which some clients cannot
   // follow (issue #51).
+  // Raised 2026-10-15 to 19600 full / 9550 read-only: `list` gains opt-in
+  // includeSizes and sortBy inputs (#99); measured 19219 / 9357.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 19_000;
-    const BUDGET_CHARS_READ_ONLY = 9_150;
+    const BUDGET_CHARS = 19_600;
+    const BUDGET_CHARS_READ_ONLY = 9_550;
 
     const full = await createTestClientPair([tmpDir]);
     try {

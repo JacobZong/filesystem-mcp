@@ -1,15 +1,18 @@
+import { stat } from 'node:fs/promises';
 import { basename, posix } from 'node:path';
 
 import * as z from 'zod/v4';
 
+import { withAbort } from '../core/concurrency.ts';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
-import { ErrorCode } from '../core/errors.ts';
-import { pageTrailer } from '../core/fmt.ts';
+import { ErrorCode, rethrowIfAborted } from '../core/errors.ts';
+import { formatByteSize, formatCount, pageTrailer } from '../core/fmt.ts';
 import { globEntries } from '../core/glob.ts';
 import { type EntryType, resolveEntryType, toPosixRelative } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import {
   CursorSchema,
+  defaultFalseBoolean,
   IncludeHidden,
   IncludeIgnored,
   mapOptionalPath,
@@ -25,9 +28,15 @@ interface CollectedEntry {
   name: string;
   relativePath: string; // POSIX
   type: EntryType;
+  size?: number;
 }
 
-interface CollectOptions {
+interface RenderOptions {
+  includeSizes: boolean;
+  sortBy: 'name' | 'size';
+}
+
+interface CollectOptions extends RenderOptions {
   maxDepth: number;
   includeHidden: boolean;
   includeIgnored: boolean;
@@ -43,6 +52,7 @@ interface CollectResult {
   totalEntries: number;
   totalFiles: number;
   totalDirectories: number;
+  totalBytes?: number;
 }
 
 function entryTypeRank(type: EntryType): number {
@@ -50,27 +60,33 @@ function entryTypeRank(type: EntryType): number {
   return 1;
 }
 
-function compareEntries(a: CollectedEntry, b: CollectedEntry): number {
-  // Compare by parent directory first (depth-level grouping)
-  const slashA = a.relativePath.lastIndexOf('/');
-  const slashB = b.relativePath.lastIndexOf('/');
-  const parentA = slashA === -1 ? '' : a.relativePath.slice(0, slashA);
-  const parentB = slashB === -1 ? '' : b.relativePath.slice(0, slashB);
-
-  if (parentA !== parentB) return parentA.localeCompare(parentB);
-
-  // Within same parent: dirs first, then alphabetical
-  const rankDiff = entryTypeRank(a.type) - entryTypeRank(b.type);
-  if (rankDiff !== 0) return rankDiff;
-  return a.name.localeCompare(b.name);
+// Compare by parent directory first (depth-level grouping), then within the
+// same parent: directories first, then by size (descending) or alphabetical.
+function entryComparator(sortBy: 'name' | 'size') {
+  return (a: CollectedEntry, b: CollectedEntry): number => {
+    const slashA = a.relativePath.lastIndexOf('/');
+    const slashB = b.relativePath.lastIndexOf('/');
+    const parentA = slashA === -1 ? '' : a.relativePath.slice(0, slashA);
+    const parentB = slashB === -1 ? '' : b.relativePath.slice(0, slashB);
+    if (parentA !== parentB) return parentA.localeCompare(parentB);
+    const rankDiff = entryTypeRank(a.type) - entryTypeRank(b.type);
+    if (rankDiff !== 0) return rankDiff;
+    if (sortBy === 'size') {
+      const sizeDiff = (b.size ?? 0) - (a.size ?? 0);
+      if (sizeDiff !== 0) return sizeDiff;
+    }
+    return a.name.localeCompare(b.name);
+  };
 }
 
 async function collect(rootPath: string, options: CollectOptions): Promise<CollectResult> {
   const entries: CollectedEntry[] = [];
+  const wantSizes = options.includeSizes || options.sortBy === 'size';
   let scanned = 0;
   let totalEntries = 0;
   let totalFiles = 0;
   let totalDirectories = 0;
+  let totalBytes = 0;
   const ceiling = options.pathGuard.allowedRootContaining(rootPath);
 
   for await (const entry of globEntries({
@@ -98,17 +114,29 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
     const accessible = await options.pathGuard.isEntryAccessible(entry.path);
     if (!accessible) continue;
 
+    let size: number | undefined;
+    if (wantSizes && entryType === 'file') {
+      try {
+        size = (await withAbort(stat(entry.path), options.signal)).size;
+      } catch (error) {
+        rethrowIfAborted(error);
+        // A file can vanish between the walk and the stat; it keeps its place, without a size.
+      }
+    }
+
     totalEntries++;
     if (entryType === 'directory') {
       totalDirectories++;
     } else {
       totalFiles++;
+      if (size !== undefined) totalBytes += size;
     }
 
     const collectedEntry: CollectedEntry = {
       name,
       relativePath: relPath,
       type: entryType,
+      ...(size !== undefined ? { size } : {}),
     };
 
     if (entries.length < options.entryCap) {
@@ -117,13 +145,14 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
   }
 
   options.signal.throwIfAborted();
-  entries.sort(compareEntries);
+  entries.sort(entryComparator(options.sortBy));
 
   return {
     entries,
     totalEntries,
     totalFiles,
     totalDirectories,
+    ...(wantSizes ? { totalBytes } : {}),
   };
 }
 
@@ -142,7 +171,11 @@ function treeHeader(pathGuard: PathGuard, dir: string): string {
   return paths.atRoot ? basename(paths.root) : paths.show(dir);
 }
 
-function renderMarkdown(rootName: string, page: readonly CollectedEntry[]): string {
+function renderMarkdown(
+  rootName: string,
+  page: readonly CollectedEntry[],
+  opts: RenderOptions,
+): string {
   if (page.length === 0) return rootName;
 
   // The tree is drawn down from the root, but a later page (or a capped set)
@@ -160,7 +193,7 @@ function renderMarkdown(rootName: string, page: readonly CollectedEntry[]): stri
       entries.push({ name: posix.basename(dir), relativePath: dir, type: 'directory' });
     }
   }
-  entries.sort(compareEntries);
+  entries.sort(entryComparator(opts.sortBy));
 
   // Group entries by parent path
   const childrenOf = new Map<string, CollectedEntry[]>();
@@ -183,7 +216,11 @@ function renderMarkdown(rootName: string, page: readonly CollectedEntry[]): stri
       if (!child) continue;
       const isLast = i === children.length - 1;
       const connector = isLast ? ELBOW : TEE;
-      lines.push(prefix + connector + child.name + (child.type === 'directory' ? '/' : ''));
+      const sizeText =
+        opts.includeSizes && child.size !== undefined ? ` (${formatByteSize(child.size)})` : '';
+      lines.push(
+        prefix + connector + child.name + (child.type === 'directory' ? '/' : '') + sizeText,
+      );
 
       const childKey = child.relativePath;
       const nextPrefix = prefix + (isLast ? INDENT : PIPE);
@@ -193,6 +230,14 @@ function renderMarkdown(rootName: string, page: readonly CollectedEntry[]): stri
 
   renderChildren('', '');
   return lines.join('\n');
+}
+
+/** The `//` line `includeSizes` appends: counts and bytes over the whole collected set. */
+function summaryLine(metadata: ListPageMetadata, totalBytes: number): string {
+  return `\n\n// ${formatCount(metadata.totalFiles, 'file')}, ${formatCount(
+    metadata.totalDirectories,
+    'directory',
+  )}, ${formatByteSize(totalBytes)} total`;
 }
 
 const DEFAULT_LIST_DEPTH = 1;
@@ -211,6 +256,14 @@ const ListInputSchema = z.strictObject({
     ),
   includeHidden: IncludeHidden,
   includeIgnored: IncludeIgnored,
+  includeSizes: defaultFalseBoolean(
+    'Show file sizes in the tree and a totals line of counts and bytes',
+  ),
+  sortBy: z
+    .enum(['name', 'size'])
+    .optional()
+    .default('name')
+    .describe('Order within each directory: name (default) or size (largest first)'),
   cursor: CursorSchema,
 });
 
@@ -219,6 +272,7 @@ interface ListPageMetadata {
   readonly totalEntries: number;
   readonly totalFiles: number;
   readonly totalDirectories: number;
+  readonly totalBytes?: number;
 }
 
 type ListOutput = ListPageMetadata & {
@@ -233,7 +287,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   title: 'List',
   description:
     "List a directory's files and subdirectories as a tree of names, like ls or tree. " +
-    'stat returns sizes and dates.',
+    'includeSizes adds sizes and a total; stat returns dates.',
   input: ListInputSchema,
   readOnlyHint: true,
   deadline: true,
@@ -245,6 +299,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
   mapPaths: mapOptionalPath,
   run: async (args, ctx) => {
     const resolvedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
+    const renderOpts: RenderOptions = { includeSizes: args.includeSizes, sortBy: args.sortBy };
     const paged = await paginate<CollectedEntry, ListPageMetadata, JsonResourceResult>({
       store: ctx.pageStore,
       queryKey: pageQueryKey('list', { ...args, path: resolvedPath }, ['cursor', 'maxEntries']),
@@ -253,6 +308,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
       produce: async () => {
         const validDir = await ctx.fs.pathGuard.validateExistingDirectory(resolvedPath);
         const result = await collect(validDir, {
+          ...renderOpts,
           maxDepth: args.maxDepth,
           includeHidden: args.includeHidden,
           includeIgnored: args.includeIgnored,
@@ -268,6 +324,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
             totalEntries: result.totalEntries,
             totalFiles: result.totalFiles,
             totalDirectories: result.totalDirectories,
+            ...(result.totalBytes !== undefined ? { totalBytes: result.totalBytes } : {}),
           },
           truncated: result.totalEntries > result.entries.length,
         };
@@ -277,10 +334,15 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
         // The stored tree is the whole collected set, bounded by the hard cap.
         const fullOutput = {
           entries,
-          markdown: renderMarkdown(treeHeader(ctx.fs.pathGuard, metadata.path), entries),
+          markdown: renderMarkdown(
+            treeHeader(ctx.fs.pathGuard, metadata.path),
+            entries,
+            renderOpts,
+          ),
           totalEntries: metadata.totalEntries,
           totalFiles: metadata.totalFiles,
           totalDirectories: metadata.totalDirectories,
+          ...(metadata.totalBytes !== undefined ? { totalBytes: metadata.totalBytes } : {}),
           ...(metadata.totalEntries > entries.length ? { truncated: true } : {}),
         };
         return putJsonResource(ctx.resourceStore, `${name} tree`, fullOutput);
@@ -298,7 +360,14 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
     // the text too — paging needs no second lookup. `pageTrailer` is the one
     // owner of that line, and it owes it on the last page as much as the first.
     const text =
-      renderMarkdown(treeHeader(ctx.fs.pathGuard, paged.metadata.path), [...paged.page]) +
+      renderMarkdown(
+        treeHeader(ctx.fs.pathGuard, paged.metadata.path),
+        [...paged.page],
+        renderOpts,
+      ) +
+      (paged.metadata.totalBytes !== undefined && args.includeSizes
+        ? summaryLine(paged.metadata, paged.metadata.totalBytes)
+        : '') +
       pageTrailer({
         offset: paged.offset,
         shown: structured.entryCount,

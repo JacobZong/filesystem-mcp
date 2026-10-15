@@ -238,7 +238,10 @@ name two roots share would read back as ambiguous), everything under a
 folder granted during the session, and a name such as `~` or a blank one. On
 macOS and Linux a backslash in a name stays a backslash. `list` draws a tree
 of names and keeps `relativePath` relative to its `path`; the tree's first
-line names a listed subfolder the same way (`src/core`).
+line names a listed subfolder the same way (`src/core`). With `includeSizes`,
+each file's size rides its tree line and a `// N files, M directories, X total`
+line closes the listing; `sortBy: 'size'` orders files largest-first within
+each directory.
 
 **Access grants.** A tool call with a path outside the roots does not touch
 the filesystem. It asks the user first (see [Confirmations](#confirmations)),
@@ -308,16 +311,16 @@ So read `result.structuredContent ?? result._meta` (Python:
 
 What is where:
 
-| Tool                             | Data                                                                                                                           |
-| :------------------------------- | :----------------------------------------------------------------------------------------------------------------------------- |
-| `list`                           | `path`, `entries[]` (`name`, `relativePath`, `type`), `totalEntries`, `nextCursor`                                             |
-| `find_files`                     | `root`, `results[]` (`path`, relative to `root`), `totalMatches`, `filesScanned`, `nextCursor`                                 |
-| `search_text`                    | `root`, `matches[]` (`file`, relative to `root`, `line`, `column`, `content`, `before`, `after`), `totalMatches`, `nextCursor` |
-| `stat`, `read`, `edit`, `delete` | `results[]`, each `{ path, value }` or `{ path, error }`, and `summary` (`total`, `succeeded`, `failed`)                       |
-| `replace_text`                   | `root`, `results[]` (`path` relative to `root`), `summary`, `totalMatches`, `filesScanned`, and `diff` with `returnDiff: true` |
-| `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...), `directories[]`, and `failures[]`                     |
-| `move`                           | `moves[]` (`from`, `to`) and `failures[]`                                                                                      |
-| `diff`, `patch`                  | `a`/`b` or `path`, `linesAdded`, `linesRemoved`; a `patch` dry run also has `diff`                                             |
+| Tool                             | Data                                                                                                                                                                                                    |
+| :------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list`                           | `path`, `entries[]` (`name`, `relativePath`, `type`, `size` with `includeSizes`/`sortBy: 'size'`), `totalEntries`, `totalFiles`, `totalDirectories`, `totalBytes` (with the same options), `nextCursor` |
+| `find_files`                     | `root`, `results[]` (`path`, relative to `root`), `totalMatches`, `filesScanned`, `nextCursor`                                                                                                          |
+| `search_text`                    | `root`, `matches[]` (`file`, relative to `root`, `line`, `column`, `content`, `before`, `after`), `totalMatches`, `nextCursor`                                                                          |
+| `stat`, `read`, `edit`, `delete` | `results[]`, each `{ path, value }` or `{ path, error }`, and `summary` (`total`, `succeeded`, `failed`)                                                                                                |
+| `replace_text`                   | `root`, `results[]` (`path` relative to `root`), `summary`, `totalMatches`, `filesScanned`, and `diff` with `returnDiff: true`                                                                          |
+| `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...), `directories[]`, and `failures[]`                                                                                              |
+| `move`                           | `moves[]` (`from`, `to`) and `failures[]`                                                                                                                                                               |
+| `diff`, `patch`                  | `a`/`b` or `path`, `linesAdded`, `linesRemoved`; a `patch` dry run also has `diff`                                                                                                                      |
 
 Notes on individual tools:
 

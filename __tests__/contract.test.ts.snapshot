@@ -285,7 +285,7 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree. stat returns sizes and dates.",
+      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree. includeSizes adds sizes and a total; stat returns dates.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -318,6 +318,20 @@ exports[`Advertised MCP contract > CONTRACT-001: full server surface matches the
             "default": false,
             "description": "Include ignored items (node_modules, .git, etc).",
             "type": "boolean"
+          },
+          "includeSizes": {
+            "default": false,
+            "description": "Show file sizes in the tree and a totals line of counts and bytes",
+            "type": "boolean"
+          },
+          "sortBy": {
+            "default": "name",
+            "description": "Order within each directory: name (default) or size (largest first)",
+            "type": "string",
+            "enum": [
+              "name",
+              "size"
+            ]
           },
           "cursor": {
             "description": "Opaque pagination cursor; pass unchanged for the next page. Pages slice one snapshot taken on the first call; it expires after ~60s — re-request without a cursor if rejected.",
@@ -935,7 +949,7 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
     {
       "name": "list",
       "title": "List",
-      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree. stat returns sizes and dates.",
+      "description": "List a directory's files and subdirectories as a tree of names, like ls or tree. includeSizes adds sizes and a total; stat returns dates.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -968,6 +982,20 @@ exports[`Advertised MCP contract > CONTRACT-002: --read-only surface matches the
             "default": false,
             "description": "Include ignored items (node_modules, .git, etc).",
             "type": "boolean"
+          },
+          "includeSizes": {
+            "default": false,
+            "description": "Show file sizes in the tree and a totals line of counts and bytes",
+            "type": "boolean"
+          },
+          "sortBy": {
+            "default": "name",
+            "description": "Order within each directory: name (default) or size (largest first)",
+            "type": "string",
+            "enum": [
+              "name",
+              "size"
+            ]
           },
           "cursor": {
             "description": "Opaque pagination cursor; pass unchanged for the next page. Pages slice one snapshot taken on the first call; it expires after ~60s — re-request without a cursor if rejected.",
