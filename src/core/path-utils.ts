@@ -193,17 +193,31 @@ export function isSamePath(left: string, right: string): boolean {
 }
 
 /**
- * On a case-insensitive filesystem a write target that already exists is
- * realpathed to its on-disk spelling, so a case-only rename (`foo.txt` ->
- * `Foo.txt`) resolves to the source itself. Returns the resolved target
- * re-spelled with the requested basename when the two differ only by case;
+ * What two names share when they differ only in Unicode form (NFC or NFD) or
+ * in which space character they use (U+0020, U+00A0, U+202F, and every other
+ * Zs), case-folded where the filesystem folds case. A model types back
+ * `caf\u00e9` and `shot PM.png` for the `cafe\u0301` and `shot\u202fPM.png` a
+ * listing showed it (#101).
+ */
+export function unicodeMatchKey(name: string): string {
+  return normalizeCaseForComparison(name.normalize('NFC').replace(/\p{Zs}/gu, ' '));
+}
+
+/**
+ * A write target that already exists is realpathed to its on-disk spelling,
+ * so a rename that changes only case (`foo.txt` -> `Foo.txt` on a
+ * case-insensitive filesystem) or only Unicode spelling (`cafe\u0301.txt` ->
+ * `caf\u00e9.txt`) resolves to the source itself. Returns the resolved target
+ * re-spelled with the requested basename when the two differ only that way;
  * otherwise the resolved target unchanged. Parent segments are not re-spelled.
  */
-export function respellCaseOnlyTarget(requestedPath: string, resolvedTarget: string): string {
+export function respellSpellingOnlyTarget(requestedPath: string, resolvedTarget: string): string {
   const requestedName = basename(requestedPath);
-  if (requestedName === basename(resolvedTarget)) return resolvedTarget;
-  const respelled = join(dirname(resolvedTarget), requestedName);
-  return isSamePath(respelled, resolvedTarget) ? respelled : resolvedTarget;
+  const resolvedName = basename(resolvedTarget);
+  if (requestedName === resolvedName) return resolvedTarget;
+  return unicodeMatchKey(requestedName) === unicodeMatchKey(resolvedName)
+    ? join(dirname(resolvedTarget), requestedName)
+    : resolvedTarget;
 }
 
 export function normalizeAllowedDirectory(dir: string): string {

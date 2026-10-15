@@ -10,7 +10,8 @@ import {
   isUnresolvableDrivePath,
   isWindowsDrivePath,
   normalizePath,
-  respellCaseOnlyTarget,
+  respellSpellingOnlyTarget,
+  unicodeMatchKey,
 } from '../src/core/path-utils.ts';
 import { normalizeAllowedDirectories } from '../src/core/path.ts';
 
@@ -96,21 +97,36 @@ describe('PathGuard containment helpers', () => {
     assert.ok(result.some((d) => isSamePath(d, normalizePath('/foo'))));
   });
 
-  it('TC-PH-009: respellCaseOnlyTarget re-spells a case-only match on a case-insensitive filesystem', (t) => {
+  it('TC-PH-009: respellSpellingOnlyTarget re-spells a case-only match on a case-insensitive filesystem', (t) => {
     if (process.platform !== 'win32' && process.platform !== 'darwin') {
       t.skip('case-only re-spelling only applies on a case-insensitive filesystem');
       return;
     }
     const resolvedTarget = join(tmpdir(), 'foo.txt');
-    const result = respellCaseOnlyTarget('x/Foo.txt', resolvedTarget);
+    const result = respellSpellingOnlyTarget('x/Foo.txt', resolvedTarget);
     assert.strictEqual(basename(result), 'Foo.txt');
   });
 
-  it('TC-PH-010: respellCaseOnlyTarget leaves an unrelated basename unchanged', () => {
-    assert.strictEqual(respellCaseOnlyTarget('x/bar.txt', '/a/foo.txt'), '/a/foo.txt');
+  it('TC-PH-010: respellSpellingOnlyTarget leaves an unrelated basename unchanged', () => {
+    assert.strictEqual(respellSpellingOnlyTarget('x/bar.txt', '/a/foo.txt'), '/a/foo.txt');
   });
 
-  it('TC-PH-011: respellCaseOnlyTarget leaves an identical basename unchanged', () => {
-    assert.strictEqual(respellCaseOnlyTarget('x/foo.txt', '/a/foo.txt'), '/a/foo.txt');
+  it('TC-PH-011: respellSpellingOnlyTarget leaves an identical basename unchanged', () => {
+    assert.strictEqual(respellSpellingOnlyTarget('x/foo.txt', '/a/foo.txt'), '/a/foo.txt');
+  });
+
+  it('TC-PH-013: unicodeMatchKey folds NFC/NFD and every space separator, not tabs', () => {
+    assert.strictEqual(unicodeMatchKey('cafe\u0301'), unicodeMatchKey('caf\u00e9'));
+    assert.strictEqual(unicodeMatchKey('shot\u202fPM'), unicodeMatchKey('shot PM'));
+    assert.strictEqual(unicodeMatchKey('a\u00a0b'), unicodeMatchKey('a b'));
+    assert.notStrictEqual(unicodeMatchKey('a\tb'), unicodeMatchKey('a b'));
+  });
+
+  it('TC-PH-014: respellSpellingOnlyTarget re-spells a Unicode-only match', () => {
+    const resolvedTarget = join(tmpdir(), 'cafe\u0301.txt');
+    assert.strictEqual(
+      respellSpellingOnlyTarget('x/caf\u00e9.txt', resolvedTarget),
+      join(tmpdir(), 'caf\u00e9.txt'),
+    );
   });
 });

@@ -32,7 +32,7 @@ import {
 import { detectMimeFromContent, type FileKind, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
-import { isSamePath, normalizePath, respellCaseOnlyTarget } from './path-utils.ts';
+import { isSamePath, normalizePath, respellSpellingOnlyTarget } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
 import {
@@ -235,8 +235,8 @@ export class GuardedFileSystem {
     // link would rename its target and leave the link dangling.
     const validOld = await this.pathGuard.validatePathForDelete(oldPath);
     let validNew = await this.pathGuard.validatePathForWrite(newPath);
-    // Renaming a path onto itself is only meaningful as a case-only rename.
-    if (validOld === validNew) validNew = respellCaseOnlyTarget(newPath, validNew);
+    // Renaming a path onto itself is only meaningful as a case- or Unicode-only rename.
+    if (validOld === validNew) validNew = respellSpellingOnlyTarget(newPath, validNew);
     await fsRename(validOld, validNew);
   }
 

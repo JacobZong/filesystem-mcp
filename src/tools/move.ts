@@ -23,7 +23,7 @@ import {
   isPathInsideDirectory,
   isSamePath,
   normalizeCaseForComparison,
-  respellCaseOnlyTarget,
+  respellSpellingOnlyTarget,
 } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
@@ -130,7 +130,7 @@ async function planTransfer(
   // spelling, so a case-only rename resolves to the source itself; re-spell
   // it with the requested basename before deciding self vs. rename.
   if (resolvedSource === resolvedDest) {
-    validDest = respellCaseOnlyTarget(pair.destination, validDest);
+    validDest = respellSpellingOnlyTarget(pair.destination, validDest);
     resolvedDest = resolve(validDest);
   }
 
