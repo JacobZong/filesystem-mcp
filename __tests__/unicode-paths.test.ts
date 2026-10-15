@@ -649,22 +649,21 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       }
     });
 
-    it('edit refuses, and delete collapses, two spellings of one file', async () => {
-      await writeFile(join(root, NBSP_NAME), 'nbsp');
+    it('edit applies, and delete collapses, two spellings of one file', async () => {
+      await writeFile(join(root, NBSP_NAME), 'one two');
       const pair = await createTestClientPair([root]);
       try {
         const edit = await pair.client.callTool({
           name: 'edit',
           arguments: {
             files: [
-              { path: join(root, ASCII_NAME), edits: [{ oldText: 'nbsp', newText: 'A' }] },
-              { path: join(root, NBSP_NAME), edits: [{ oldText: 'nbsp', newText: 'B' }] },
+              { path: join(root, ASCII_NAME), edits: [{ oldText: 'one', newText: 'A' }] },
+              { path: join(root, NBSP_NAME), edits: [{ oldText: 'two', newText: 'B' }] },
             ],
           },
         });
-        assert.strictEqual(edit.isError, true);
-        assert.match(firstTextBlock(edit).text ?? '', /same file/);
-        assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'nbsp');
+        assert.notStrictEqual(edit.isError, true, firstTextBlock(edit).text);
+        assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'A B');
 
         const del = await pair.client.callTool({
           name: 'delete',

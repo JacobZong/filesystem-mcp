@@ -334,34 +334,6 @@ function applyEdits(
   return { content: newContent, appliedEdits, unmatchedEdits };
 }
 
-/**
- * Two batch entries that resolve to one file (another Unicode spelling of it,
- * or a link to it) would race; refuse before any edit runs. An entry that
- * fails validation is left for its own per-path error.
- */
-async function assertDistinctTargets(
-  items: readonly { path: string }[],
-  ctx: ToolCtx,
-): Promise<void> {
-  if (items.length < 2) return;
-  const targets = await Promise.all(
-    items.map(({ path }) =>
-      ctx.fs.pathGuard.validatePathForWrite(path).catch((): undefined => undefined),
-    ),
-  );
-  for (const [index, target] of targets.entries()) {
-    if (target === undefined) continue;
-    const first = targets.findIndex((other) => other !== undefined && isSamePath(other, target));
-    if (first < index) {
-      throw new FsError(
-        ErrorCode.INVALID_INPUT,
-        `files[${String(index)}].path names the same file as files[${String(first)}].path; put every edit for one file in a single entry`,
-        items[index]?.path,
-      );
-    }
-  }
-}
-
 async function editOnce(
   filePath: string,
   edits: z.infer<typeof EditSpecSchema>[],
@@ -507,7 +479,6 @@ export const EDIT = defineTool<typeof EditFileInputSchema, BatchResult<EditFileV
   run: async (args, ctx) => {
     const items =
       args.path !== undefined ? [{ path: args.path, edits: args.edits ?? [] }] : (args.files ?? []);
-    await assertDistinctTargets(items, ctx);
 
     const batch = await runOverPaths(items, ctx, ErrorCode.UNKNOWN, ({ path, edits }) =>
       // A dry run never writes, so it needs no lock.
