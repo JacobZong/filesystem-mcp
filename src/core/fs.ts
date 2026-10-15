@@ -29,7 +29,7 @@ import {
   isNodeError,
   isNotFoundErrno,
 } from './errors.ts';
-import { detectMimeFromContent, MIME_SAMPLE_SIZE } from './mime.ts';
+import { detectMimeFromContent, type FileKind, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
 import { isSamePath, normalizePath, respellCaseOnlyTarget } from './path-utils.ts';
@@ -484,7 +484,14 @@ export class GuardedFileSystem {
   async readRaw(
     filePath: string,
     options?: { signal?: AbortSignal },
-  ): Promise<{ content: Buffer; mimeType: string; isBinary: boolean }> {
+  ): Promise<{
+    content: Buffer;
+    mimeType: string;
+    kind: FileKind;
+    isBinary: boolean;
+    validPath: string;
+    modified: string;
+  }> {
     options?.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     options?.signal?.throwIfAborted();
@@ -511,7 +518,10 @@ export class GuardedFileSystem {
     return {
       content,
       mimeType: mimeInfo.mimeType,
+      kind: mimeInfo.kind,
       isBinary: mimeInfo.kind !== 'text',
+      validPath,
+      modified: stats.mtime.toISOString(),
     };
   }
 
