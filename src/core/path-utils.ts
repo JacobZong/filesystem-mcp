@@ -204,6 +204,17 @@ export function unicodeMatchKey(name: string): string {
 }
 
 /**
+ * True when two paths are one path once case (where the filesystem folds it)
+ * and Unicode spelling are folded: the spellings the path guard resolves to
+ * one entry when only one of them is on disk.
+ */
+export function isEquivalentPath(left: string, right: string): boolean {
+  return (
+    isSamePath(left, right) || unicodeMatchKey(resolve(left)) === unicodeMatchKey(resolve(right))
+  );
+}
+
+/**
  * False for a name of printable ASCII with no space, which no other entry can
  * share a `unicodeMatchKey` with — except a name holding U+212A, U+037E or
  * U+1FEF, which NFC maps to ASCII; those stay unmatched. A missed lookup of

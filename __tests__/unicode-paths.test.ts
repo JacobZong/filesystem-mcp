@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
+import { encodeFileUriPath, FILESYSTEM_FILE_URI_TEMPLATE } from '../src/core/file-uri.ts';
+import { normalizePath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import {
   cleanupTestRoot,
@@ -25,6 +27,9 @@ const NNBSP_NAME = 'a\u202fb.txt';
 const ASCII_NAME = 'a b.txt';
 const NNBSP_SHOT = 'shot\u202fPM.txt';
 const ASCII_SHOT = 'shot PM.txt';
+
+/** A path as the guard returns it: on Windows its drive letter is lowercased. */
+const guardPath = (...parts: string[]): string => normalizePath(join(...parts));
 
 /**
  * True when this filesystem stores `NFD_CAFE` and `NFC_CAFE` as two names
@@ -69,21 +74,21 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       await mkdir(join(root, NFD_CAFE));
       await writeFile(join(root, NFD_CAFE, 'a.txt'), 'nfd');
       const resolved = await guard.validateExistingPath(join(root, NFC_CAFE, 'a.txt'));
-      assert.strictEqual(resolved, join(root, NFD_CAFE, 'a.txt'));
+      assert.strictEqual(resolved, guardPath(root, NFD_CAFE, 'a.txt'));
     });
 
     it('reads a U+202F name the request spells with U+0020', async () => {
       await writeFile(join(root, NNBSP_SHOT), 'shot');
       const resolved = await guard.validateExistingPath(join(root, ASCII_SHOT));
-      assert.strictEqual(resolved, join(root, NNBSP_SHOT));
+      assert.strictEqual(resolved, guardPath(root, NNBSP_SHOT));
     });
 
     it('reports the on-disk spelling, not a symlink', async () => {
       await writeFile(join(root, NNBSP_SHOT), 'shot');
       const details = await guard.validateExistingPathDetailed(join(root, ASCII_SHOT));
       assert.deepStrictEqual(details, {
-        requestedPath: join(root, NNBSP_SHOT),
-        resolvedPath: join(root, NNBSP_SHOT),
+        requestedPath: guardPath(root, NNBSP_SHOT),
+        resolvedPath: guardPath(root, NNBSP_SHOT),
         isSymlink: false,
       });
     });
@@ -93,11 +98,11 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       await writeFile(join(root, NBSP_NAME), 'nbsp');
       assert.strictEqual(
         await guard.validateExistingPath(join(root, ASCII_NAME)),
-        join(root, ASCII_NAME),
+        guardPath(root, ASCII_NAME),
       );
       assert.strictEqual(
         await guard.validateExistingPath(join(root, NBSP_NAME)),
-        join(root, NBSP_NAME),
+        guardPath(root, NBSP_NAME),
       );
     });
 
@@ -211,19 +216,19 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       }
       await mkdir(join(root, NFD_CAFE));
       const target = await guard.validatePathForWrite(join(root, NFC_CAFE, 'new.txt'));
-      assert.strictEqual(target, join(root, NFD_CAFE, 'new.txt'));
+      assert.strictEqual(target, guardPath(root, NFD_CAFE, 'new.txt'));
     });
 
     it('a write to a U+0020 spelling lands on the existing U+202F file', async () => {
       await writeFile(join(root, NNBSP_SHOT), 'shot');
       const target = await guard.validatePathForWrite(join(root, ASCII_SHOT));
-      assert.strictEqual(target, join(root, NNBSP_SHOT));
+      assert.strictEqual(target, guardPath(root, NNBSP_SHOT));
     });
 
     it('deletes through an equivalent spelling', async () => {
       await writeFile(join(root, NNBSP_SHOT), 'shot');
       const target = await guard.validatePathForDelete(join(root, ASCII_SHOT));
-      assert.strictEqual(target, join(root, NNBSP_SHOT));
+      assert.strictEqual(target, guardPath(root, NNBSP_SHOT));
     });
   });
 
@@ -274,6 +279,75 @@ describe('Unicode-equivalent path lookup (#101)', () => {
         assert.match(firstTextBlock(create).text ?? '', /overwrite: true/);
         assert.deepStrictEqual(await readdir(root), [NNBSP_SHOT]);
         assert.strictEqual(await readFile(join(root, NNBSP_SHOT), 'utf8'), 'shot');
+      } finally {
+        await pair.close();
+      }
+    });
+
+    it('create refuses a batch naming one file by two Unicode spellings', async () => {
+      await writeFile(join(root, NBSP_NAME), 'orig');
+      const pair = await createTestClientPair([root]);
+      try {
+        const create = await pair.client.callTool({
+          name: 'create',
+          arguments: {
+            files: [
+              { path: join(root, ASCII_NAME), content: 'one', overwrite: true },
+              { path: join(root, NBSP_NAME), content: 'two', overwrite: true },
+            ],
+          },
+        });
+        assert.strictEqual(create.isError, true);
+        assert.match(firstTextBlock(create).text ?? '', /duplicate of files\[0\]\.path/u);
+        assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'orig');
+      } finally {
+        await pair.close();
+      }
+    });
+
+    it('a symlink moved onto a Unicode variant of its own target is left alone', async (t) => {
+      await writeFile(join(root, NBSP_NAME), 'target');
+      if (
+        !(await trySymlink(join(root, NBSP_NAME), join(root, 'lnk'), () =>
+          t.skip('symlink not permitted'),
+        ))
+      ) {
+        return;
+      }
+      const pair = await createTestClientPair([root]);
+      try {
+        await pair.client.callTool({
+          name: 'move',
+          arguments: {
+            moves: [{ source: join(root, 'lnk'), destination: join(root, ASCII_NAME) }],
+          },
+        });
+        assert.strictEqual((await lstat(join(root, NBSP_NAME))).isSymbolicLink(), false);
+        assert.strictEqual(await readFile(join(root, NBSP_NAME), 'utf8'), 'target');
+        assert.strictEqual((await lstat(join(root, 'lnk'))).isSymbolicLink(), true);
+      } finally {
+        await pair.close();
+      }
+    });
+
+    it('path completion lists a directory typed in another Unicode spelling', async (t) => {
+      if (!(await isNormalizationSensitive(root))) {
+        t.skip('filesystem is normalization-insensitive');
+        return;
+      }
+      await mkdir(join(root, NFD_CAFE));
+      await writeFile(join(root, NFD_CAFE, 'inner.txt'), 'x');
+      const pair = await createTestClientPair([root]);
+      try {
+        const result = await pair.client.complete({
+          ref: { type: 'ref/resource', uri: FILESYSTEM_FILE_URI_TEMPLATE },
+          argument: { name: 'path', value: encodeFileUriPath(`${join(root, NFC_CAFE)}${sep}`) },
+        });
+        const { values } = result.completion;
+        assert.ok(
+          values.some((value) => value.endsWith('inner.txt')),
+          JSON.stringify(values),
+        );
       } finally {
         await pair.close();
       }

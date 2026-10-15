@@ -16,7 +16,7 @@ import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '..
 import { destExists, type Stats } from '../core/fs.ts';
 import { confirmKey, pendingRoundTrip, readPendingVerdict } from '../core/input-required.ts';
 import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
-import { isSamePath } from '../core/path-utils.ts';
+import { isEquivalentPath } from '../core/path-utils.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
@@ -88,9 +88,10 @@ const CreateInputSchema = z
     const files = value.files ?? [];
     // Entries write in parallel and each replaces its file whole, so two
     // entries for one path race: the last rename wins and the other's
-    // content is lost while both report success. One entry per file.
+    // content is lost while both report success. One entry per file, counting
+    // the Unicode spellings the path guard resolves to one name (#101).
     for (const [index, file] of files.entries()) {
-      const first = files.findIndex((other) => isSamePath(other.path, file.path));
+      const first = files.findIndex((other) => isEquivalentPath(other.path, file.path));
       if (first < index) {
         ctx.addIssue({
           code: 'custom',

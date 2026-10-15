@@ -130,8 +130,10 @@ async function planTransfer(
   // validatePathForWrite realpaths an existing destination to its on-disk
   // spelling, so a rename that changes only case or Unicode spelling resolves
   // to the source itself; re-spell it with the requested basename before
-  // deciding self vs. rename.
-  const destIsSource = resolvedSource === resolvedDest;
+  // deciding self vs. rename. A moved symlink is not its target: onto its
+  // own target in any spelling it stays the self-move no-op below, or the
+  // rename would replace that file with the link.
+  const destIsSource = resolvedSource === resolvedDest && opSource === realSource;
   if (destIsSource) {
     validDest = respellSpellingOnlyTarget(pair.destination, validDest);
     resolvedDest = resolve(validDest);
