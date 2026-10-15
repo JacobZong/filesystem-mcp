@@ -293,6 +293,18 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       const target = await guard.validatePathForWrite(alias);
       assert.strictEqual(target, guardPath(root, NBSP_NAME));
     });
+
+    it('a write respells both a parent and the missing target its link names', async (t) => {
+      const parent = 'parent\u00a0dir';
+      await mkdir(join(root, parent));
+      await writeFile(join(root, NBSP_NAME), 'nbsp');
+      const link = join(root, parent, 'alias');
+      if (!(await trySymlink(join('..', ASCII_NAME), link, () => t.skip('no symlinks'), 'file'))) {
+        return;
+      }
+      const target = await guard.validatePathForWrite(join(root, 'parent dir', 'alias'));
+      assert.strictEqual(target, guardPath(root, NBSP_NAME));
+    });
   });
 
   describe('through the tools', () => {
@@ -644,6 +656,27 @@ describe('Unicode-equivalent path lookup (#101)', () => {
         });
         assert.notStrictEqual(del.isError, true, firstTextBlock(del).text);
         assert.deepStrictEqual(await readdir(root), []);
+      } finally {
+        await pair.close();
+      }
+    });
+
+    it('move runs two existing files whose names fold alike to unrelated places', async () => {
+      await writeFile(join(root, ASCII_NAME), 'space');
+      await writeFile(join(root, NBSP_NAME), 'nbsp');
+      const pair = await createTestClientPair([root]);
+      try {
+        const move = await pair.client.callTool({
+          name: 'move',
+          arguments: {
+            moves: [
+              { source: join(root, ASCII_NAME), destination: join(root, 'x.txt') },
+              { source: join(root, NBSP_NAME), destination: join(root, 'y.txt') },
+            ],
+          },
+        });
+        assert.notStrictEqual(move.isError, true, firstTextBlock(move).text);
+        assert.deepStrictEqual((await readdir(root)).sort(), ['x.txt', 'y.txt']);
       } finally {
         await pair.close();
       }

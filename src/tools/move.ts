@@ -339,7 +339,8 @@ async function runTransfers(
   // Refuse both sides so the survivors are independent and can run concurrently.
   // isPathInsideDirectory covers equality and containment, case-folded; the
   // keys fold Unicode spelling too, parents included. Two moves compare the
-  // entries they rename (opSource), not where a link points.
+  // entries they rename (opSource), not where a link points, and unfolded:
+  // validated sources are on-disk names, so two that fold alike are distinct.
   const touches = (x: string, y: string): boolean => {
     const [keyX, keyY] = [unicodeMatchKey(x), unicodeMatchKey(y)];
     return isPathInsideDirectory(keyX, keyY) || isPathInsideDirectory(keyY, keyX);
@@ -348,7 +349,9 @@ async function runTransfers(
   for (const [i, a] of ready.entries()) {
     for (const b of ready.slice(i + 1)) {
       if (
-        (op === 'move' && touches(resolve(a.opSource), resolve(b.opSource))) ||
+        (op === 'move' &&
+          (isPathInsideDirectory(a.opSource, b.opSource) ||
+            isPathInsideDirectory(b.opSource, a.opSource))) ||
         touches(a.resolvedSource, b.validDest) ||
         touches(b.resolvedSource, a.validDest) ||
         touches(a.validDest, b.validDest)

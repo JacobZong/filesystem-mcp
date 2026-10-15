@@ -218,9 +218,12 @@ async function snapshot(): Promise<Snapshot> {
   const partial = lines.find((l) => /^(\/\/ showing|\/\/ scan stopped early|ERROR: )/.test(l));
   if (partial)
     throw new Error(`snapshot skipped, scan incomplete: ${partial.replace(/^\/\/ /, '')}`);
-  const paths = lines.filter(
-    (l) => l && !l.startsWith('//') && !l.startsWith('No files matching '),
-  );
+  // Paths come from the structured result (in _meta when the tool declares no
+  // output schema): a text line could be a file named like the empty-result message.
+  const { results: listed } = (found.structuredContent ?? found._meta ?? { results: [] }) as {
+    results: { path: string }[];
+  };
+  const paths = listed.map((r) => r.path);
   const snap: Snapshot = new Map();
   for (let i = 0; i < paths.length; i += 1000) {
     const stat = { name: 'stat', arguments: { paths: paths.slice(i, i + 1000) } };

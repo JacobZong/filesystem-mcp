@@ -310,4 +310,21 @@ describe('Data-loss guards', () => {
       await h.close();
     }
   });
+
+  it('GUARD-010: a delete batch naming a directory and its child refuses both', async () => {
+    const h = await createTestClientPair([root]);
+    try {
+      const child = await writeTestFile(root, 'g010/sub/child.txt', 'c');
+      const parent = join(root, 'g010');
+      const res = await h.client.callTool({
+        name: 'delete',
+        arguments: { paths: [parent, child], recursive: true },
+      });
+      assert.strictEqual(res.isError, true, firstTextBlock(res).text);
+      assert.match(JSON.stringify(res.structuredContent ?? res._meta), /inside, another path/);
+      assert.strictEqual(await exists(child), true);
+    } finally {
+      await h.close();
+    }
+  });
 });

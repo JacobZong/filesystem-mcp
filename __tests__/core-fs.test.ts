@@ -316,6 +316,16 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         });
       });
     }
+
+    it('a head read that fits the limit exactly keeps its last line', async () => {
+      await withEnv({ FS_MAX_FILE_SIZE: String(limit) }, async () => {
+        const filePath = join(tmpDir, 'exact-fit.txt');
+        const text = `${'a'.repeat(limit - 2)}\nb`;
+        await writeFile(filePath, text);
+        const result = await fs.readFile(filePath, { kind: 'head', lines: 2 });
+        assert.strictEqual(result.content, text);
+      });
+    });
   });
 
   describe('Editable text loading', () => {

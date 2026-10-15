@@ -42,6 +42,9 @@ import { parseTrueEnvFlag, ROOTS_TIMEOUT_MS } from './util.ts';
 // primitives (IS_WINDOWS, isAlpha, isSlash, toPosixPath) live in
 // path-utils.ts.
 
+/** Links followed, or respelling rounds run, before a path is refused (Linux ELOOP's 40). */
+const MAX_SYMLINK_HOPS = 40;
+
 export interface ValidatedPathDetails {
   requestedPath: string;
   resolvedPath: string;
@@ -879,7 +882,7 @@ export class PathGuard {
         try {
           const stats = await lstat(current);
           if (stats.isSymbolicLink()) {
-            if (++hops > 40) {
+            if (++hops > MAX_SYMLINK_HOPS) {
               throw new FsError(
                 ErrorCode.SYMLINK_NOT_ALLOWED,
                 'Too many symbolic links encountered',
@@ -1051,19 +1054,15 @@ export class PathGuard {
       }
     };
     assertInside();
-    if (realAncestor !== resolvedTarget) {
-      // Part of it is not on disk as typed; it may be under another Unicode
-      // spelling (#101). Re-run the same checks on the on-disk spelling.
-      // A followed link may name a missing target whose on-disk spelling
-      // differs; respell that target too, under the same checks.
+    // Part of it is not on disk as typed; it may be under another Unicode
+    // spelling (#101). A followed link may also name a missing target spelled
+    // differently on disk, and respelling a parent can expose such a link, so
+    // repeat until the resolution settles, re-running the checks each round.
+    let candidate = normalizedRequested;
+    for (let round = 0; realAncestor !== resolvedTarget && round < MAX_SYMLINK_HOPS; round++) {
       const respelled =
-        (await this.respellMissing(
-          normalizedRequested,
-          allowedDirs,
-          accessDeniedHint,
-          requestedPath,
-        )) ??
-        (isSamePath(resolvedTarget, normalizedRequested)
+        (await this.respellMissing(candidate, allowedDirs, accessDeniedHint, requestedPath)) ??
+        (isSamePath(resolvedTarget, candidate)
           ? undefined
           : await this.respellMissing(
               resolvedTarget,
@@ -1071,14 +1070,14 @@ export class PathGuard {
               accessDeniedHint,
               requestedPath,
             ));
-      if (respelled !== undefined) {
-        this.assertNotSensitiveFile(respelled, requestedPath);
-        ({ realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
-          requestedPath,
-          respelled,
-        ));
-        assertInside();
-      }
+      if (respelled === undefined) break;
+      this.assertNotSensitiveFile(respelled, requestedPath);
+      ({ realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
+        requestedPath,
+        respelled,
+      ));
+      assertInside();
+      candidate = respelled;
     }
     // Re-check the resolved target: a symlink inside an allowed root may point
     // at a sensitive file. Writing through such a link must be blocked too.

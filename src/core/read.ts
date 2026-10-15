@@ -278,7 +278,8 @@ async function readRangeContent(
         break;
       }
 
-      const lineBytes = Buffer.byteLength(line, 'utf-8') + newlineBytes;
+      // join('\n') puts a separator only between lines, so the first costs none.
+      const lineBytes = Buffer.byteLength(line, 'utf-8') + (lines.length > 0 ? newlineBytes : 0);
       if (lines.length > 0 && estimatedBytes + lineBytes > options.maxSize) {
         hasMoreLines = true;
         break;

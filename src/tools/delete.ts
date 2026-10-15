@@ -23,7 +23,7 @@ import {
   type PendingState,
   readPendingVerdict,
 } from '../core/input-required.ts';
-import { resolveEntryType } from '../core/path-utils.ts';
+import { isPathInsideDirectory, resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, type PerPathResult, summarize } from './batch.ts';
@@ -285,7 +285,7 @@ async function handleDelete(
   );
 
   const out = new Array<DeletePerPathResult | undefined>(paths.length).fill(undefined);
-  const plans: { plan: DeletePlan; index: number }[] = [];
+  let plans: { plan: DeletePlan; index: number }[] = [];
   const confirmationState = ctx.requestState?.<PendingState>();
   const previouslyPendingPaths = new Set(
     confirmationState?.op === 'delete' ? confirmationState.paths : [],
@@ -316,6 +316,34 @@ async function handleDelete(
       path: paths[index] ?? '(unknown)',
       error: { code: ErrorCode.UNKNOWN, message: error.message },
     };
+  }
+
+  // One entry inside another would race the other's recursive delete, and
+  // accepting the parent would remove a child whose own prompt was skipped.
+  // Refuse both sides before any prompt or mutation.
+  const nested = new Set<number>();
+  for (const [i, a] of plans.entries()) {
+    for (const b of plans.slice(i + 1)) {
+      if (
+        isPathInsideDirectory(a.plan.validPath, b.plan.validPath) ||
+        isPathInsideDirectory(b.plan.validPath, a.plan.validPath)
+      ) {
+        nested.add(a.index).add(b.index);
+      }
+    }
+  }
+  if (nested.size > 0) {
+    for (const { plan, index } of plans) {
+      if (!nested.has(index)) continue;
+      out[index] = {
+        path: plan.validPath,
+        error: Problem.invalidInput(
+          'Delete refused: this path contains, or is inside, another path in the batch. Delete the outer one alone.',
+          { path: plan.validPath },
+        ),
+      };
+    }
+    plans = plans.filter(({ index }) => !nested.has(index));
   }
 
   // Pending set: recursive + non-empty directories, sorted and de-duplicated.
