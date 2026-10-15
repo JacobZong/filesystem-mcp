@@ -222,7 +222,8 @@ reads, writes, moves and deletes, below a root only: the root itself must be
 spelled as configured. A write lands on the entry it finds, so `create` asks
 before replacing it, as for any existing file. When two entries match, the
 call fails with `INVALID_INPUT` (`Ambiguous Unicode path component`) and shows
-each spelling with `\u` escapes; send the exact name. A name of plain ASCII
+each spelling with `\u` escapes; send the exact name. A match the denylist
+covers is refused as that file is, and never shown. A name of plain ASCII
 with no space is never matched this way.
 
 **Result paths read back as given.** `search_text`, `find_files` and

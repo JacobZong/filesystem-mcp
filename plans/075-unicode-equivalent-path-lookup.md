@@ -87,7 +87,9 @@ These are settled. Do not revisit them during execution.
    the same key is used. Two or more fail with `INVALID_INPUT`
    `Ambiguous Unicode path component "<name>": N entries in <dir> match it (<spellings>)`.
    Each spelling there is printed with `\uXXXX` escapes, so the model can send the
-   exact name as a JSON string. No match ends the lookup: that component and
+   exact name as a JSON string. A match the denylist covers is refused with
+   the denylist's `ACCESS_DENIED` first, so no hidden name is printed. No
+   match ends the lookup: that component and
    the rest stay as typed, so `create`/`mkdir` still make them.
 4. **A spelling, then the existing checks.** The lookup returns a path
    (on-disk names, unresolved), never a verdict. Before reading a directory

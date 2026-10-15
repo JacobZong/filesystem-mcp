@@ -270,6 +270,10 @@ describe('Security (P0)', () => {
       assert.strictEqual(nbspRange.isSensitive('/w/b.txt'), true, 'range up to U+00A0');
       const singletonRange = new SensitiveMatcher(['[z-\u037e].txt']);
       assert.strictEqual(singletonRange.isSensitive('/w/\u00e9.txt'), true, 'range up to U+037E');
+      // A '[' with no closer in its own segment is a literal; the class is the
+      // one the next segment opens, so its range stays as typed too.
+      const segmentClass = new SensitiveMatcher(['[/[]a-\u00a0]']);
+      assert.strictEqual(segmentClass.isSensitive('/w/[/b'), true, 'class in a later segment');
       // An allow entry still relieves every spelling it relieved before folding.
       const anyChar = new SensitiveMatcher(['*.key'], ['cafe?.key']);
       assert.strictEqual(

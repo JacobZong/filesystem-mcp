@@ -186,6 +186,22 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       );
     });
 
+    it('never lists denylisted names in an ambiguity error', async () => {
+      // A class is matched as typed, so this pattern covers both stored names
+      // but not the requested U+0020 spelling.
+      await writeFile(join(root, NBSP_NAME), 'nbsp');
+      await writeFile(join(root, NNBSP_NAME), 'nnbsp');
+      const denying = await withEnv({ FS_DENYLIST: 'a[\u00a0\u202f]b.txt' }, () =>
+        makeGuard([root]),
+      );
+      assert.strictEqual(denying.isSensitive(join(root, ASCII_NAME)), false);
+      await assert.rejects(denying.validateExistingPath(join(root, ASCII_NAME)), (error) => {
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED, /denylist/)(error);
+        assert.doesNotMatch((error as Error).message, /\\u00a0|\\u202f|\u00a0|\u202f/);
+        return true;
+      });
+    });
+
     it('an operator pattern denies every Unicode spelling of its name', async (t) => {
       if (!(await isNormalizationSensitive(root))) {
         t.skip('filesystem is normalization-insensitive');

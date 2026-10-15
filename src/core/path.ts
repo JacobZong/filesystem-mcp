@@ -997,6 +997,9 @@ export class PathGuard {
     if (entries.includes(name)) return name;
     const key = unicodeMatchKey(name);
     const matches = entries.filter((entry) => unicodeMatchKey(entry) === key);
+    // A match the denylist covers is refused here, as a lone one would be by
+    // the caller, so the ambiguity error below never lists a hidden name.
+    for (const match of matches) this.assertNotSensitiveFile(join(realDir, match), requestedPath);
     if (matches.length > 1) {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
