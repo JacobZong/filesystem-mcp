@@ -50,7 +50,7 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
 - **`read` can return any binary file.** With `binary: true`, a full read of a
   file that is not text, an image or audio (a PDF, zip, sqlite database, font,
   …) returns it as an embedded `resource` block with its MIME type and base64
-  bytes, instead of `Binary file detected.`. The size limit is unchanged. Line
+  bytes, instead of refusing it as binary. The size limit is unchanged. Line
   ranges of a binary file are still refused, and without the flag the refusal
   now names it
   ([#98](https://github.com/j0hanz/filesystem-mcp/issues/98)).
