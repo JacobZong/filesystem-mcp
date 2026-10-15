@@ -174,6 +174,10 @@ describe('Unicode-equivalent path lookup (#101)', () => {
         denying.validatePathForWrite(join(root, 'secret notes.txt')),
         fsErrorMatcher(ErrorCode.ACCESS_DENIED, /denylist/),
       );
+      await assert.rejects(
+        denying.validatePathForDelete(join(root, 'secret notes.txt')),
+        fsErrorMatcher(ErrorCode.ACCESS_DENIED, /denylist/),
+      );
     });
 
     it('writes into the existing NFD directory, not a new NFC sibling', async (t) => {
@@ -191,9 +195,49 @@ describe('Unicode-equivalent path lookup (#101)', () => {
       const target = await guard.validatePathForWrite(join(root, ASCII_SHOT));
       assert.strictEqual(target, join(root, NNBSP_SHOT));
     });
+
+    it('deletes through an equivalent spelling', async () => {
+      await writeFile(join(root, NNBSP_SHOT), 'shot');
+      const target = await guard.validatePathForDelete(join(root, ASCII_SHOT));
+      assert.strictEqual(target, join(root, NNBSP_SHOT));
+    });
   });
 
   describe('through the tools', () => {
+    it('read, create and move resolve the equivalent spelling', async () => {
+      await writeFile(join(root, NNBSP_SHOT), 'shot');
+      const pair = await createTestClientPair([root]);
+      try {
+        const read = await pair.client.callTool({
+          name: 'read',
+          arguments: { path: join(root, ASCII_SHOT) },
+        });
+        assert.notStrictEqual(read.isError, true, firstTextBlock(read).text);
+        assert.match(firstTextBlock(read).text ?? '', /shot/);
+
+        const create = await pair.client.callTool({
+          name: 'create',
+          arguments: {
+            files: [{ path: join(root, ASCII_SHOT), content: 'again', overwrite: true }],
+          },
+        });
+        assert.notStrictEqual(create.isError, true, firstTextBlock(create).text);
+        assert.deepStrictEqual(await readdir(root), [NNBSP_SHOT]);
+        assert.strictEqual(await readFile(join(root, NNBSP_SHOT), 'utf8'), 'again');
+
+        const move = await pair.client.callTool({
+          name: 'move',
+          arguments: {
+            moves: [{ source: join(root, ASCII_SHOT), destination: join(root, 'b.txt') }],
+          },
+        });
+        assert.notStrictEqual(move.isError, true, firstTextBlock(move).text);
+        assert.deepStrictEqual(await readdir(root), ['b.txt']);
+      } finally {
+        await pair.close();
+      }
+    });
+
     it('create without overwrite asks before replacing the equivalent file', async () => {
       await writeFile(join(root, NNBSP_SHOT), 'shot');
       const pair = await createTestClientPair([root]);

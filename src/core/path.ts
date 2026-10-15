@@ -1060,7 +1060,25 @@ export class PathGuard {
       );
     }
 
-    const parent = dirname(normalizedRequested);
+    // Probe the final component before the parent, so a target that is not on
+    // disk as typed can be re-spelled (#101) before either is checked.
+    let target = normalizedRequested;
+    let stats: Stats | undefined;
+    try {
+      stats = await lstat(target);
+    } catch (error) {
+      // The link itself is deleted, so the last component stays unresolved.
+      const respelled = isNotFoundErrno(error)
+        ? await this.respellMissing(target, allowedDirs, accessDeniedHint, requestedPath, false)
+        : undefined;
+      if (respelled !== undefined) {
+        this.assertNotSensitiveFile(respelled, requestedPath);
+        target = respelled;
+        stats = await lstat(target).catch(() => undefined);
+      }
+    }
+
+    const parent = dirname(target);
     let realParent: string;
     try {
       realParent = await realpath(parent);
@@ -1078,36 +1096,33 @@ export class PathGuard {
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
 
-    // Resolve the final component when it exists. For deletion, we ONLY
-    // block if the real target is outside the sandbox IF the target is
-    // NOT a symlink. Deleting a symlink is safe even if it points outside.
-    try {
-      const stats = await lstat(normalizedRequested);
-      if (stats.isSymbolicLink()) {
-        // Symlink: check link sensitivity but don't resolve target.
-        // The parent check above ensures the link itself is in an allowed root.
-        this.assertNotSensitiveFile(normalizedRequested, requestedPath);
-        return normalizedRequested;
-      }
-
-      // Not a symlink: resolve to catch path escapes (e.g. /allowed/dir/../../etc)
-      // and block sensitive files.
-      const realTarget = normalizePath(await realpath(normalizedRequested));
-      if (!isPathWithinDirectories(realTarget, allowedDirs)) {
-        this.throwAccessDenied(requestedPath, accessDeniedHint);
-      }
-      this.assertNotSensitiveFile(realTarget, requestedPath);
-      return realTarget;
-    } catch (error) {
-      // A denial raised inside this block (out-of-root real target, or a
-      // sensitive file reached through a symlinked parent) must propagate.
-      // Only a probe failure — ENOENT and friends — falls through to the
-      // parent check, which is sufficient for a path that does not exist.
-      if (isFsError(error)) {
-        throw error;
-      }
+    // A target that does not exist needs only the parent check above.
+    if (stats === undefined) return target;
+    // For deletion, we ONLY block if the real target is outside the sandbox
+    // IF the target is NOT a symlink. Deleting a symlink is safe even if it
+    // points outside.
+    if (stats.isSymbolicLink()) {
+      // Symlink: check link sensitivity but don't resolve target.
+      // The parent check above ensures the link itself is in an allowed root.
+      this.assertNotSensitiveFile(target, requestedPath);
+      return target;
     }
-    return normalizedRequested;
+
+    // Not a symlink: resolve to catch path escapes (e.g. /allowed/dir/../../etc)
+    // and block sensitive files. A probe failure (ENOENT and friends) falls
+    // back to the parent check, which is sufficient for a path that does not
+    // exist.
+    let realTarget: string;
+    try {
+      realTarget = normalizePath(await realpath(target));
+    } catch {
+      return target;
+    }
+    if (!isPathWithinDirectories(realTarget, allowedDirs)) {
+      this.throwAccessDenied(requestedPath, accessDeniedHint);
+    }
+    this.assertNotSensitiveFile(realTarget, requestedPath);
+    return realTarget;
   }
 
   async recomputeAllowedDirectories(): Promise<void> {
