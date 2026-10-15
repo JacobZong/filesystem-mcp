@@ -10,6 +10,7 @@ import {
   createTestClientPair,
   createTestRoot,
   firstTextBlock,
+  trySymlink,
   withEnv,
   writeTestFile,
 } from './helpers.ts';
@@ -194,5 +195,69 @@ describe('Data-loss guards', () => {
         await cleanupTestRoot(outside);
       }
     });
+  });
+
+  it('GUARD-006: a broken symlink to .env or a two-hop symlink escape is blocked by PathGuard', async (t) => {
+    const outside = await createTestRoot();
+    try {
+      const envLink = join(root, 'g006-env-link');
+      if (
+        !(await trySymlink(
+          join(root, '.env'),
+          envLink,
+          () => t.skip('symlinks not permitted'),
+          'file',
+        ))
+      ) {
+        return;
+      }
+      const guard = new PathGuard({ cliAllowedDirs: [root] });
+      await guard.recomputeAllowedDirectories();
+      await assert.rejects(guard.validatePathForWrite(envLink), /Sensitive file/);
+
+      const escapeLink = join(root, 'g006-escape');
+      const hopLink = join(root, 'g006-hop');
+      await trySymlink(outside, escapeLink, () => {});
+      await trySymlink(join(escapeLink, 'missing.txt'), hopLink, () => {}, 'file');
+      await assert.rejects(guard.validateExistingPath(hopLink), /Outside allowed directories/);
+    } finally {
+      await cleanupTestRoot(outside);
+    }
+  });
+
+  it('GUARD-007: precheckAccess skips sensitive files and two move entries with overlapping sources fail closed', async () => {
+    const outside = await createTestRoot();
+    const h = await createTestClientPair([root]);
+    try {
+      const guard = new PathGuard({ cliAllowedDirs: [root] });
+      await guard.recomputeAllowedDirectories();
+      assert.deepStrictEqual(await guard.precheckAccess([join(outside, '.env')]), []);
+
+      const src = await writeTestFile(root, 'g007/src.txt', 'hello');
+      const d1 = join(root, 'g007', 'd1.txt');
+      const d2 = join(root, 'g007', 'd2.txt');
+      const moved = await h.client.callTool({
+        name: 'move',
+        arguments: {
+          moves: [
+            { source: src, destination: d1 },
+            { source: src, destination: d2 },
+          ],
+        },
+      });
+      assert.strictEqual(moved.isError, true);
+      assert.strictEqual(await exists(src), true, 'overlapping source move leaves source intact');
+
+      const dupDel = await writeTestFile(root, 'g007/del.txt', 'bye');
+      const deleted = await h.client.callTool({
+        name: 'delete',
+        arguments: { paths: [dupDel, join(root, 'g007', '.', 'del.txt')] },
+      });
+      assert.notStrictEqual(deleted.isError, true);
+      assert.strictEqual((deleted._meta as { summary?: { failed?: number } }).summary?.failed, 0);
+    } finally {
+      await h.close();
+      await cleanupTestRoot(outside);
+    }
   });
 });

@@ -214,6 +214,10 @@ export class ResourceStore {
   keys(): string[] {
     return this.#entries.keys();
   }
+
+  clear(): void {
+    this.#entries.clear();
+  }
 }
 
 export interface JsonResourceResult {

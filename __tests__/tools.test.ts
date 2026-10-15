@@ -380,51 +380,72 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const token = 'example-sentinel-9f3c1e';
     const dir = join(tmpDir, 'boundary_walk');
     const envFile = await writeTestFile(tmpDir, 'boundary_walk/.env', `SECRET=${token}\n`);
+    await writeTestFile(tmpDir, 'boundary_walk/vault.key/inner.txt', 'inner\n');
     const plain = await writeTestFile(tmpDir, 'boundary_walk/plain.txt', `note ${token}\n`);
 
     const search = await harness.client.callTool({
       name: 'search_text',
       arguments: { path: dir, searchPattern: token, includeHidden: true },
     });
-    const matches = (search._meta as { matches?: { file: string }[] }).matches ?? [];
+    const searchMeta = search._meta as {
+      matches?: { file: string }[];
+      skippedInaccessible?: number;
+    };
     assert.deepStrictEqual(
-      matches.map((m) => m.file),
+      (searchMeta.matches ?? []).map((m) => m.file),
       ['boundary_walk/plain.txt'],
       'search_text must not match inside .env',
     );
+    assert.strictEqual(searchMeta.skippedInaccessible, undefined);
+    assert.doesNotMatch(firstTextBlock(search).text ?? '', /inaccessible|\.env/);
 
     const found = await harness.client.callTool({
       name: 'find_files',
-      arguments: { path: dir, pattern: '**/*', includeHidden: true },
+      arguments: { path: dir, pattern: '*.txt', includeHidden: true },
     });
-    const paths =
-      (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
+    const foundMeta = found._meta as {
+      results?: { path: string }[];
+      skippedInaccessible?: number;
+    };
+    const paths = foundMeta.results?.map((r) => r.path) ?? [];
     assert.ok(paths.includes('boundary_walk/plain.txt'));
     assert.ok(
       !paths.some((path) => path.endsWith('.env')),
       `find_files must not list .env: ${paths.join(',')}`,
     );
+    assert.strictEqual(foundMeta.skippedInaccessible, undefined);
+    assert.doesNotMatch(firstTextBlock(found).text ?? '', /inaccessible|\.env/);
 
     const listed = await harness.client.callTool({
       name: 'list',
-      arguments: { path: dir, includeHidden: true },
+      arguments: { path: dir, maxDepth: 2, includeHidden: true },
     });
     const names =
       (listed._meta as { entries?: { name: string }[] }).entries?.map((e) => e.name) ?? [];
-    assert.ok(names.includes('plain.txt'));
-    assert.ok(!names.includes('.env'), `list must not show .env: ${names.join(',')}`);
+    assert.deepStrictEqual(names, ['plain.txt']);
+    assert.doesNotMatch(firstTextBlock(listed).text ?? '', /\.env|vault\.key|inner\.txt/);
 
     const replaced = await harness.client.callTool({
       name: 'replace_text',
       arguments: { path: dir, searchPattern: token, replacement: 'REDACTED', includeHidden: true },
     });
     assert.notStrictEqual(replaced.isError, true);
+    const replacedMeta = replaced._meta as { summary?: { failed?: number } };
+    assert.strictEqual(replacedMeta.summary?.failed, 0);
+    assert.doesNotMatch(firstTextBlock(replaced).text ?? '', /failed|\.env/);
     assert.strictEqual(
       await readFile(envFile, 'utf-8'),
       `SECRET=${token}\n`,
       '.env must be untouched',
     );
     assert.strictEqual(await readFile(plain, 'utf-8'), 'note REDACTED\n');
+
+    // A second replace_text that matches 0 files must still succeed cleanly, not fail on .env.
+    const noMatchReplace = await harness.client.callTool({
+      name: 'replace_text',
+      arguments: { path: dir, searchPattern: token, replacement: 'REDACTED', includeHidden: true },
+    });
+    assert.notStrictEqual(noMatchReplace.isError, true);
 
     await assert.rejects(
       harness.client.readResource({ uri: buildFileResourceUri(envFile) }),

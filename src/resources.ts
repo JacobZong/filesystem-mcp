@@ -266,9 +266,14 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
     },
 
     subscribe(uri, notify) {
-      // Already subscribed on this connection: the watcher is live and the sink
-      // is registered, so this is a no-op success rather than a second lease.
-      if (leasedUris.has(uri)) return undefined;
+      // Already subscribed on this connection with a live watcher: this is a
+      // no-op success rather than a second lease. If the OS watcher errored and
+      // was dropped, release the dead lease and re-acquire.
+      if (leasedUris.has(uri)) {
+        if (registry.hasWatcher(uri)) return undefined;
+        leasedUris.delete(uri);
+        registry.release(uri);
+      }
       // A subscribe for this URI is mid-acquire: share its outcome instead of
       // taking a second lease the lease set cannot represent.
       const pending = inflight.get(uri);
@@ -479,11 +484,17 @@ function wrapRead(contract: ResourceContract, transport: ResourceRegistrationOpt
  * matched `filesystem-mcp://result/…` — and any other scheme — to the file
  * template.
  */
+const TEMPLATE_MATCHERS = new Map<string, UriTemplate>();
+
 function owns(contract: ResourceContract, uri: string): boolean {
   if (contract.uri !== undefined) return uri === contract.uri;
-  return (
-    contract.uriTemplate !== undefined && new UriTemplate(contract.uriTemplate).match(uri) !== null
-  );
+  if (contract.uriTemplate === undefined) return false;
+  let matcher = TEMPLATE_MATCHERS.get(contract.uriTemplate);
+  if (!matcher) {
+    matcher = new UriTemplate(contract.uriTemplate);
+    TEMPLATE_MATCHERS.set(contract.uriTemplate, matcher);
+  }
+  return matcher.match(uri) !== null;
 }
 
 export function registerResources(deps: ResourceRegistrarDeps): { dispose(): void } {
@@ -534,10 +545,6 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
     // (which only ends a lease) removed none of them. Subscribe is per-URI on
     // the wire, so the sink must be too — this makes it idempotent.
     const notifyUpdated = (updatedUri: string): void => {
-      if (deps.notifier) {
-        deps.notifier.resourceUpdated(updatedUri);
-        return;
-      }
       voidSend(server.server.sendResourceUpdated({ uri: updatedUri }), 'resource update', {
         uri: updatedUri,
       });

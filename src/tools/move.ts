@@ -347,6 +347,7 @@ async function runTransfers(
   for (const [i, a] of ready.entries()) {
     for (const b of ready.slice(i + 1)) {
       if (
+        (op === 'move' && touches(a.resolvedSource, b.resolvedSource)) ||
         touches(a.resolvedSource, b.validDest) ||
         touches(b.resolvedSource, a.validDest) ||
         touches(a.validDest, b.validDest)
@@ -476,9 +477,20 @@ async function validateTransferSource(
   signal: AbortSignal | undefined,
 ): Promise<TransferSource> {
   try {
+    if (op === 'move') {
+      const opSource = await fs.pathGuard.validatePathForDelete(source);
+      try {
+        const { stats, validPath: realSource } = await fs.stat(source, { signal });
+        return { realSource, opSource, isDirectory: stats.isDirectory() };
+      } catch (err) {
+        if (!isFsError(err) || err.code !== ErrorCode.NOT_FOUND) throw err;
+        const { stats } = await fs.lstat(source, { signal });
+        if (!stats.isSymbolicLink()) throw err;
+        return { realSource: opSource, opSource, isDirectory: false };
+      }
+    }
     const { stats, validPath: realSource } = await fs.stat(source, { signal });
-    const opSource = op === 'move' ? await fs.pathGuard.validatePathForDelete(source) : realSource;
-    return { realSource, opSource, isDirectory: stats.isDirectory() };
+    return { realSource, opSource: realSource, isDirectory: stats.isDirectory() };
   } catch (error) {
     if (isFsError(error) || signal?.aborted) throw error;
     throw new FsError(ErrorCode.ACCESS_DENIED, `${VERB[op]} failed for ${source}`, source);

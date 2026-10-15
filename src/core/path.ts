@@ -382,10 +382,16 @@ export class PathGuard {
       }
       // Validation refuses it for its shape whatever is granted, so asking the
       // user to grant the working directory it resolves under is pointless.
-      if (isUnresolvableDrivePath(requested)) {
+      if (
+        isUnresolvableDrivePath(requested) ||
+        (IS_WINDOWS && getReservedDeviceNameForPath(requested) !== undefined)
+      ) {
         continue;
       }
       const normalized = normalizePath(requested);
+      if (this.isSensitive(requested) || this.isSensitive(normalized)) {
+        continue;
+      }
       if (isPathWithinDirectories(normalized, allowedDirs)) {
         continue;
       }
@@ -397,7 +403,7 @@ export class PathGuard {
       if (await this.isUnsafeGrantTarget(targetDir)) {
         continue;
       }
-      if (grantDirs.includes(targetDir)) {
+      if (grantDirs.some((dir) => isSamePath(dir, targetDir))) {
         continue;
       }
       if (!(await this.isWithinBoundary(targetDir))) {
@@ -860,6 +866,7 @@ export class PathGuard {
   ): Promise<{ realAncestor: string; resolvedTarget: string }> {
     const missingSegments: string[] = [];
     let current = currentPath;
+    let hops = 0;
     for (;;) {
       try {
         const realAncestor = normalizePath(await realpath(current));
@@ -872,16 +879,33 @@ export class PathGuard {
         try {
           const stats = await lstat(current);
           if (stats.isSymbolicLink()) {
-            const target = await readlink(current);
-            const resolvedTarget = isAbsolute(target) ? target : resolve(dirname(current), target);
-            const normalizedTarget = normalizePath(resolvedTarget);
+            if (++hops > 40) {
+              throw new FsError(
+                ErrorCode.SYMLINK_NOT_ALLOWED,
+                'Too many symbolic links encountered',
+                requestedPath,
+              );
+            }
             const allowedDirs = this.getAllowedDirectories();
+            const linkParent = normalizePath(await realpath(dirname(current)));
+            if (!isPathWithinDirectories(linkParent, allowedDirs)) {
+              this.throwAccessDenied(requestedPath);
+            }
+            const target = await readlink(current);
+            const resolvedTarget = isAbsolute(target) ? target : resolve(linkParent, target);
+            const normalizedTarget = normalizePath(resolvedTarget);
             if (!isPathWithinDirectories(normalizedTarget, allowedDirs)) {
               this.throwAccessDenied(requestedPath);
             }
+            current =
+              missingSegments.length === 0
+                ? normalizedTarget
+                : normalizePath(join(normalizedTarget, ...missingSegments.reverse()));
+            missingSegments.length = 0;
+            continue;
           }
         } catch (lstatErr) {
-          if (isFsError(lstatErr) && lstatErr.code === ErrorCode.ACCESS_DENIED) {
+          if (isFsError(lstatErr)) {
             throw lstatErr;
           }
           // ENOENT is expected during ancestor walk — the entry simply doesn't exist.

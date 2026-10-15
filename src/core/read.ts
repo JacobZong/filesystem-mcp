@@ -58,6 +58,7 @@ interface PartialReadResult {
 export interface ReadFileResult {
   path: string;
   content: string;
+  fileSize?: number;
   totalLines?: number;
   readMode: ReadSpec['kind'];
   modified: string;
@@ -277,9 +278,15 @@ async function readRangeContent(
         break;
       }
 
+      const lineBytes = Buffer.byteLength(line, 'utf-8') + newlineBytes;
+      if (lines.length > 0 && estimatedBytes + lineBytes > options.maxSize) {
+        hasMoreLines = true;
+        break;
+      }
+
       lines.push(line);
 
-      estimatedBytes += Buffer.byteLength(line, 'utf-8') + newlineBytes;
+      estimatedBytes += lineBytes;
       if (estimatedBytes > options.maxSize) {
         hasMoreLines = await peekHasMore(iterator);
         break;
@@ -478,6 +485,7 @@ async function readByMode(
         path: validPath,
         readMode: 'full',
         modified: stats.mtime.toISOString(),
+        fileSize: stats.size,
         content,
         totalLines,
         linesRead: totalLines,
@@ -489,6 +497,7 @@ async function readByMode(
         path: validPath,
         readMode: 'head',
         modified: stats.mtime.toISOString(),
+        fileSize: stats.size,
         head: spec.lines,
         ...(await readRangeContent(handle, 1, spec.lines, options, filePath)),
       };
@@ -497,6 +506,7 @@ async function readByMode(
         path: validPath,
         readMode: 'range',
         modified: stats.mtime.toISOString(),
+        fileSize: stats.size,
         startLine: spec.start,
         ...(spec.end !== undefined ? { endLine: spec.end } : {}),
         ...(await readRangeContent(handle, spec.start, spec.end, options, filePath)),
@@ -506,6 +516,7 @@ async function readByMode(
         path: validPath,
         readMode: 'tail',
         modified: stats.mtime.toISOString(),
+        fileSize: stats.size,
         tail: spec.lines,
         ...(await readTailContent(handle, spec.lines, options, validPath)),
       };

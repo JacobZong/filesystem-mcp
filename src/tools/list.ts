@@ -3,11 +3,11 @@ import { basename, posix } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { withAbort } from '../core/concurrency.ts';
+import { processEntriesConcurrently, withAbort } from '../core/concurrency.ts';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
-import { ErrorCode, rethrowIfAborted } from '../core/errors.ts';
+import { ErrorCode, normalizeUnknownError, rethrowIfAborted } from '../core/errors.ts';
 import { formatByteSize, formatCount, pageTrailer } from '../core/fmt.ts';
-import { globEntries } from '../core/glob.ts';
+import { globEntries, type GlobEntry } from '../core/glob.ts';
 import { type EntryType, resolveEntryType, toPosixRelative } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import {
@@ -21,7 +21,12 @@ import {
 } from '../core/schema.ts';
 import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
-import { DEFAULT_TREE_ENTRIES, MAX_LIST_ENTRIES, MAX_TREE_DEPTH } from '../core/util.ts';
+import {
+  DEFAULT_TREE_ENTRIES,
+  MAX_LIST_ENTRIES,
+  MAX_TREE_DEPTH,
+  PARALLEL_CONCURRENCY,
+} from '../core/util.ts';
 import { defineTool } from './define.ts';
 
 interface CollectedEntry {
@@ -87,65 +92,79 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
   let totalFiles = 0;
   let totalDirectories = 0;
   let totalBytes = 0;
+  let fatalError: Error | undefined;
   const ceiling = options.pathGuard.allowedRootContaining(rootPath);
 
-  for await (const entry of globEntries({
-    cwd: rootPath,
-    pattern: '**/*',
-    skipIgnored: !options.includeIgnored,
-    ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
-    signal: options.signal,
-    includeHidden: options.includeHidden,
-    baseNameMatch: false,
-    // ListInputSchema.maxDepth is 1-based (1 = top-level only); the shared
-    // globEntries primitive is now 0-based, so subtract one here. options.maxDepth
-    // is guaranteed >= 1 by its PositiveInt schema, so this never underflows.
-    maxDepth: options.maxDepth - 1,
-    onlyFiles: false,
-  })) {
-    options.signal.throwIfAborted();
-    scanned++;
-    options.onProgress({ current: scanned });
+  await processEntriesConcurrently<GlobEntry>(
+    globEntries({
+      cwd: rootPath,
+      pattern: '**/*',
+      skipIgnored: !options.includeIgnored,
+      ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
+      signal: options.signal,
+      includeHidden: options.includeHidden,
+      baseNameMatch: false,
+      // ListInputSchema.maxDepth is 1-based (1 = top-level only); the shared
+      // globEntries primitive is now 0-based, so subtract one here. options.maxDepth
+      // is guaranteed >= 1 by its PositiveInt schema, so this never underflows.
+      maxDepth: options.maxDepth - 1,
+      onlyFiles: false,
+    }),
+    {
+      signal: options.signal,
+      concurrency: PARALLEL_CONCURRENCY,
+      onEntry: () => {
+        scanned++;
+        options.onProgress({ current: scanned });
+      },
+      onError: (_entryPath, err) => {
+        fatalError ??= normalizeUnknownError(err);
+      },
+      runEntry: async (_entryPath, entry) => {
+        const entryType: EntryType = resolveEntryType(entry.dirent);
+        const relPath = toPosixRelative(rootPath, entry.path);
+        const name = basename(relPath);
+        for (let dir = posix.dirname(relPath); dir !== '.'; dir = posix.dirname(dir)) {
+          if (options.pathGuard.isSensitive(`${rootPath}/${dir}`)) return;
+        }
 
-    const entryType: EntryType = resolveEntryType(entry.dirent);
-    const relPath = toPosixRelative(rootPath, entry.path);
-    const name = basename(relPath);
+        const accessible = await options.pathGuard.isEntryAccessible(entry.path);
+        if (!accessible) return;
 
-    const accessible = await options.pathGuard.isEntryAccessible(entry.path);
-    if (!accessible) continue;
+        let size: number | undefined;
+        if (wantSizes && entryType === 'file') {
+          try {
+            size = (await withAbort(stat(entry.path), options.signal)).size;
+          } catch (error) {
+            rethrowIfAborted(error);
+            // A file can vanish between the walk and the stat; it keeps its place, without a size.
+          }
+        }
 
-    let size: number | undefined;
-    if (wantSizes && entryType === 'file') {
-      try {
-        size = (await withAbort(stat(entry.path), options.signal)).size;
-      } catch (error) {
-        rethrowIfAborted(error);
-        // A file can vanish between the walk and the stat; it keeps its place, without a size.
-      }
-    }
+        totalEntries++;
+        if (entryType === 'directory') {
+          totalDirectories++;
+        } else if (entryType === 'file') {
+          totalFiles++;
+          if (size !== undefined) totalBytes += size;
+        }
 
-    totalEntries++;
-    if (entryType === 'directory') {
-      totalDirectories++;
-    } else {
-      totalFiles++;
-      if (size !== undefined) totalBytes += size;
-    }
+        entries.push({
+          name,
+          relativePath: relPath,
+          type: entryType,
+          ...(size !== undefined ? { size } : {}),
+        });
+      },
+    },
+  );
 
-    const collectedEntry: CollectedEntry = {
-      name,
-      relativePath: relPath,
-      type: entryType,
-      ...(size !== undefined ? { size } : {}),
-    };
-
-    if (entries.length < options.entryCap) {
-      entries.push(collectedEntry);
-    }
-  }
-
+  if (fatalError !== undefined) throw fatalError;
   options.signal.throwIfAborted();
   entries.sort(entryComparator(options.sortBy));
+  if (entries.length > options.entryCap) {
+    entries.length = options.entryCap;
+  }
 
   return {
     entries,
@@ -359,24 +378,28 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
     // The tree is what the model reads, so position and the full-list URI ride
     // the text too — paging needs no second lookup. `pageTrailer` is the one
     // owner of that line, and it owes it on the last page as much as the first.
+    const sizesLine =
+      paged.metadata.totalBytes !== undefined && args.includeSizes
+        ? summaryLine(paged.metadata, paged.metadata.totalBytes)
+        : '';
+    const trailer = pageTrailer({
+      offset: paged.offset,
+      shown: structured.entryCount,
+      total: structured.totalEntries,
+      noun: 'entries',
+      tool: 'list',
+      nextCursor: structured.nextCursor,
+      nextArgs: args,
+      ...(structured.totalEntries > MAX_LIST_ENTRIES ? { stoppedReason: 'maxResults' } : {}),
+    });
     const text =
       renderMarkdown(
         treeHeader(ctx.fs.pathGuard, paged.metadata.path),
         [...paged.page],
         renderOpts,
       ) +
-      (paged.metadata.totalBytes !== undefined && args.includeSizes
-        ? summaryLine(paged.metadata, paged.metadata.totalBytes)
-        : '') +
-      pageTrailer({
-        offset: paged.offset,
-        shown: structured.entryCount,
-        total: structured.totalEntries,
-        noun: 'entries',
-        tool: 'list',
-        nextCursor: structured.nextCursor,
-        nextArgs: args,
-      }) +
+      sizesLine +
+      (sizesLine && trailer ? trailer.slice(1) : trailer) +
       (structured.resourceUri !== undefined ? `\nfull tree at ${structured.resourceUri}` : '');
     return {
       structured,

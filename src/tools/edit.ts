@@ -8,7 +8,7 @@ import { diffStatsFromPatch, unifiedPatch } from '../core/diff.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildWrittenFileMeta, type WrittenFileMeta } from '../core/file-uri.ts';
 import { joinRoster, truncateProgressPattern } from '../core/fmt.ts';
-import { isSamePath } from '../core/path-utils.ts';
+import { isEquivalentPath } from '../core/path-utils.ts';
 import {
   defaultFalseBoolean,
   mapSingleOrBatchPaths,
@@ -102,7 +102,7 @@ const EditFileInputSchema = z
     // lost while both report success. One entry per file.
     const files = value.files ?? [];
     for (const [index, file] of files.entries()) {
-      const first = files.findIndex((other) => isSamePath(other.path, file.path));
+      const first = files.findIndex((other) => isEquivalentPath(other.path, file.path));
       if (first < index) {
         ctx.addIssue({
           code: 'custom',
@@ -381,9 +381,14 @@ async function editOnce(
   // writer it may reflect that writer's mtime while `size`/content below come from
   // this edit's atomic write. The file content itself is always consistent. A dry
   // run wrote nothing, so it reports the time of the preview.
-  const modified = options.dryRun
-    ? new Date().toISOString()
-    : (await ctx.fs.stat(filePath, { signal: ctx.signal })).stats.mtime.toISOString();
+  let modified = new Date().toISOString();
+  if (!options.dryRun) {
+    try {
+      modified = (await ctx.fs.stat(validPath)).stats.mtime.toISOString();
+    } catch {
+      /* post-commit metadata only */
+    }
+  }
   const meta = buildWrittenFileMeta({
     validPath,
     content: editResult.content,

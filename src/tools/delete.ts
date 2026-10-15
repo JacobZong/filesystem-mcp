@@ -23,7 +23,7 @@ import {
   type PendingState,
   readPendingVerdict,
 } from '../core/input-required.ts';
-import { resolveEntryType } from '../core/path-utils.ts';
+import { isEquivalentPath, resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, type PerPathResult, summarize } from './batch.ts';
@@ -272,7 +272,9 @@ async function handleDelete(
 ): Promise<DeleteOutput | InputRequiredResult> {
   // Duplicate paths collapse: results are keyed by path, so a repeated entry
   // would emit two rows for one deletion and inflate `summary.total`.
-  const paths = [...new Set(args.paths)];
+  const paths = args.paths.filter(
+    (p, i) => args.paths.findIndex((other) => isEquivalentPath(other, p)) === i,
+  );
 
   // Phase 1 (no mutation): plan every path.
   const planned = await processInParallel(

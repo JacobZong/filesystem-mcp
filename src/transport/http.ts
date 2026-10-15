@@ -357,6 +357,7 @@ export async function startHttpServer(
   const teardown = (): Promise<void> => {
     sharedRegistry.destroy();
     sharedPageStore.clear();
+    sharedStore.clear();
     return modernHandler.close().catch((err: unknown) => {
       Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));
     });

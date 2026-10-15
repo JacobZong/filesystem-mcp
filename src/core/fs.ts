@@ -18,7 +18,7 @@ import {
   unlink as fsUnlink,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -57,30 +57,6 @@ const DIR_NOFOLLOW = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW;
 const COUNT_THROUGH_FD = process.platform === 'linux' && existsSync('/proc/self/fd');
 
 // ─── Domain primitives ────────────────────────────────────────────────────────
-
-/**
- * validatePathForWrite + symlink resolution: a write aimed at a link must land
- * on its revalidated target, not create a new file beside the link. ENOENT is
- * the normal new-file case, so it falls through with the original path.
- */
-async function resolveForWrite(pathGuard: PathGuard, filePath: string): Promise<string> {
-  let validPath = await pathGuard.validatePathForWrite(filePath);
-
-  try {
-    const stats = await fsLstat(validPath);
-    if (stats.isSymbolicLink()) {
-      const target = await fsReadlink(validPath);
-      const resolvedTarget = isAbsolute(target) ? target : resolve(dirname(validPath), target);
-      validPath = await pathGuard.validatePathForWrite(resolvedTarget);
-    }
-  } catch (error) {
-    if (!isNotFoundErrno(error)) {
-      throw error;
-    }
-  }
-
-  return validPath;
-}
 
 const CHAR_LF = 10;
 
@@ -190,7 +166,7 @@ export class GuardedFileSystem {
    * do not take the lock, so `fn` may call them.
    */
   async lockForWrite<T>(filePath: string, fn: (resolvedTarget: string) => Promise<T>): Promise<T> {
-    const key = await resolveForWrite(this.pathGuard, filePath);
+    const key = await this.pathGuard.validatePathForWrite(filePath);
     return runExclusive(key, () => fn(key));
   }
 
@@ -205,7 +181,7 @@ export class GuardedFileSystem {
 
   async lstat(
     filePath: string,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
     const validPath = await this.pathGuard.validatePathForDelete(filePath);
     const stats = await withAbort(fsLstat(validPath), options?.signal);
@@ -255,7 +231,7 @@ export class GuardedFileSystem {
     options: { signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
     const { signal } = options;
-    const validPath = await resolveForWrite(this.pathGuard, filePath);
+    const validPath = await this.pathGuard.validatePathForWrite(filePath);
 
     const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
     const tempPath = `${validPath}.${tempSuffix}.tmp`;
@@ -323,7 +299,7 @@ export class GuardedFileSystem {
     options: { signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
     const { signal } = options;
-    const validPath = await resolveForWrite(this.pathGuard, filePath);
+    const validPath = await this.pathGuard.validatePathForWrite(filePath);
     // Non-regular targets must be rejected before the open: 'a' on a FIFO
     // (POSIX) blocks until a reader appears, and fsOpen takes no signal, so
     // the call would hang unabortable and pin its concurrency slot. The
