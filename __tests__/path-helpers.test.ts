@@ -7,6 +7,8 @@ import {
   isPathInsideDirectory,
   isPathWithinDirectories,
   isSamePath,
+  isUnresolvableDrivePath,
+  isWindowsDrivePath,
   normalizePath,
   respellCaseOnlyTarget,
 } from '../src/core/path-utils.ts';
@@ -52,6 +54,23 @@ describe('PathGuard containment helpers', () => {
     assert.strictEqual(isPathInsideDirectory('c:\\foo', 'c:\\foo\\bar'), true);
     assert.strictEqual(isPathInsideDirectory('c:\\foo', 'c:\\foo/bar'), true);
     assert.strictEqual(isPathInsideDirectory('c:\\foo', 'c:\\foobar'), false);
+  });
+
+  it('TC-PH-012: a drive path is unresolvable off Windows, and only drive-relative on it', () => {
+    const onWindows = process.platform === 'win32';
+    for (const [path, isDrive, refused] of [
+      ['C:\\Users\\x', true, !onWindows],
+      ['c:/Users/x', true, !onWindows],
+      ['C:', true, true],
+      ['C:foo', true, true],
+      ['logs:x', false, false],
+      ['1:/x', false, false],
+      ['/srv/C:/x', false, false],
+      ['\\\\server\\share\\x', false, false],
+    ] as const) {
+      assert.strictEqual(isWindowsDrivePath(path), isDrive, path);
+      assert.strictEqual(isUnresolvableDrivePath(path), refused, path);
+    }
   });
 
   it('TC-PH-006: normalizeAllowedDirectories dedups, strips trailing separators, preserves root', () => {

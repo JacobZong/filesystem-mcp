@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, readFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -496,6 +496,78 @@ describe('relative paths', () => {
       }
     });
   });
+
+  // A client on Windows, or a model that saw a Windows path, can send one to a
+  // server on POSIX, where `C:\x` is a relative name. It is refused, not made
+  // under the root as a file named `C:\x` or a `C:` folder.
+  describe(
+    'Windows drive paths on a POSIX host',
+    { skip: process.platform === 'win32' && 'a drive path is native on Windows' },
+    () => {
+      const drivePaths = ['C:\\Users\\x\\f.txt', 'C:/Users/x/f.txt', 'C:', 'c:foo.txt'];
+      let harness: TestClientContext;
+
+      before(async () => {
+        harness = await createTestClientPair([root]);
+      });
+
+      after(async () => {
+        await harness.close();
+      });
+
+      it('refuses them in create, read, list and find_files, and writes nothing', async () => {
+        for (const path of drivePaths) {
+          for (const [name, args] of [
+            ['create', { files: [{ path, content: 'z' }] }],
+            ['read', { path }],
+            ['list', { path }],
+            ['find_files', { path, pattern: '*' }],
+          ] as const) {
+            const result = await harness.client.callTool({ name, arguments: args });
+            assert.strictEqual(result.isError, true, `${name} ${path}`);
+            assert.match(
+              firstTextBlock(result).text ?? '',
+              /Windows-style path received on a POSIX host/u,
+              `${name} ${path}`,
+            );
+          }
+        }
+        for (const dir of [root, elsewhere]) {
+          const names = await readdir(dir);
+          assert.ok(!names.some((n) => /^[A-Za-z]:/u.test(n)), `${dir}: ${names.join(', ')}`);
+        }
+      });
+
+      it('neither resolves them against a root nor offers a grant for them', async () => {
+        const guard = await makeGuard([root]);
+        assert.strictEqual((await guard.resolveRelativePaths(drivePaths)).size, 0);
+        assert.deepStrictEqual(await guard.precheckAccess(drivePaths), []);
+      });
+
+      it('prints a found name that starts with a drive absolute, since it would be refused', async () => {
+        const paths = (await makeGuard([root])).resultPaths(root);
+        assert.strictEqual(paths.show(join(root, 'C:', 'x.txt')), join(root, 'C:', 'x.txt'));
+      });
+
+      it('still reaches a real C: folder under the root by the path a search prints', async () => {
+        await writeTestFile(root, 'C:/kept.txt', 'DRIVE_NAME_NEEDLE\n');
+        const search = await harness.client.callTool({
+          name: 'search_text',
+          arguments: { searchPattern: 'DRIVE_NAME_NEEDLE' },
+        });
+        const { matches } = search._meta as { matches: { file: string }[] };
+        assert.deepStrictEqual(
+          matches.map((m) => m.file),
+          [under(root, 'C:/kept.txt')],
+        );
+        const read = await harness.client.callTool({
+          name: 'read',
+          arguments: { path: matches[0]?.file },
+        });
+        assert.match(firstTextBlock(read).text ?? '', /DRIVE_NAME_NEEDLE/u);
+      });
+    },
+  );
 
   it('names the roots when a relative path is ambiguous', async () => {
     const harness = await createTestClientPair([root, second]);

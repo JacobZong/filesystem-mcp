@@ -109,6 +109,15 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
 
 ### Fixed
 
+- **A Windows drive path is refused on Linux and macOS.** `C:\x`, `C:/x`
+  and `C:` were relative names there, so `create` made a file named
+  `C:\Users\x\f.txt`, or a `C:` folder, inside the root and reported success.
+  Every tool, the file resource and a positional root now refuse them with
+  `Windows-style path received on a POSIX host`, and no longer offer an
+  access grant for them. Windows is unchanged.
+- **A file whose name holds a backslash gets its own `resourceUri` on Linux
+  and macOS.** `a\b.txt` and `a/b.txt` shared one URI, and `resources/read`
+  and subscriptions on it went to `a/b.txt`.
 - **A cancelled or timed-out read no longer shuts the server down.** A file
   read that started after its call was cancelled, for example a
   `replace_text` worker opening its next file after the 5-second deadline,

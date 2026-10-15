@@ -355,7 +355,9 @@ for `includeHidden` or `includeIgnored`.
 below that unless your client resets its timeout on progress.
 
 **Windows paths in JSON.** Escape backslashes (`"C:\\Users\\me\\project"`)
-or use forward slashes (`"C:/Users/me/project"`).
+or use forward slashes (`"C:/Users/me/project"`). A server on Linux or macOS,
+for example in Docker, refuses a drive path with `Windows-style path received
+on a POSIX host`. Pass a path on the server's own filesystem instead.
 
 **See what the server is doing.** Start it with `--log-level debug`. Logs go
 to stderr, which most clients show in their MCP output panel.

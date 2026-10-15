@@ -444,6 +444,56 @@ describe('MCP Resources', () => {
       assert.ok(!('text' in binaryResource));
     });
 
+    it(
+      'gives a POSIX name holding a backslash its own URI, which reads that file',
+      { skip: process.platform === 'win32' && 'backslash is a separator on Windows' },
+      async () => {
+        const named = await writeTestFile(tmpDir, 'bs\\name.txt', 'one file');
+        const nested = await writeTestFile(tmpDir, 'bs/name.txt', 'nested file');
+        const namedUri = buildFileResourceUri(named);
+        assert.notStrictEqual(namedUri, buildFileResourceUri(nested));
+        assert.strictEqual(extractPath(namedUri), named);
+
+        const fileContract = getResourceContracts({
+          resourceStore: store,
+          pathGuard,
+          readOnly: false,
+        }).find((c) => c.name === 'filesystem-mcp-file');
+        assert.ok(fileContract);
+        for (const [path, text] of [
+          [named, 'one file'],
+          [nested, 'nested file'],
+        ] as const) {
+          const result = await fileContract.read(
+            new URL(buildFileResourceUri(path)),
+            {},
+            dummyContext,
+          );
+          const content = firstResourceContent(result);
+          assert.ok('text' in content);
+          assert.strictEqual(content.text, text);
+        }
+      },
+    );
+
+    it(
+      'refuses a Windows drive path on a POSIX host',
+      { skip: process.platform === 'win32' && 'a drive path is native on Windows' },
+      async () => {
+        const fileContract = getResourceContracts({
+          resourceStore: store,
+          pathGuard,
+          readOnly: false,
+        }).find((c) => c.name === 'filesystem-mcp-file');
+        assert.ok(fileContract);
+        await assert.rejects(
+          async () =>
+            fileContract.read(new URL(buildFileResourceUri('C:/x/f.txt')), {}, dummyContext),
+          fsErrorMatcher(ErrorCode.INVALID_INPUT, 'Windows-style path received on a POSIX host'),
+        );
+      },
+    );
+
     it('TC-FUNC-063: WatcherRegistry - acquire attaches a watcher and debounces notifications', async () => {
       const registry = createWatcherRegistry();
       const testFile = await writeTestFile(tmpDir, 'watch_test.txt', 'initial');

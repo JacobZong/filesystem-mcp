@@ -139,6 +139,21 @@ export function isWindowsDriveRelativePath(requestedPath: string): boolean {
   return root.length === 2;
 }
 
+/**
+ * True for a path that names a Windows drive: `C:\x`, `C:/x`, `C:`, and the
+ * drive-relative `C:x`. Only Windows resolves one. On POSIX it is a relative
+ * path, so `C:\x` would become a file of that name under the root.
+ */
+export const isWindowsDrivePath = (requestedPath: string): boolean =>
+  /^[A-Za-z]:/u.test(win32.parse(requestedPath).root);
+
+/**
+ * A drive path this host refuses before resolving it: drive-relative anywhere,
+ * and any drive path where the host is not Windows.
+ */
+export const isUnresolvableDrivePath = (requestedPath: string): boolean =>
+  IS_WINDOWS ? isWindowsDriveRelativePath(requestedPath) : isWindowsDrivePath(requestedPath);
+
 export function expandHome(filepath: string): string {
   if (filepath === '~' || filepath.startsWith('~/') || filepath.startsWith('~\\')) {
     const rest = filepath.slice(1).replace(/^[/\\]+/, '');

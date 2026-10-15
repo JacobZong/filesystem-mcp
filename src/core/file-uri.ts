@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 
 import { detectMimeFromContent } from './mime.ts';
 import type { FileKind } from './mime.ts';
+import { IS_WINDOWS, toPosixPath } from './path-utils.ts';
 import { countLines } from './read.ts';
 import { getMaxTextFileSize, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from './util.ts';
 
@@ -20,10 +21,12 @@ export const FILESYSTEM_FILE_URI_TEMPLATE = 'filesystem-mcp://file/{+path}';
  * must return, since a client expands a suggestion into the template verbatim.
  * Unescaped, a '#' or '?' in a filename truncates the URI into a fragment or
  * query (silently naming a different path) and a '%' makes the decode throw.
- * Separators are restored so the value still reads as a path.
+ * Separators are restored so the value still reads as a path. A backslash is
+ * a separator only on Windows; on POSIX it is part of a name and stays `%5C`,
+ * or `a\b.txt` and `a/b.txt` would share one URI.
  */
 export function encodeFileUriPath(validPath: string): string {
-  const posix = validPath.replace(/\\/g, '/');
+  const posix = IS_WINDOWS ? toPosixPath(validPath) : validPath;
   return encodeURIComponent(posix).replace(/%2F/gi, '/');
 }
 
