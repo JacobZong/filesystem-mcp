@@ -244,6 +244,26 @@ describe('Security (P0)', () => {
       assert.strictEqual(matcher.isSensitive('.env.'), true, '".env." should be caught as ".env"');
     });
 
+    it('TC-SENS-007: folding only adds matches, and never widens what --allow relieves', () => {
+      // A class or `?` next to a combining mark matches as typed, as before folding.
+      const classPattern = new SensitiveMatcher(['caf[e\u0301].txt']);
+      assert.strictEqual(classPattern.isSensitive('/w/cafe.txt'), true, 'class keeps its members');
+      const anyChar = new SensitiveMatcher(['cafe?.txt']);
+      assert.strictEqual(anyChar.isSensitive('/w/cafe\u0301.txt'), true, '? keeps the mark');
+      // An allow entry relieves only the spelling it names.
+      const relieved = new SensitiveMatcher(['*.key'], ['my\u00a0file.key']);
+      assert.strictEqual(
+        relieved.isSensitive('/w/my\u00a0file.key'),
+        false,
+        'the allowed spelling',
+      );
+      assert.strictEqual(
+        relieved.isSensitive('/w/my file.key'),
+        true,
+        'another spelling stays denied',
+      );
+    });
+
     it('TC-SENS-006: a pattern matches every Unicode spelling of a name', () => {
       const matcher = new SensitiveMatcher(['caf\u00e9.txt', 'secret notes.txt']);
       assert.strictEqual(matcher.isSensitive('/w/cafe\u0301.txt'), true, 'NFD name, NFC pattern');

@@ -1110,8 +1110,12 @@ export class PathGuard {
     if (stats.isSymbolicLink()) {
       // Symlink: check link sensitivity but don't resolve target.
       // The parent check above ensures the link itself is in an allowed root.
+      // Spelled through the validated real parent, so every path to one link
+      // (an aliased parent, another Unicode spelling) names it the same way.
+      const link = join(normalizedRealParent, basename(target));
       this.assertNotSensitiveFile(target, requestedPath);
-      return target;
+      this.assertNotSensitiveFile(link, requestedPath);
+      return link;
     }
 
     // Not a symlink: resolve to catch path escapes (e.g. /allowed/dir/../../etc)

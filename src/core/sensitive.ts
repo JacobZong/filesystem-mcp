@@ -21,19 +21,37 @@ function normalizeForMatch(input: string): string {
   // normalize() preserves the double leading slash of UNC paths
   // (//server/share/...) on Windows; collapse it to one so the compiled
   // patterns — which carry no leading slash — still match their segments.
-  // NFC, with every space separator read as U+0020: a pattern then matches
-  // each spelling of a name that the path guard resolves to one entry
-  // (#101), not only the bytes it was typed with.
-  return toPosixPath(normalize(input))
-    .normalize('NFC')
-    .replace(/\p{Zs}/gu, ' ')
-    .toLowerCase()
-    .replace(/^\/+/u, '/');
+  return toPosixPath(normalize(input)).toLowerCase().replace(/^\/+/u, '/');
 }
 
-interface CompiledPatternSet {
+/**
+ * A normalized pattern or path in NFC, with every space separator read as
+ * U+0020: the spelling the path guard folds names to (#101), so a pattern
+ * also matches the other Unicode spellings of the names it covers.
+ */
+function foldForMatch(normalized: string): string {
+  return normalized
+    .normalize('NFC')
+    .replace(/\p{Zs}/gu, ' ')
+    .toLowerCase();
+}
+
+interface GlobSet {
   pathGlobs: readonly RegExp[];
   nameGlobs: readonly RegExp[];
+}
+
+/**
+ * Every pattern twice: as typed, and folded. Each form is matched on its own
+ * (see `isSensitive`), because folding a glob can also lose a match: in
+ * `caf[e\u0301].txt` the class composes to `[\u00e9]` and stops matching
+ * `cafe.txt`.
+ */
+interface CompiledPatternSet {
+  raw: GlobSet;
+  folded: GlobSet;
+  /** No pattern changes under folding: on a path folding leaves alone, `folded` matches as `raw` does. */
+  foldInvariant: boolean;
 }
 
 // posix.matchesGlob runs with dot:false semantics and does not honor a dot
@@ -190,12 +208,21 @@ function compilePatternGlobs(normalizedPattern: string): readonly string[] {
 }
 
 function toPatternSet(patterns: readonly string[]): CompiledPatternSet {
+  const deduped = Array.from(new Set(patterns.map((p) => p.trim()).filter((p) => p.length > 0)));
+  const raw = deduped.map(normalizeForMatch);
+  const folded = raw.map(foldForMatch);
+  return {
+    raw: compileGlobSet(raw),
+    folded: compileGlobSet(folded),
+    foldInvariant: raw.every((pattern, index) => pattern === folded[index]),
+  };
+}
+
+function compileGlobSet(normalizedPatterns: readonly string[]): GlobSet {
   const pathGlobs = new Set<RegExp>();
   const nameGlobs = new Set<RegExp>();
 
-  const deduped = Array.from(new Set(patterns.map((p) => p.trim()).filter((p) => p.length > 0)));
-  for (const pattern of deduped) {
-    const normalized = normalizeForMatch(pattern);
+  for (const normalized of normalizedPatterns) {
     const matchesPath = normalized.includes('/');
     const target = matchesPath ? pathGlobs : nameGlobs;
     const globs = matchesPath ? compilePatternGlobs(normalized) : [normalized];
@@ -349,7 +376,7 @@ export function describeSensitivePolicy(): {
   };
 }
 
-const EMPTY_PATTERN_SET: CompiledPatternSet = { pathGlobs: [], nameGlobs: [] };
+const EMPTY_PATTERN_SET: CompiledPatternSet = toPatternSet([]);
 
 export class SensitiveMatcher {
   private readonly builtin: CompiledPatternSet;
@@ -374,16 +401,32 @@ export class SensitiveMatcher {
 
   isSensitive(filePath: string): boolean {
     const pathToCheck = IS_WINDOWS ? stripAlternateDataStreams(filePath) : filePath;
-    const normalizedPath = normalizeForMatch(pathToCheck);
-    const name = posix.basename(normalizedPath);
-    const matches = (set: CompiledPatternSet): boolean =>
-      matchesAnyGlob(set.pathGlobs, normalizedPath) || matchesAnyGlob(set.nameGlobs, name);
+    const rawPath = normalizeForMatch(pathToCheck);
+    const foldedPath = foldForMatch(rawPath);
+    const rawName = posix.basename(rawPath);
+    const foldedName = posix.basename(foldedPath);
+    const inForm = (globs: GlobSet, path: string, name: string): boolean =>
+      matchesAnyGlob(globs.pathGlobs, path) || matchesAnyGlob(globs.nameGlobs, name);
+    // Each form on its own: the raw form keeps every match a pattern had
+    // before folding, and the folded form adds the other Unicode spellings.
+    const hits = (set: CompiledPatternSet): { raw: boolean; folded: boolean } => {
+      const raw = inForm(set.raw, rawPath, rawName);
+      const folded =
+        set.foldInvariant && foldedPath === rawPath
+          ? raw
+          : inForm(set.folded, foldedPath, foldedName);
+      return { raw, folded };
+    };
 
     // Explicit deny entries (FS_DENYLIST/--deny) always apply.
-    if (matches(this.operator)) return true;
-    if (!matches(this.builtin)) return false;
+    const operator = hits(this.operator);
+    if (operator.raw || operator.folded) return true;
+    const builtin = hits(this.builtin);
+    if (!builtin.raw && !builtin.folded) return false;
     // A built-in hit is lifted only by an allow entry that matches the same
-    // normalized candidate — a pattern that matches nothing relieves nothing.
-    return !matches(this.allow);
+    // normalized candidate in the same form — a pattern that matches nothing
+    // relieves nothing, and folding never widens what --allow relieves.
+    const allow = hits(this.allow);
+    return (builtin.raw && !allow.raw) || (builtin.folded && !allow.folded);
   }
 }

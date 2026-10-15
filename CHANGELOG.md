@@ -16,13 +16,14 @@ longer publish a top-level `oneOf`, and `create`'s `files` is now optional.
 ### Security
 
 - **A denylist pattern blocks every Unicode spelling of a name.** A
-  `--deny`, `FS_DENYLIST` or `--allow` pattern matched only the bytes it was
-  typed with. So `--deny 'café.txt'` did not block a `café.txt` stored
+  `--deny` or `FS_DENYLIST` pattern matched only the bytes it was typed
+  with. So `--deny 'café.txt'` did not block a `café.txt` stored
   decomposed (NFD), and `--deny 'secret notes.txt'` did not block a name with
-  U+00A0 or U+202F, when a client sent the name exactly as stored. Patterns
-  and paths are now compared after NFC normalization, with every space
-  character read as a plain space. The built-in list has no such characters
-  and is unchanged
+  U+00A0 or U+202F, when a client sent the name exactly as stored. A pattern
+  now also matches after NFC normalization, with every space character read
+  as a plain space, and keeps every match it had. An `--allow` entry still
+  relieves only the spelling it names. The built-in list has no such
+  characters and is unchanged
   ([#101](https://github.com/j0hanz/filesystem-mcp/issues/101)).
 - **A glob pattern can no longer freeze the server.** `find_files`,
   `search_text` and `replace_text` refuse a pattern that puts `|`, `*` or a

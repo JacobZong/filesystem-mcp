@@ -22,8 +22,8 @@ import { confirmKey, pendingRoundTrip, readPendingVerdict } from '../core/input-
 import {
   isPathInsideDirectory,
   isSamePath,
-  normalizeCaseForComparison,
   respellSpellingOnlyTarget,
+  unicodeMatchKey,
 } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
@@ -304,7 +304,9 @@ async function runTransfers(
   const seenDest = new Set<string>();
   const ready: TransferPlan[] = [];
   for (const candidate of candidates) {
-    const destKey = normalizeCaseForComparison(candidate.validDest);
+    // Unicode-folded too: two spellings of one missing name land on one file
+    // once the first move creates it (#101).
+    const destKey = unicodeMatchKey(candidate.validDest);
     if (seenDest.has(destKey)) {
       failures.push(
         pairFailure(
@@ -327,9 +329,12 @@ async function runTransfers(
   // Destination subtrees must also be disjoint: two recursive copies otherwise
   // race over shared descendants even when their destination paths differ.
   // Refuse both sides so the survivors are independent and can run concurrently.
-  // isPathInsideDirectory covers equality and containment, case-folded.
-  const touches = (x: string, y: string): boolean =>
-    isPathInsideDirectory(x, y) || isPathInsideDirectory(y, x);
+  // isPathInsideDirectory covers equality and containment, case-folded; the
+  // keys fold Unicode spelling too, parents included.
+  const touches = (x: string, y: string): boolean => {
+    const [keyX, keyY] = [unicodeMatchKey(x), unicodeMatchKey(y)];
+    return isPathInsideDirectory(keyX, keyY) || isPathInsideDirectory(keyY, keyX);
+  };
   const overlapping = new Set<TransferPlan>();
   for (const [i, a] of ready.entries()) {
     for (const b of ready.slice(i + 1)) {

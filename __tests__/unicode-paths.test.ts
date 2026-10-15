@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { ErrorCode } from '../src/core/errors.ts';
 import { encodeFileUriPath, FILESYSTEM_FILE_URI_TEMPLATE } from '../src/core/file-uri.ts';
+import { GuardedFileSystem } from '../src/core/fs.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import type { PathGuard } from '../src/core/path.ts';
 import {
@@ -393,6 +394,83 @@ describe('Unicode-equivalent path lookup (#101)', () => {
         assert.deepStrictEqual((await readdir(root)).sort(), [ASCII_NAME, 'target.txt']);
         assert.strictEqual((await lstat(join(root, ASCII_NAME))).isSymbolicLink(), true);
         assert.strictEqual(await readFile(join(root, 'target.txt'), 'utf8'), 'target');
+      } finally {
+        await pair.close();
+      }
+    });
+
+    it('a link renamed through an aliased parent is renamed, by move and by rename', async (t) => {
+      for (const via of ['move', 'rename'] as const) {
+        const top = await createTestRoot();
+        try {
+          await mkdir(join(top, 'real'));
+          await writeFile(join(top, 'real', 'target.txt'), 'target');
+          if (
+            !(await trySymlink(
+              join(top, 'real', 'target.txt'),
+              join(top, 'real', NBSP_NAME),
+              () => t.skip('symlink not permitted'),
+              'file',
+            )) ||
+            !(await trySymlink(join(top, 'real'), join(top, 'alias'), () =>
+              t.skip('symlink not permitted'),
+            ))
+          ) {
+            return;
+          }
+          const source = join(top, 'alias', NBSP_NAME);
+          const destination = join(top, 'real', ASCII_NAME);
+          const aliased = await makeGuard([top]);
+          // One link, two paths to it: the guard names it one way.
+          assert.strictEqual(
+            await aliased.validatePathForDelete(source),
+            await aliased.validatePathForDelete(destination),
+          );
+          if (via === 'move') {
+            const pair = await createTestClientPair([top]);
+            try {
+              const move = await pair.client.callTool({
+                name: 'move',
+                arguments: { moves: [{ source, destination }] },
+              });
+              assert.notStrictEqual(move.isError, true, firstTextBlock(move).text);
+            } finally {
+              await pair.close();
+            }
+          } else {
+            await new GuardedFileSystem(aliased).rename(source, destination);
+          }
+          assert.deepStrictEqual((await readdir(join(top, 'real'))).sort(), [
+            ASCII_NAME,
+            'target.txt',
+          ]);
+          assert.strictEqual((await lstat(join(top, 'real', ASCII_NAME))).isSymbolicLink(), true);
+          assert.strictEqual(await readFile(join(top, 'real', 'target.txt'), 'utf8'), 'target');
+        } finally {
+          await cleanupTestRoot(top);
+        }
+      }
+    });
+
+    it('a batch moving two files onto two spellings of one name refuses the second', async () => {
+      await writeFile(join(root, 'x.txt'), 'x');
+      await writeFile(join(root, 'y.txt'), 'y');
+      const pair = await createTestClientPair([root]);
+      try {
+        const move = await pair.client.callTool({
+          name: 'move',
+          arguments: {
+            moves: [
+              { source: join(root, 'x.txt'), destination: join(root, ASCII_NAME) },
+              { source: join(root, 'y.txt'), destination: join(root, NBSP_NAME) },
+            ],
+          },
+        });
+        assert.match(firstTextBlock(move).text ?? '', /1 failed/u);
+        assert.match(JSON.stringify(move), /already targets destination/u);
+        assert.deepStrictEqual((await readdir(root)).sort(), [ASCII_NAME, 'y.txt']);
+        assert.strictEqual(await readFile(join(root, ASCII_NAME), 'utf8'), 'x');
+        assert.strictEqual(await readFile(join(root, 'y.txt'), 'utf8'), 'y');
       } finally {
         await pair.close();
       }
