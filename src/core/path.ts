@@ -24,6 +24,8 @@ import {
   isPathInsideDirectory,
   isPathWithinDirectories,
   isSamePath,
+  isUnresolvableDrivePath,
+  isWindowsDrivePath,
   isWindowsDriveRelativePath,
   normalizeAllowedDirectory,
   normalizePath,
@@ -375,6 +377,11 @@ export class PathGuard {
       if (!requested) {
         continue;
       }
+      // Validation refuses it for its shape whatever is granted, so asking the
+      // user to grant the working directory it resolves under is pointless.
+      if (isUnresolvableDrivePath(requested)) {
+        continue;
+      }
       const normalized = normalizePath(requested);
       if (isPathWithinDirectories(normalized, allowedDirs)) {
         continue;
@@ -481,6 +488,16 @@ export class PathGuard {
         ErrorCode.UNKNOWN,
         'PathGuard not initialized. Call initialize() first.',
         requestedPath,
+      );
+    }
+    // Before the drive-relative check, whose advice (`use C:\path`) is wrong here.
+    if (!IS_WINDOWS && isWindowsDrivePath(requestedPath)) {
+      throw new FsError(
+        ErrorCode.INVALID_INPUT,
+        `Windows-style path received on a POSIX host (${process.platform}). Use a POSIX path, such as one under an allowed root.`,
+        requestedPath,
+        undefined,
+        'Run list_roots to see the allowed directories.',
       );
     }
     if (isWindowsDriveRelativePath(requestedPath)) {
@@ -661,10 +678,12 @@ export class PathGuard {
    * so this is what lets one tool's output feed the next.
    *
    * "Roots" here are the configured ones and those a client declared, never an
-   * access grant (see `accessGrants`). Absolute, `~` and drive-relative paths
-   * keep their meaning, as does every path when there is no such root;
-   * validation judges them as before. A relative path that exists under
-   * several roots, or under none of several, is refused rather than guessed.
+   * access grant (see `accessGrants`). Absolute, `~` and drive paths keep their
+   * meaning, as does every path when there is no such root; validation judges
+   * them as before. A Windows drive path on POSIX is left for validation to
+   * refuse: joined to a root, `C:\x` would be an absolute path that passes. A
+   * relative path that exists under several roots, or under none of several,
+   * is refused rather than guessed.
    */
   async resolveRelativePaths(paths: readonly string[]): Promise<Map<string, string>> {
     const resolved = new Map<string, string>();
@@ -673,7 +692,7 @@ export class PathGuard {
     for (const requested of new Set(paths)) {
       if (
         requested.trim().length === 0 ||
-        isWindowsDriveRelativePath(requested) ||
+        isUnresolvableDrivePath(requested) ||
         isAbsolute(expandHome(requested)) ||
         isPathWithinDirectories(normalizePath(requested), bases.expanded)
       ) {
@@ -730,7 +749,7 @@ export class PathGuard {
    * directory outside them (a name two roots share would read back as
    * ambiguous, and which names are shared can change between the print and
    * the read), and a name that would not read back as given: `~`, blank, or a
-   * POSIX name holding a backslash.
+   * POSIX name holding a backslash or starting with a drive (`C:`).
    */
   resultPaths(walkedDir: string): ResultPaths {
     const walked = normalizePath(walkedDir);
@@ -766,7 +785,7 @@ export class PathGuard {
           rel === '..' ||
           rel.startsWith('../') ||
           isAbsolute(rel) ||
-          isWindowsDriveRelativePath(rel) ||
+          isUnresolvableDrivePath(rel) ||
           expandHome(rel) !== rel ||
           !isSamePath(resolve(spelling, rel), absolutePath)
         ) {

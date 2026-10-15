@@ -11,6 +11,7 @@ import { formatUnknownErrorMessage } from './core/errors.ts';
 import {
   getReservedDeviceNameForPath,
   IS_WINDOWS,
+  isWindowsDrivePath,
   isWindowsDriveRelativePath,
   normalizePath,
 } from './core/path-utils.ts';
@@ -38,6 +39,12 @@ export class CliExitError extends Error {
 function validateCliPath(inputPath: string): void {
   if (inputPath.includes('\0')) {
     throw new CliExitError('Path contains null bytes.');
+  }
+
+  if (!IS_WINDOWS && isWindowsDrivePath(inputPath)) {
+    throw new CliExitError(
+      `Windows-style path received on a POSIX host (${process.platform}): ${inputPath}. Use a POSIX path.`,
+    );
   }
 
   if (isWindowsDriveRelativePath(inputPath)) {

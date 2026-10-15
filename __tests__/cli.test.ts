@@ -207,6 +207,18 @@ describe('CLI (real subprocess)', () => {
     assert.deepStrictEqual(config.allowedRoots, []);
   });
 
+  it(
+    'a positional Windows drive path exits 1 on a POSIX host instead of resolving under the cwd',
+    { skip: process.platform === 'win32' && 'a drive path is native on Windows' },
+    async () => {
+      for (const path of ['C:\\proj', 'C:/proj']) {
+        const { code, stderr } = await runCli(['--print-config', path]);
+        assert.strictEqual(code, 1, `${path} must fail`);
+        assert.match(stderr, /Windows-style path received on a POSIX host/);
+      }
+    },
+  );
+
   it('--port outside 1-65535 exits 1 with a message naming the flag', async () => {
     for (const port of ['0', '70000', 'abc']) {
       const { code, stderr } = await runCli(['--port', port, root]);
