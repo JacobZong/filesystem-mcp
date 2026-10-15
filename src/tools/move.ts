@@ -77,15 +77,16 @@ interface TransferPlan {
   resolvedSource: string;
   validDest: string;
   /**
-   * A rename that only changes the destination's case. Move must perform it —
+   * A rename that only changes the destination's case or Unicode spelling
+   * (#101). Move must perform it —
    * it is real work — so it is exempt from the destination-exists checks that
    * would otherwise read the source itself as an existing destination. Never
-   * true for a copy, which treats a case-only target as a self-copy and skips.
+   * true for a copy, which treats such a target as a self-copy and skips.
    */
-  isCaseOnlyRename: boolean;
+  isSpellingOnlyRename: boolean;
   /** Whether the destination existed when planned (drives the TOCTOU guard). */
   destExistedOriginally: boolean;
-  /** Destination exists and is not a self/case-only target → needs overwrite confirmation. */
+  /** Destination exists and is not a self or spelling-only target → needs overwrite confirmation. */
   pending: boolean;
 }
 
@@ -127,23 +128,29 @@ async function planTransfer(
   let resolvedDest = resolve(validDest);
 
   // validatePathForWrite realpaths an existing destination to its on-disk
-  // spelling, so a case-only rename resolves to the source itself; re-spell
-  // it with the requested basename before deciding self vs. rename.
-  if (resolvedSource === resolvedDest) {
+  // spelling, so a rename that changes only case or Unicode spelling resolves
+  // to the source itself; re-spell it with the requested basename before
+  // deciding self vs. rename.
+  const destIsSource = resolvedSource === resolvedDest;
+  if (destIsSource) {
     validDest = respellSpellingOnlyTarget(pair.destination, validDest);
     resolvedDest = resolve(validDest);
   }
 
   const isSelf = resolvedSource === resolvedDest;
-  const isCaseOnlyRename = !isSelf && isSamePath(resolvedSource, resolvedDest);
+  // Only a destination that resolved to the source is renamed in place: onto
+  // a separate `a\u202fb.txt`, a move of `a\u00a0b.txt` is an overwrite.
+  const isSpellingOnlyRename =
+    !isSelf && (destIsSource || isSamePath(resolvedSource, resolvedDest));
 
-  // A copy onto a case-only variant of its own source is the same file, so it
-  // is a no-op; the same rename is real work for move and proceeds.
-  if (isSelf || (isCaseOnlyRename && op === 'copy')) {
+  // A copy onto a case-only or Unicode-only variant of its own source is the
+  // same file, so it is a no-op; the same rename is real work for move and
+  // proceeds.
+  if (isSelf || (isSpellingOnlyRename && op === 'copy')) {
     return { status: 'noop' };
   }
 
-  if (!isCaseOnlyRename && isPathInsideDirectory(resolvedSource, resolvedDest)) {
+  if (!isSpellingOnlyRename && isPathInsideDirectory(resolvedSource, resolvedDest)) {
     return {
       status: 'fail',
       failure: pairFailure(
@@ -157,7 +164,7 @@ async function planTransfer(
     };
   }
 
-  const destExistedOriginally = !isCaseOnlyRename && (await destExists(fs, validDest, op));
+  const destExistedOriginally = !isSpellingOnlyRename && (await destExists(fs, validDest, op));
   const pending = destExistedOriginally && !overwrite;
 
   return {
@@ -167,7 +174,7 @@ async function planTransfer(
       opSource,
       resolvedSource,
       validDest,
-      isCaseOnlyRename,
+      isSpellingOnlyRename,
       destExistedOriginally,
       pending,
     },
@@ -204,7 +211,7 @@ async function executeTransfer(
   // TOCTOU check before any mutation: a destination that did not exist when
   // planned but exists now was created during the confirmation gap.
   if (
-    !plan.isCaseOnlyRename &&
+    !plan.isSpellingOnlyRename &&
     !plan.destExistedOriginally &&
     (await destExists(ctx.fs, plan.validDest, op))
   ) {
