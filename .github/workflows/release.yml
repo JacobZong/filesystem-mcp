@@ -115,7 +115,7 @@ jobs:
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
           echo "### Version: $CURRENT → $NEW" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Bump package.json, server.json and MCPB manifest
+      - name: Bump package.json, server.json, MCPB and plugin manifests
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
@@ -145,12 +145,17 @@ jobs:
           fs.writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
 
           // String replace keeps Prettier's layout; the first "version" key is top-level.
-          const manifestPath = 'mcpb/manifest.json';
-          const manifest = fs.readFileSync(manifestPath, 'utf8');
-          fs.writeFileSync(
-            manifestPath,
-            manifest.replace(/"version": "[^"]*"/, `"version": "${process.env.VERSION}"`),
-          );
+          for (const manifestPath of [
+            'mcpb/manifest.json',
+            '.codex-plugin/plugin.json',
+            '.cursor-plugin/plugin.json',
+          ]) {
+            const manifest = fs.readFileSync(manifestPath, 'utf8');
+            fs.writeFileSync(
+              manifestPath,
+              manifest.replace(/"version": "[^"]*"/, `"version": "${process.env.VERSION}"`),
+            );
+          }
           NODE
           npm install --package-lock-only --ignore-scripts
 
@@ -166,7 +171,7 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          git add package.json package-lock.json server.json mcpb/manifest.json
+          git add package.json package-lock.json server.json mcpb/manifest.json .codex-plugin/plugin.json .cursor-plugin/plugin.json
           git commit -m "release: v$VERSION"
           git tag -a "v$VERSION" -m "v$VERSION"
           git push --atomic origin main --follow-tags

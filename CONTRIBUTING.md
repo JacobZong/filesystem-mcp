@@ -171,8 +171,9 @@ Checklist:
 Commit messages are free-form. Say what changed and why, and call out
 breaking changes.
 
-Don't change the version in `package.json`, `server.json`, or
-`mcpb/manifest.json`. The Release workflow bumps all three together.
+Don't change the version in `package.json`, `server.json`,
+`mcpb/manifest.json`, `.codex-plugin/plugin.json`, or
+`.cursor-plugin/plugin.json`. The Release workflow bumps them together.
 
 ## Issues and the project board
 

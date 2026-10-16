@@ -27,5 +27,5 @@ with no `FS_*` variables set, and commit the `.snapshot` diff with the change.
 ## Releases
 
 Versions are bumped by the Release workflow (`workflow_dispatch`), which keeps
-`package.json`, `server.json`, and `mcpb/manifest.json` in sync. Never
-hand-edit any of those versions.
+`package.json`, `server.json`, `mcpb/manifest.json`, `.codex-plugin/plugin.json`,
+and `.cursor-plugin/plugin.json` in sync. Never hand-edit any of those versions.

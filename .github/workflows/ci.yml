@@ -77,3 +77,17 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: bash scripts/check-release-paths.sh
+
+  plugin-security:
+    name: Plugin security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashgraph-online/ai-plugin-scanner-action@1fb7eef6f7387abd0512e91ee8f336ac8bf07c95 # v1.2.789
+        with:
+          plugin_dir: .
+          min_score: 80
+          fail_on_severity: high
