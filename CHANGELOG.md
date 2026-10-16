@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stat call. The unguarded call could describe an entry swapped in between
   the walk and the stat.
 
+### Fixed
+
+- Raw OS `EPERM` failures are now skipped during walks and sweeps, the same as
+  `EACCES`. Before, an unwrapped `EPERM` surfaced as a warning in path
+  completion and as a per-file failure in `replace_text` where an `EACCES`
+  was silently skipped.
+
 ## [2.9.0] - 2026-10-15
 
 A feature and security release. `read` returns any binary file, `list`

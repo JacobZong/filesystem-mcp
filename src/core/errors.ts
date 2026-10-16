@@ -103,7 +103,15 @@ export const SKIPPABLE_FS_CODES: ReadonlySet<ErrorCode> = new Set([
   ErrorCode.SYMLINK_NOT_ALLOWED,
 ]);
 
-const SKIPPABLE_ERRNOS: ReadonlySet<string> = new Set(['ENOENT', 'EACCES', 'ELOOP']);
+// Derived, not hand-maintained: an errno is skippable exactly when the code
+// ERRNO_MAP classifies it to sits in SKIPPABLE_FS_CODES. EPERM maps to
+// PERMISSION_DENIED, so OS-level EPERM is as skippable as EACCES — the hand-
+// maintained list above omitted it and diverged from its own comment.
+const SKIPPABLE_ERRNOS: ReadonlySet<string> = new Set(
+  Object.entries(ERRNO_MAP)
+    .filter(([, code]) => SKIPPABLE_FS_CODES.has(code))
+    .map(([errno]) => errno),
+);
 
 /**
  * Walk `error` and its `cause` chain once for the three facts error handling
