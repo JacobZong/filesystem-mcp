@@ -74,3 +74,18 @@ Executing the execution contract in
 - [x] Execution contract: `npm run check` → exit 0.
 - [x] Contract snapshot untouched (no surface change).
 - [x] PR: https://github.com/j0hanz/filesystem-mcp/pull/108
+
+## Batch D — [T-11, base64EncodedBytes owner and sha256Hex helper](tickets/T-11-deliver-batch-d-base64-sha256.md)
+
+- **D1** 2026-10-16 — done. Drift check: zero on all four files; T-04 cites
+  exact.
+- **D2** 2026-10-16 — done. `base64EncodedBytes` added to `core/util.ts` beside
+  `jsonByteBound`; three sites routed. `sha256Hex` local to `read.ts`; three
+  sites routed. No behavior change; wire-limit prose untouched per the record.
+- **D3** 2026-10-16 — done. `npm run check` → exit 0.
+
+### Done
+
+- [x] Execution contract: `npm run check` → exit 0.
+- [x] Contract snapshot untouched (no surface change).
+- [x] PR: https://github.com/j0hanz/filesystem-mcp/pull/109
