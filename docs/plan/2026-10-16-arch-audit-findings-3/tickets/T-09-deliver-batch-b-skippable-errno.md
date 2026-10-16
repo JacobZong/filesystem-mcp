@@ -3,7 +3,7 @@ kind: frontier-ticket
 id: T-09
 title: Deliver batch B - derive the skippable errno set (finding 2)
 map: M-01
-status: open
+status: closed
 type: task
 mode: afk
 priority: 100
@@ -31,3 +31,18 @@ path completer stops warning on raw EPERM (`path-completer.ts:134-136`), and
 replace-text stops recording raw EPERM as a per-file failure where EACCES is
 skipped (`replace-text.ts:326-338`). CHANGELOG wording follows that impact,
 not the audit's original sentence.
+
+## Resolution
+
+Delivered under the map's execution contract. Red-then-green: the existing
+`EPERM` pin asserted the divergence and was flipped first. `SKIPPABLE_ERRNOS`
+is now derived (`ERRNO_MAP x SKIPPABLE_FS_CODES`, delta = EPERM only), with
+an over-inclusion guard (`ENOTDIR` stays non-skippable). T-02's flag resolved:
+the findings-2 inline-`isEntryAccessible` move never shipped, so the
+`path.ts:317` consumer was unchanged. Completion check: `npm run check` →
+exit 0. Contract snapshot untouched. CHANGELOG: Unreleased Fixed entry naming
+the corrected impact (path-completion warning, replace_text per-file
+failure), per the T-02 amendment.
+
+Classification: Delivered. PR:
+https://github.com/j0hanz/filesystem-mcp/pull/107
