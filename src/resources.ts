@@ -32,7 +32,12 @@ import { suggestPaths } from './core/path-completer.ts';
 import type { PathGuard } from './core/path.ts';
 import type { ResourceStore } from './core/store.ts';
 import { entryReadResult } from './core/store.ts';
-import { base64EncodedBytes, getMaxTextFileSize, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from './core/util.ts';
+import {
+  base64EncodedBytes,
+  getMaxTextFileSize,
+  jsonBytesOver,
+  MAX_OUTBOUND_RESULT_BYTES,
+} from './core/util.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,

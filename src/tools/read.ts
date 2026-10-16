@@ -45,7 +45,8 @@ import { defineTool } from './define.ts';
 const MAX_LINE_NUMBER = 2_147_483_647;
 
 /** One spelling of the resource-content digest every read result that carries a hash uses. */
-const sha256Hex = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
+const sha256Hex = (data: string | Buffer): string =>
+  createHash('sha256').update(data).digest('hex');
 
 const rangeField = (description: string, count = false) => {
   const field = z.int32().min(1, { message: 'Min: 1' });
@@ -275,9 +276,7 @@ function buildPerPathReadValue(
     result.hasMoreLines && result.readMode !== 'tail'
       ? buildReadContinuation(result, options.requestedPath)
       : undefined;
-  const contentHash = options.includeHash
-    ? sha256Hex(result.content)
-    : undefined;
+  const contentHash = options.includeHash ? sha256Hex(result.content) : undefined;
 
   const canLink = result.fileSize === undefined || result.fileSize <= getMaxTextFileSize();
 
@@ -346,9 +345,7 @@ async function readBinaryResource(
     resourceUri: buildFileResourceUri(raw.validPath),
     modified: raw.modified,
     blobData: raw.content.toString('base64'),
-    ...(args.includeHash
-      ? { contentHash: sha256Hex(raw.content) }
-      : {}),
+    ...(args.includeHash ? { contentHash: sha256Hex(raw.content) } : {}),
   };
 }
 
@@ -377,9 +374,7 @@ async function readOnePath(
           resourceUri: buildFileResourceUri(raw.validPath),
           modified: raw.modified,
           mediaData: raw.content.toString('base64'),
-          ...(args.includeHash
-            ? { contentHash: sha256Hex(raw.content) }
-            : {}),
+          ...(args.includeHash ? { contentHash: sha256Hex(raw.content) } : {}),
         };
       }
     }

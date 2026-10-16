@@ -29,7 +29,7 @@ Delivered under the map's execution contract. `base64EncodedBytes(size)` lives
 in `core/util.ts` beside `jsonByteBound`; `file-uri.ts`, `resources.ts` and
 `read.ts` route through it. `sha256Hex` is local to `read.ts`; its three sites
 route through it. Behavior-preserving; the below-the-bar wire-limit prose
-prose restatements stay untouched. Completion check: `npm run check` → exit 0.
+restatements stay untouched. Completion check: `npm run check` → exit 0.
 Contract snapshot untouched.
 
 Classification: Delivered. PR:
