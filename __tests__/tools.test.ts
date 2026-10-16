@@ -420,6 +420,34 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(foundMeta.skippedInaccessible, undefined);
     assert.doesNotMatch(firstTextBlock(found).text ?? '', /inaccessible|\.env/);
 
+    // A literal pattern prefix names the sensitive directory directly, so the
+    // glob never asks the walk filter about it; the yielded entries' own
+    // ancestors must still hide the subtree.
+    const prefixed = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: dir, pattern: 'vault.key/*.txt', includeHidden: true },
+    });
+    assert.deepStrictEqual(
+      (prefixed._meta as { results?: { path: string }[] }).results ?? [],
+      [],
+      'find_files must not enter a sensitive-named directory through a literal pattern prefix',
+    );
+
+    const prefixedSearch = await harness.client.callTool({
+      name: 'search_text',
+      arguments: {
+        path: dir,
+        searchPattern: token,
+        pattern: 'vault.key/*.txt',
+        includeHidden: true,
+      },
+    });
+    assert.deepStrictEqual(
+      (prefixedSearch._meta as { matches?: { file: string }[] }).matches ?? [],
+      [],
+      'search_text must not match through a literal pattern prefix into a sensitive-named directory',
+    );
+
     const listed = await harness.client.callTool({
       name: 'list',
       arguments: { path: dir, maxDepth: 2, includeHidden: true },
@@ -459,6 +487,52 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await assert.rejects(
       harness.client.readResource({ uri: buildFileResourceUri(envFile) }),
       'resources/read of a sensitive file must be refused',
+    );
+  });
+
+  it('a sensitive-named symlink directory never surfaces its subtree', async (t) => {
+    const dir = join(tmpDir, 'sensitive_link_walk');
+    await mkdir(join(dir, 'clean'), { recursive: true });
+    await writeTestFile(dir, 'clean/deep.txt', 'note needle\n');
+    // A junction works on Windows without developer mode; a dir symlink elsewhere.
+    if (
+      !(await trySymlink(join(dir, 'clean'), join(dir, 'alias.key'), () =>
+        t.skip('symlink creation not permitted'),
+      ))
+    ) {
+      return;
+    }
+
+    const found = await harness.client.callTool({
+      name: 'find_files',
+      arguments: { path: dir, pattern: '**/*.txt' },
+    });
+    const paths =
+      (found._meta as { results?: { path: string }[] }).results?.map((r) => r.path) ?? [];
+    assert.ok(
+      !paths.some((path) => path.includes('alias.key')),
+      `find_files must not follow a sensitive-named symlink: ${paths.join(',')}`,
+    );
+
+    const searched = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: dir, searchPattern: 'needle' },
+    });
+    const files =
+      (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file) ?? [];
+    assert.ok(
+      !files.some((file) => file.includes('alias.key')),
+      `search_text must not match inside a sensitive-named symlink: ${files.join(',')}`,
+    );
+
+    const listed = await harness.client.callTool({
+      name: 'list',
+      arguments: { path: dir, maxDepth: 3 },
+    });
+    assert.doesNotMatch(
+      firstTextBlock(listed).text ?? '',
+      /alias\.key/,
+      'list must not draw a sensitive-named symlink (its target appears under its own name)',
     );
   });
 

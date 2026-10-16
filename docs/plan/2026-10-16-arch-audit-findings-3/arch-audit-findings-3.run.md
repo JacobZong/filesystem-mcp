@@ -84,8 +84,22 @@ Executing the execution contract in
   sites routed. No behavior change; wire-limit prose untouched per the record.
 - **D3** 2026-10-16 — done. `npm run check` → exit 0.
 
+## Batch C follow-up — [T-19, sensitive ancestors in the walk filter](tickets/T-19-deliver-108-followup-sensitive-ancestors.md)
+
+- **F1** 2026-10-16 — done. Both #108 review findings (Codex P1, Copilot High)
+  verified by engine probe on merged main: literal sensitive prefixes yield
+  through the guard; a denylisted symlink is followed and matched.
+- **F2** 2026-10-16 — done. Red: literal-prefix pins (find_files, search_text)
+  and a sensitive-named symlink subtree test fail on main.
+- **F3** 2026-10-16 — done. Green: cached `sensitiveTree` ancestor check in
+  `prune` + `isExcluded`; both pins pass; probe re-run clean. `npm run check`
+  → exit 0. CHANGELOG Security bullet extended. Probe scripts:
+  `C:\tmp\fsmp-probe\probe2.mjs`, fixture `C:\tmp\fsmp-fixture2`.
+
 ### Done
 
 - [x] Execution contract: `npm run check` → exit 0.
 - [x] Contract snapshot untouched (no surface change).
 - [x] PR: https://github.com/j0hanz/filesystem-mcp/pull/109
+- [x] PR: https://github.com/j0hanz/filesystem-mcp/pull/110 (no merge until
+      the user rules on it, per the 2026-10-16 standing order)
