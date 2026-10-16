@@ -27,6 +27,7 @@ import {
   validateReadRange,
 } from '../core/schema.ts';
 import {
+  base64EncodedBytes,
   DEFAULT_CONTINUATION_CHUNK_SIZE,
   getMaxTextFileSize,
   PARALLEL_CONCURRENCY,
@@ -42,6 +43,10 @@ import { defineTool } from './define.ts';
  * never asks for more. Not restated as `.max()`: that reports it twice.
  */
 const MAX_LINE_NUMBER = 2_147_483_647;
+
+/** One spelling of the resource-content digest every read result that carries a hash uses. */
+const sha256Hex = (data: string | Buffer): string =>
+  createHash('sha256').update(data).digest('hex');
 
 const rangeField = (description: string, count = false) => {
   const field = z.int32().min(1, { message: 'Min: 1' });
@@ -209,7 +214,7 @@ function budgetBytes(path: string, size: number, { fullRead, binary }: BudgetMod
   if (!fullRead) return size;
   const { kind } = detectMimeType(path);
   const base64 = kind === 'image' || kind === 'audio' || (binary && isKnownBinaryExtension(path));
-  return base64 ? 4 * Math.ceil(size / 3) : size;
+  return base64 ? base64EncodedBytes(size) : size;
 }
 
 async function collectFileBudget(
@@ -271,9 +276,7 @@ function buildPerPathReadValue(
     result.hasMoreLines && result.readMode !== 'tail'
       ? buildReadContinuation(result, options.requestedPath)
       : undefined;
-  const contentHash = options.includeHash
-    ? createHash('sha256').update(result.content, 'utf-8').digest('hex')
-    : undefined;
+  const contentHash = options.includeHash ? sha256Hex(result.content) : undefined;
 
   const canLink = result.fileSize === undefined || result.fileSize <= getMaxTextFileSize();
 
@@ -342,9 +345,7 @@ async function readBinaryResource(
     resourceUri: buildFileResourceUri(raw.validPath),
     modified: raw.modified,
     blobData: raw.content.toString('base64'),
-    ...(args.includeHash
-      ? { contentHash: createHash('sha256').update(raw.content).digest('hex') }
-      : {}),
+    ...(args.includeHash ? { contentHash: sha256Hex(raw.content) } : {}),
   };
 }
 
@@ -373,9 +374,7 @@ async function readOnePath(
           resourceUri: buildFileResourceUri(raw.validPath),
           modified: raw.modified,
           mediaData: raw.content.toString('base64'),
-          ...(args.includeHash
-            ? { contentHash: createHash('sha256').update(raw.content).digest('hex') }
-            : {}),
+          ...(args.includeHash ? { contentHash: sha256Hex(raw.content) } : {}),
         };
       }
     }

@@ -52,6 +52,7 @@ dropped list: [assets/audit-findings.md](assets/audit-findings.md).
 
 ## Decisions so far
 
+- [Deliver batch D - base64EncodedBytes owner and sha256Hex helper (findings 4+11)](tickets/T-11-deliver-batch-d-base64-sha256.md) — delivered: both patterns have one owner; behavior-preserving; PR #109.
 - [Deliver the #108 follow-up - hide sensitive ancestors in the walk filter](tickets/T-19-deliver-108-followup-sensitive-ancestors.md) — delivered: cached ancestor check in the walk filter closes the literal-prefix and symlink bypasses both reviews found; PR #110, awaiting user ruling.
 - [Deliver batch C - prune sensitive directories in the shared walk (finding 3)](tickets/T-10-deliver-batch-c-sensitive-walk.md) — delivered: the walk filter prunes sensitive-named directories, all walkers inherit it, move's walk stays exempt; PR #108.
 - [Deliver batch B - derive the skippable errno set (finding 2)](tickets/T-09-deliver-batch-b-skippable-errno.md) — delivered: the errno set is derived from the errno map x skippable codes, delta = EPERM; PR #107.
