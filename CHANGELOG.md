@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- `list` with `includeSizes` (or `sortBy: 'size'`) now stats each listed file
+  through the guarded filesystem, which re-validates the path before the
+  stat call. The unguarded call could describe an entry swapped in between
+  the walk and the stat.
+
 ## [2.9.0] - 2026-10-15
 
 A feature and security release. `read` returns any binary file, `list`
