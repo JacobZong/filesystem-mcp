@@ -496,10 +496,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await writeTestFile(dir, 'clean/deep.txt', 'note needle\n');
     // A junction works on Windows without developer mode; a dir symlink elsewhere.
     if (
-      !(await trySymlink(
-        join(dir, 'clean'),
-        join(dir, 'alias.key'),
-        () => t.skip('symlink creation not permitted'),
+      !(await trySymlink(join(dir, 'clean'), join(dir, 'alias.key'), () =>
+        t.skip('symlink creation not permitted'),
       ))
     ) {
       return;
@@ -520,7 +518,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       name: 'search_text',
       arguments: { path: dir, searchPattern: 'needle' },
     });
-    const files = (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file) ?? [];
+    const files =
+      (searched._meta as { matches?: { file: string }[] }).matches?.map((m) => m.file) ?? [];
     assert.ok(
       !files.some((file) => file.includes('alias.key')),
       `search_text must not match inside a sensitive-named symlink: ${files.join(',')}`,
