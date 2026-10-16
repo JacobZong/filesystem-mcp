@@ -16,6 +16,11 @@ Executing the execution contract in
   `node:fs/promises` stat import and `withAbort` wrapper removed.
 - **A3** 2026-10-16 — done. `npm run check` → exit 0 (static + full suite +
   coverage floor).
+- **A4** 2026-10-16 — done. Review pass (bug-hunt axis) verdict: net security
+  tightening, one yellow — abort no longer raced the first await, because the
+  guarded stat validates before statting and that validation is not
+  abort-aware. Fix: `options.signal.throwIfAborted()` at the top of the try.
+  `npm run check` re-run → exit 0.
 
 ### Done
 

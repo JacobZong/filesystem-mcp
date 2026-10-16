@@ -140,6 +140,9 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
         let size: number | undefined;
         if (wantSizes && entryType === 'file') {
           try {
+            // Race the abort from the first await: the guarded stat validates the
+            // path before statting, and that validation is not abort-aware.
+            options.signal.throwIfAborted();
             size = (await options.fs.stat(entry.path, { signal: options.signal })).stats.size;
           } catch (error) {
             rethrowIfAborted(error);
