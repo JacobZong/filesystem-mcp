@@ -1,6 +1,6 @@
 {
   "name": "filesystem-mcp",
-  "version": "2.9.0",
+  "version": "2.9.1",
   "description": "Secure filesystem MCP server for reading, writing, searching, diffing, and patching files. Requires Node.js 24+.",
   "author": { "name": "j0hanz" },
   "logo": "assets/logo.png",
