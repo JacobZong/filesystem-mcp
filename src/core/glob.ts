@@ -9,6 +9,7 @@ import { formatUnknownErrorMessage } from './errors.ts';
 import { Logger } from './observability.ts';
 import type { DirentLike } from './path-utils.ts';
 import { IS_WINDOWS, isPathInsideDirectory, toPosixPath } from './path-utils.ts';
+import type { PathGuard } from './path.ts';
 import { MIB } from './util.ts';
 
 /**
@@ -461,6 +462,12 @@ export interface GlobEntriesOptions {
    * consulted; nothing above it is ever read. Ignored without `skipIgnored`.
    */
   ignoreCeiling?: string;
+  /**
+   * Prune directories whose own name the sensitive denylist covers: the walk
+   * never descends into them nor yields them. Opt-in — a walk that must see
+   * sensitive entries (the move-protection check) does not pass it.
+   */
+  pathGuard?: Pick<PathGuard, 'isSensitive'>;
   /** Bounds the `.gitignore` discovery `skipIgnored` runs before the walk. */
   signal?: AbortSignal;
 }
@@ -632,6 +639,7 @@ function createWalkFilter(
   gitignoreMatcher: GitignoreManager | null,
   maxDepth: number | undefined,
   signal: AbortSignal | undefined,
+  pathGuard: Pick<PathGuard, 'isSensitive'> | undefined,
 ): WalkFilter {
   // fs.glob can hand the predicate a dirent whose parentPath is "." — the walk
   // root, not the process cwd — when it re-visits a directory under `**` whose
@@ -646,6 +654,12 @@ function createWalkFilter(
     skipIgnored &&
     (posixRel.split('/').some((segment) => DEFAULT_EXCLUDED_NAMES.has(segment)) ||
       (gitignoreMatcher?.isIgnored(posixRel, isDir) ?? false));
+  // A sensitive directory's subtree is hidden with the directory: pruning
+  // stops descent, and the yielded dirent is dropped below. The guard checks
+  // the directory's own path, so this never fires on a clean-named entry inside
+  // a denylisted tree — the tree never gets walked.
+  const sensitiveDir = (match: GlobDirentLike): boolean =>
+    pathGuard !== undefined && match.isDirectory() && pathGuard.isSensitive(absoluteOf(match));
 
   return {
     prune: (match) => {
@@ -660,13 +674,14 @@ function createWalkFilter(
       const posixRel = relativeOf(match);
       const isDir = match.isDirectory();
       if (excluded(posixRel, isDir)) return true;
+      if (sensitiveDir(match)) return true;
       // Stop descent one level past the depth bound. Pruning a directory *at*
       // the bound would drop it where fs.glob treats it as top-level, so prune
       // its children instead; processDirentMatch drops that extra level.
       if (maxDepth === undefined || !isDir) return false;
       return posixRel.split('/').length - 1 > maxDepth;
     },
-    isExcluded: (match) => excluded(relativeOf(match), match.isDirectory()),
+    isExcluded: (match) => excluded(relativeOf(match), match.isDirectory()) || sensitiveDir(match),
   };
 }
 
@@ -731,6 +746,7 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     gitignoreMatcher,
     plan.maxDepth,
     options.signal,
+    options.pathGuard,
   );
 
   // One walk for every variant: fs.glob reads each directory once and matches

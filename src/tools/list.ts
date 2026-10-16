@@ -108,6 +108,7 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
       skipIgnored: !options.includeIgnored,
       ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
       signal: options.signal,
+      pathGuard: options.pathGuard,
       includeHidden: options.includeHidden,
       baseNameMatch: false,
       // ListInputSchema.maxDepth is 1-based (1 = top-level only); the shared
@@ -130,9 +131,8 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
         const entryType: EntryType = resolveEntryType(entry.dirent);
         const relPath = toPosixRelative(rootPath, entry.path);
         const name = basename(relPath);
-        for (let dir = posix.dirname(relPath); dir !== '.'; dir = posix.dirname(dir)) {
-          if (options.pathGuard.isSensitive(`${rootPath}/${dir}`)) return;
-        }
+        // A sensitive-named directory never reaches the walk (globEntries
+        // prunes it via pathGuard), so no ancestor re-check is needed here.
 
         const accessible = await options.pathGuard.isEntryAccessible(entry.path);
         if (!accessible) return;

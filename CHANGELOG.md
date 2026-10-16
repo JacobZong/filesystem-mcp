@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the guarded filesystem, which re-validates the path before the
   stat call. The unguarded call could describe an entry swapped in between
   the walk and the stat.
+- `find_files`, `search_text` and `replace_text` now hide the contents of a
+  directory whose own name the denylist covers, the same subtree `list` already
+  hid. Before, those tools surfaced paths (and content matches) under a
+  denylisted directory name while `list` hid the whole subtree.
 
 ### Fixed
 

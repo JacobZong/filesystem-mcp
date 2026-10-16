@@ -380,7 +380,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const token = 'example-sentinel-9f3c1e';
     const dir = join(tmpDir, 'boundary_walk');
     const envFile = await writeTestFile(tmpDir, 'boundary_walk/.env', `SECRET=${token}\n`);
-    await writeTestFile(tmpDir, 'boundary_walk/vault.key/inner.txt', 'inner\n');
+    await writeTestFile(tmpDir, 'boundary_walk/vault.key/inner.txt', `note ${token}\n`);
     const plain = await writeTestFile(tmpDir, 'boundary_walk/plain.txt', `note ${token}\n`);
 
     const search = await harness.client.callTool({
@@ -413,6 +413,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       !paths.some((path) => path.endsWith('.env')),
       `find_files must not list .env: ${paths.join(',')}`,
     );
+    assert.ok(
+      !paths.some((path) => path.includes('vault.key')),
+      `find_files must not list inside a sensitive-named directory: ${paths.join(',')}`,
+    );
     assert.strictEqual(foundMeta.skippedInaccessible, undefined);
     assert.doesNotMatch(firstTextBlock(found).text ?? '', /inaccessible|\.env/);
 
@@ -437,6 +441,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       await readFile(envFile, 'utf-8'),
       `SECRET=${token}\n`,
       '.env must be untouched',
+    );
+    assert.strictEqual(
+      await readFile(join(dir, 'vault.key/inner.txt'), 'utf-8'),
+      `note ${token}\n`,
+      'a file under a sensitive-named directory must be untouched',
     );
     assert.strictEqual(await readFile(plain, 'utf-8'), 'note REDACTED\n');
 
