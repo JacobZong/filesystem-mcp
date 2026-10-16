@@ -1,12 +1,12 @@
-import { stat } from 'node:fs/promises';
 import { basename, posix } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { processEntriesConcurrently, withAbort } from '../core/concurrency.ts';
+import { processEntriesConcurrently } from '../core/concurrency.ts';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { ErrorCode, normalizeUnknownError, rethrowIfAborted } from '../core/errors.ts';
 import { formatByteSize, formatCount, pageTrailer } from '../core/fmt.ts';
+import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries, type GlobEntry } from '../core/glob.ts';
 import { type EntryType, resolveEntryType, toPosixRelative } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
@@ -46,6 +46,7 @@ interface CollectOptions extends RenderOptions {
   includeHidden: boolean;
   includeIgnored: boolean;
   signal: AbortSignal;
+  fs: GuardedFileSystem;
   pathGuard: PathGuard;
   /** Upper bound on the stored, paginable entry array. */
   entryCap: number;
@@ -139,7 +140,7 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
         let size: number | undefined;
         if (wantSizes && entryType === 'file') {
           try {
-            size = (await withAbort(stat(entry.path), options.signal)).size;
+            size = (await options.fs.stat(entry.path, { signal: options.signal })).stats.size;
           } catch (error) {
             rethrowIfAborted(error);
             // A file can vanish between the walk and the stat; it keeps its place, without a size.
@@ -337,6 +338,7 @@ export const LIST = defineTool<typeof ListInputSchema, ListOutput>({
           includeHidden: args.includeHidden,
           includeIgnored: args.includeIgnored,
           signal: ctx.signal,
+          fs: ctx.fs,
           pathGuard: ctx.fs.pathGuard,
           entryCap: MAX_LIST_ENTRIES,
           onProgress: ctx.onProgress,
