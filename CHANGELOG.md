@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.9.1] - 2026-10-16
+
+A security and fix patch. The denylist now covers the subtree of every
+directory its list names for every tool, the same hide `list` already
+held. `list` with sizes respects the per-call time limit, and raw `EPERM`
+failures are walked past the same as `EACCES`. Before upgrading, read
+Security if you relied on `find_files`, `search_text` or `replace_text`
+showing entries under a directory whose own name a `--deny` or
+`FS_DENYLIST` pattern covered; those calls now hide the subtree.
 
 ### Security
 
@@ -20,12 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through literal pattern prefixes (`vault.key/*.txt`) and through a
   denylisted symlink standing in for the directory.
 
+### Added
+
+- Codex plugin manifest (`.codex-plugin/plugin.json`) at the repo root, so
+  Codex installs the server as a plugin, and continuous security analysis in
+  the repository's CI.
+
 ### Fixed
 
 - Raw OS `EPERM` failures are now skipped during walks and sweeps, the same as
   `EACCES`. Before, an unwrapped `EPERM` surfaced as a warning in path
   completion and as a per-file failure in `replace_text` where an `EACCES`
   was silently skipped.
+- `list` with `includeSizes` (or `sortBy: 'size'`) now respects the per-call
+  time limit: the guarded stat is raced against the call's abort signal, so a
+  stalled validation no longer holds the entry past the deadline.
 
 ## [2.9.0] - 2026-10-15
 
