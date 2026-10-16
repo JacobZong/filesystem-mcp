@@ -203,6 +203,15 @@ export function jsonByteBound(value: unknown): number {
 }
 
 /**
+ * `size` raw bytes' length once base64-encoded: the wire cost of an embedded
+ * binary resource. 4/3 rounded up per 3-byte group, standard base64, no line
+ * wrapping.
+ */
+export function base64EncodedBytes(size: number): number {
+  return 4 * Math.ceil(size / 3);
+}
+
+/**
  * `value`'s JSON-encoded size in bytes when it is over `limit`, else
  * `undefined`. {@link jsonByteBound} clears most values without encoding them;
  * only one it cannot clear pays for the exact `JSON.stringify` measure.

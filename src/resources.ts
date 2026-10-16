@@ -32,7 +32,7 @@ import { suggestPaths } from './core/path-completer.ts';
 import type { PathGuard } from './core/path.ts';
 import type { ResourceStore } from './core/store.ts';
 import { entryReadResult } from './core/store.ts';
-import { getMaxTextFileSize, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from './core/util.ts';
+import { base64EncodedBytes, getMaxTextFileSize, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from './core/util.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,
@@ -235,7 +235,7 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       }
       const readResult = await fs.readRaw(rawPath, { signal: ctx.mcpReq.signal });
       if (stdio && readResult.isBinary) {
-        const base64Bytes = 4 * Math.ceil(readResult.content.length / 3);
+        const base64Bytes = base64EncodedBytes(readResult.content.length);
         if (base64Bytes > MAX_OUTBOUND_RESULT_BYTES) throw tooLargeForStdio(base64Bytes, true);
       }
 

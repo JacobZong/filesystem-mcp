@@ -6,7 +6,7 @@ import { detectMimeFromContent } from './mime.ts';
 import type { FileKind } from './mime.ts';
 import { IS_WINDOWS, toPosixPath } from './path-utils.ts';
 import { countLines } from './read.ts';
-import { getMaxTextFileSize, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from './util.ts';
+import { base64EncodedBytes, getMaxTextFileSize, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from './util.ts';
 
 const KIB = 1024;
 
@@ -118,7 +118,7 @@ function overStdioRead(
   if (written === undefined) return 6 * size > MAX_OUTBOUND_RESULT_BYTES - 64 * KIB;
   // readRaw returns any non-text kind as base64 (`isBinary: kind !== 'text'`).
   if (written.kind !== 'text') {
-    return 4 * Math.ceil(size / 3) > MAX_OUTBOUND_RESULT_BYTES - 64 * KIB;
+    return base64EncodedBytes(size) > MAX_OUTBOUND_RESULT_BYTES - 64 * KIB;
   }
   const result = {
     contents: [{ uri: buildFileResourceUri(validPath), mimeType, text: written.content }],
