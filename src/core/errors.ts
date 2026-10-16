@@ -104,7 +104,7 @@ export const SKIPPABLE_FS_CODES: ReadonlySet<ErrorCode> = new Set([
 ]);
 
 // Derived, not hand-maintained: an errno is skippable exactly when the code
-// ERRNO_MAP classifies it to sits in SKIPPABLE_FS_CODES. EPERM maps to
+// ERRNO_MAP classifies it as a code in SKIPPABLE_FS_CODES. EPERM maps to
 // PERMISSION_DENIED, so OS-level EPERM is as skippable as EACCES — the hand-
 // maintained list above omitted it and diverged from its own comment.
 const SKIPPABLE_ERRNOS: ReadonlySet<string> = new Set(
