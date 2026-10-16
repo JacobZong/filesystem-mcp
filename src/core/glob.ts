@@ -660,6 +660,26 @@ function createWalkFilter(
   // a denylisted tree — the tree never gets walked.
   const sensitiveDir = (match: GlobDirentLike): boolean =>
     pathGuard !== undefined && match.isDirectory() && pathGuard.isSensitive(absoluteOf(match));
+  // A sensitive directory anywhere above an entry hides the entry, whatever
+  // the pattern spelled: a literal prefix (`vault.key/*.txt`) never asks the
+  // descent prune, and a sensitive-named symlink is not isDirectory() so the
+  // prune misses it — but every yielded path names its ancestors. The entry's
+  // own final name stays with the per-entry guard every caller already runs.
+  const sensitiveTreeCache = new Map<string, boolean>();
+  const sensitiveTree = (posixRel: string): boolean => {
+    if (pathGuard === undefined) return false;
+    const segments = posixRel.split('/');
+    for (let i = 1; i < segments.length; i++) {
+      const prefix = segments.slice(0, i).join('/');
+      let hit = sensitiveTreeCache.get(prefix);
+      if (hit === undefined) {
+        hit = pathGuard.isSensitive(resolve(cwd, prefix));
+        sensitiveTreeCache.set(prefix, hit);
+      }
+      if (hit) return true;
+    }
+    return false;
+  };
 
   return {
     prune: (match) => {
@@ -674,14 +694,19 @@ function createWalkFilter(
       const posixRel = relativeOf(match);
       const isDir = match.isDirectory();
       if (excluded(posixRel, isDir)) return true;
-      if (sensitiveDir(match)) return true;
+      if (sensitiveDir(match) || sensitiveTree(posixRel)) return true;
       // Stop descent one level past the depth bound. Pruning a directory *at*
       // the bound would drop it where fs.glob treats it as top-level, so prune
       // its children instead; processDirentMatch drops that extra level.
       if (maxDepth === undefined || !isDir) return false;
       return posixRel.split('/').length - 1 > maxDepth;
     },
-    isExcluded: (match) => excluded(relativeOf(match), match.isDirectory()) || sensitiveDir(match),
+    isExcluded: (match) => {
+      const posixRel = relativeOf(match);
+      return (
+        excluded(posixRel, match.isDirectory()) || sensitiveDir(match) || sensitiveTree(posixRel)
+      );
+    },
   };
 }
 
