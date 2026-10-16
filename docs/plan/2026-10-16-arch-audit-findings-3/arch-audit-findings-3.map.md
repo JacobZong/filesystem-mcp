@@ -52,6 +52,7 @@ dropped list: [assets/audit-findings.md](assets/audit-findings.md).
 
 ## Decisions so far
 
+- [Deliver batch C - prune sensitive directories in the shared walk (finding 3)](tickets/T-10-deliver-batch-c-sensitive-walk.md) — delivered: the walk filter prunes sensitive-named directories, all walkers inherit it, move's walk stays exempt; PR #108.
 - [Deliver batch B - derive the skippable errno set (finding 2)](tickets/T-09-deliver-batch-b-skippable-errno.md) — delivered: the errno set is derived from the errno map x skippable codes, delta = EPERM; PR #107.
 - [Deliver batch A - list's size stat through the guarded call (finding 1)](tickets/T-01-deliver-batch-a-guarded-list-stat.md) — delivered: the sizes stat re-validates each path before reading it; PR #106.
 - [Batch B premise - is the skippable-errno EPERM divergence live?](tickets/T-02-batch-b-premise-skippable-errno.md) — LIVE: omission exact, derivation delta = EPERM only; symptom corrected — no listing-kill, the live impact is completer warn-noise and replace-text mis-recording raw EPERM.

@@ -56,3 +56,21 @@ Executing the execution contract in
 - [x] Execution contract: `npm run check` → exit 0.
 - [x] Contract snapshot untouched (no surface change).
 - [x] PR: https://github.com/j0hanz/filesystem-mcp/pull/107
+
+## Batch C — [T-10, sensitive-dir prune in the shared walk](tickets/T-10-deliver-batch-c-sensitive-walk.md)
+
+- **C1** 2026-10-16 — done. Drift check: only batch A's list.ts stat swap; the
+  ancestor loop and all premise files unchanged.
+- **C2** 2026-10-16 — done. Seam implemented per T-03: `GlobEntriesOptions.pathGuard`
+  (opt-in), `sensitiveDir` test in `prune` + `isExcluded`, ancestor loop deleted
+  from list, searchContent/searchFiles/replace-text pass it, move does not.
+- **C3** 2026-10-16 — done. Red-then-green: pin extended (token file under
+  `vault.key`, tightened asserts); implementation stashed → test fails; restored
+  → passes (44/0). CHANGELOG Unreleased Security entry.
+- **C4** 2026-10-16 — done. `npm run check` → exit 0.
+
+### Done
+
+- [x] Execution contract: `npm run check` → exit 0.
+- [x] Contract snapshot untouched (no surface change).
+- [x] PR: https://github.com/j0hanz/filesystem-mcp/pull/108

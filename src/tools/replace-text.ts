@@ -506,6 +506,7 @@ async function handleSearchAndReplace(
         pattern: effectivePattern,
         includeHidden: args.includeHidden,
         skipIgnored: !args.includeIgnored,
+        pathGuard: ctx.fs.pathGuard,
         ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
         signal: ctx.signal,
         baseNameMatch: true,
