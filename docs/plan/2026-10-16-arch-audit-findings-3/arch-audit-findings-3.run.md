@@ -21,6 +21,13 @@ Executing the execution contract in
   guarded stat validates before statting and that validation is not
   abort-aware. Fix: `options.signal.throwIfAborted()` at the top of the try.
   `npm run check` re-run → exit 0.
+- **A5** 2026-10-16 — done. PR review round: Copilot's medium (same abort
+  class, stronger fix) and Codex's P1 (no fd binding on the guarded stat)
+  both ruled VALID against code. Copilot fix applied: the whole guarded stat
+  is now wrapped in `withAbort`, replacing A4's boundary check.
+  `npm run check` → exit 0. Codex residue charted as map tickets T-17/T-18
+  (fd-bound `GuardedFileSystem.stat`, H4 class — needs a caller-inventory
+  premise first, not silent scope growth in this PR).
 
 ### Done
 

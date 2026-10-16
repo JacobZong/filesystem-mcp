@@ -35,6 +35,10 @@ dropped list: [assets/audit-findings.md](assets/audit-findings.md).
   fails the net-deletion gate, measured net ~0); batch F re-scoped to finding 7
   (finding 8's predicate is record-blessed by ADR-002:108-110). Seven batches
   remain — A, B, C, D, F (fold only), G, H — one delivery ticket each.
+- Added 2026-10-16 from PR #106 review: the Codex fd-binding finding on
+  `GuardedFileSystem.stat` is valid under the repo's H4 precedent; charted as
+  [T-17](tickets/T-17-batch-a-followup-premise-fd-stat.md) (premise) and
+  [T-18](tickets/T-18-deliver-batch-a-followup-fd-stat.md) (delivery).
 
 ### Execution contract
 

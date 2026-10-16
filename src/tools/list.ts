@@ -2,7 +2,7 @@ import { basename, posix } from 'node:path';
 
 import * as z from 'zod/v4';
 
-import { processEntriesConcurrently } from '../core/concurrency.ts';
+import { processEntriesConcurrently, withAbort } from '../core/concurrency.ts';
 import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { ErrorCode, normalizeUnknownError, rethrowIfAborted } from '../core/errors.ts';
 import { formatByteSize, formatCount, pageTrailer } from '../core/fmt.ts';
@@ -141,9 +141,13 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
         if (wantSizes && entryType === 'file') {
           try {
             // Race the abort from the first await: the guarded stat validates the
-            // path before statting, and that validation is not abort-aware.
-            options.signal.throwIfAborted();
-            size = (await options.fs.stat(entry.path, { signal: options.signal })).stats.size;
+            // path before statting, and that validation is not abort-aware, so
+            // the race must wrap the whole call.
+            const statted = await withAbort(
+              options.fs.stat(entry.path, { signal: options.signal }),
+              options.signal,
+            );
+            size = statted.stats.size;
           } catch (error) {
             rethrowIfAborted(error);
             // A file can vanish between the walk and the stat; it keeps its place, without a size.
