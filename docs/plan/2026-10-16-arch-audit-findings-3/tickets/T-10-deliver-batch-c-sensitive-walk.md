@@ -3,7 +3,7 @@ kind: frontier-ticket
 id: T-10
 title: Deliver batch C - prune sensitive directories in the shared walk (finding 3)
 map: M-01
-status: open
+status: closed
 type: task
 mode: afk
 priority: 100
@@ -33,3 +33,19 @@ on `GlobEntriesOptions`, threaded into `createWalkFilter`; `prune` and
 `replace-text.ts:504`. Do NOT pass it from `move.ts:521` — that walk must see
 sensitive entries. Pin tests reuse the premise's fixture shape
 (name-pattern-denied directories; probe scripts in `C:\tmp\fsmp-probe\`).
+
+## Resolution
+
+Delivered under the map's execution contract, per the T-03 seam decision.
+`GlobEntriesOptions` gained an opt-in `pathGuard?: Pick<PathGuard,
+'isSensitive'>`; `createWalkFilter` gained a `sensitiveDir` test applied in both
+`prune` (stops descent) and `isExcluded` (drops the dirent fs.glob still
+yields); list's ancestor loop is deleted; searchContent, searchFiles and
+replace-text pass the option; move's protected-entries walk does not. Pin:
+the existing surface test's fixture gained a token-bearing file under a
+denylisted-named directory (`vault.key`), its find_files/replace asserts
+tightened, red-then-green via stash. T-02-style flags: none this batch.
+Completion check: `npm run check` → exit 0. Contract snapshot untouched.
+
+Classification: Delivered. PR:
+https://github.com/j0hanz/filesystem-mcp/pull/108
