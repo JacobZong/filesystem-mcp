@@ -1,0 +1,9 @@
+# Local Codex scanner ignore list
+node_modules/
+dist/
+.claude/
+.superpowers/
+.git/
+reports/
+*.log
+.mcpregistry_*

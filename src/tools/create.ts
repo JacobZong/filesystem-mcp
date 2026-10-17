@@ -13,21 +13,21 @@ import {
   rethrowIfAborted,
 } from '../core/errors.ts';
 import { buildWrittenFileMeta, writtenFileLinks, type WrittenFileMeta } from '../core/file-uri.ts';
-import { countFileLines, destExists, type Stats } from '../core/fs.ts';
-import {
-  confirmKey,
-  describeRefusal,
-  pendingRoundTrip,
-  readAcceptedChoice,
-} from '../core/input-required.ts';
-import { detectMimeFromContent, type FileKind, MIME_SAMPLE_SIZE } from '../core/mime.ts';
-import { isSamePath } from '../core/path-utils.ts';
+import { destExists, type Stats } from '../core/fs.ts';
+import { confirmKey, pendingRoundTrip, readPendingVerdict } from '../core/input-required.ts';
+import { detectMimeFromContent, type FileKind } from '../core/mime.ts';
+import { isEquivalentPath } from '../core/path-utils.ts';
 import { RequiredPath } from '../core/schema.ts';
 import { getMaxTextFileSize, PARALLEL_CONCURRENCY } from '../core/util.ts';
-import { isTotalFailure, runOverPaths } from './batch.ts';
+import { type BatchResult, isTotalFailure, runOverPaths } from './batch.ts';
 import { defineTool, type ToolCtx } from './define.ts';
 
 const EPOCH = new Date(0);
+// runOverPaths rejects an empty list, and a call may carry only one of the two lists.
+const NO_ENTRIES: BatchResult<never> = {
+  results: [],
+  summary: { total: 0, succeeded: 0, failed: 0 },
+};
 
 const CreateFileItemSchema = z.strictObject({
   path: RequiredPath.describe('Absolute path where the file will be created'),
@@ -63,16 +63,35 @@ const CreateInputSchema = z
       .array(CreateFileItemSchema)
       .min(1)
       .max(100)
+      .optional()
       .describe(
         'List of files to create (max 100); each entry requires path and content; combined content is capped at the file-size limit',
       ),
+    directories: z
+      .array(RequiredPath)
+      .min(1)
+      .max(100)
+      .optional()
+      .describe(
+        'Empty directories to create, like mkdir -p; one that already exists is left as it is',
+      ),
   })
   .superRefine((value, ctx) => {
+    if (value.files === undefined && value.directories === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['files'],
+        message: 'Provide files, directories, or both',
+        input: value,
+      });
+    }
+    const files = value.files ?? [];
     // Entries write in parallel and each replaces its file whole, so two
     // entries for one path race: the last rename wins and the other's
-    // content is lost while both report success. One entry per file.
-    for (const [index, file] of value.files.entries()) {
-      const first = value.files.findIndex((other) => isSamePath(other.path, file.path));
+    // content is lost while both report success. One entry per file, counting
+    // the Unicode spellings the path guard resolves to one name (#101).
+    for (const [index, file] of files.entries()) {
+      const first = files.findIndex((other) => isEquivalentPath(other.path, file.path));
       if (first < index) {
         ctx.addIssue({
           code: 'custom',
@@ -86,7 +105,7 @@ const CreateInputSchema = z
     // size their message bound from this same limit (getMaxInboundMessageBytes),
     // so a batch that passes here always fits on the wire. Counted in the same
     // UTF-16 units as the per-file refine above.
-    const total = value.files.reduce((sum, file) => sum + file.content.length, 0);
+    const total = files.reduce((sum, file) => sum + file.content.length, 0);
     const limit = getMaxTextFileSize();
     if (total > limit) {
       ctx.addIssue({
@@ -105,6 +124,7 @@ interface CreateFailureItem {
 
 interface CreateOutput {
   files: CreateFileResult[];
+  directories?: string[];
   failures?: CreateFailureItem[];
   skipped?: string[];
 }
@@ -113,12 +133,18 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
   name: 'create',
   title: 'Create Files',
   description:
-    'Write whole text files: create new ones, overwrite, or append. Missing parent directories are created. ' +
-    'edit or patch changes part of an existing file.',
+    'Write whole text files (create new ones, overwrite, or append) or make empty directories. ' +
+    'Missing parent directories are created. edit or patch changes part of an existing file.',
   input: CreateInputSchema,
   readOnlyHint: false,
-  accessPaths: (args) => args.files.map((f) => f.path),
+  mapPaths: (args, fn) => ({
+    ...args,
+    ...(args.files ? { files: args.files.map((file) => ({ ...file, path: fn(file.path) })) } : {}),
+    ...(args.directories ? { directories: args.directories.map((dir) => fn(dir)) } : {}),
+  }),
   run: async (args, ctx) => {
+    const files = args.files ?? [];
+    const dirs = args.directories ?? [];
     // Phase 1 (no mutation): which entries would replace a file that exists
     // right now? Those need the user's word before anything is written (R14).
     // append never destroys, and overwrite: true is that word given up front.
@@ -126,7 +152,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     // A file that appears between rounds needs no re-stat before the write:
     // the retry re-plans, and the grown pending set fails the R9 check.
     const { results: planned } = await processInParallel(
-      args.files,
+      files,
       async (entry) => {
         if (entry.append || entry.overwrite) return undefined;
         try {
@@ -142,7 +168,7 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
     );
     const pendingByPath = new Map<string, string>();
     for (const { index, value } of planned) {
-      const requested = args.files[index]?.path;
+      const requested = files[index]?.path;
       if (value && requested) pendingByPath.set(requested, value);
     }
     const pendingSorted = [...new Set(pendingByPath.values())].sort();
@@ -162,48 +188,78 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
       if (round !== undefined) return round;
     }
 
-    const batch = await runOverPaths<
-      z.infer<typeof CreateFileItemSchema>,
-      { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
-    >(args.files, ctx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
-      const pendingPath = pendingByPath.get(path);
-      if (pendingPath !== undefined) {
-        const key = confirmKey(pendingSorted.indexOf(pendingPath));
-        const choice = readAcceptedChoice(ctx.inputResponses, key);
-        if (choice === 'skip') return { skipped: path };
-        if (choice !== 'overwrite') {
-          throw new FsError(
-            ErrorCode.CANCELLED,
-            `create cancelled: overwrite of "${path}" was ${describeRefusal(ctx, key)}`,
-            path,
-          );
-        }
-      }
-
-      // Lock per resolved file so two entries naming one file (e.g. through a
-      // symlinked parent) cannot clobber each other.
-      return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
-        // The file may have appeared since the overwrite set was planned.
-        if (
-          !append &&
-          !overwrite &&
-          pendingPath === undefined &&
-          (await destExists(ctx.fs, resolvedTarget, 'create'))
-        ) {
-          throw new FsError(
-            ErrorCode.INVALID_INPUT,
-            `create refused: "${path}" appeared after overwrite confirmation was checked`,
-            path,
-          );
-        }
-        return createOne(path, content, append, ctx);
-      });
+    // One counter across both batches: ProgressSession drops a value at or below its last one.
+    const progressTotal = dirs.length + files.length;
+    const progressFrom = (offset: number): ToolCtx => ({
+      ...ctx,
+      onProgress: ({ current }) => {
+        ctx.onProgress({ current: offset + current, total: progressTotal });
+      },
     });
 
+    // Directories wait for the overwrite question above, so nothing is written
+    // before the user answers.
+    const dirBatch =
+      dirs.length > 0
+        ? await runOverPaths(dirs, progressFrom(0), ErrorCode.UNKNOWN, async (dir) => {
+            await ctx.fs.mkdir(dir, { recursive: true });
+            return dir;
+          })
+        : NO_ENTRIES;
+
+    const filesCtx = progressFrom(dirs.length);
+    const batch =
+      files.length > 0
+        ? await runOverPaths<
+            z.infer<typeof CreateFileItemSchema>,
+            { file: CreateFileResult; resourceLink?: ContentBlock } | { skipped: string }
+          >(files, filesCtx, ErrorCode.UNKNOWN, async ({ path, content, append, overwrite }) => {
+            const pendingPath = pendingByPath.get(path);
+            if (pendingPath !== undefined) {
+              const verdict = readPendingVerdict(ctx, pendingSorted, pendingPath, 'overwrite');
+              if (verdict === 'skipped') return { skipped: path };
+              if (verdict !== 'accepted') {
+                throw new FsError(
+                  ErrorCode.CANCELLED,
+                  `create cancelled: overwrite of "${path}" was ${verdict.refused}`,
+                  path,
+                );
+              }
+            }
+
+            // Lock per resolved file so two entries naming one file (e.g. through a
+            // symlinked parent) cannot clobber each other.
+            return ctx.fs.lockForWrite(path, async (resolvedTarget) => {
+              // The file may have appeared since the overwrite set was planned.
+              if (
+                !append &&
+                !overwrite &&
+                pendingPath === undefined &&
+                (await destExists(ctx.fs, resolvedTarget, 'create'))
+              ) {
+                throw new FsError(
+                  ErrorCode.INVALID_INPUT,
+                  `create refused: "${path}" appeared after overwrite confirmation was checked`,
+                  path,
+                );
+              }
+              return createOne(path, content, append, ctx);
+            });
+          })
+        : NO_ENTRIES;
+
     const results: CreateFileResult[] = [];
+    const directories: string[] = [];
     const failures: CreateFailureItem[] = [];
     const skipped: string[] = [];
     const links: ContentBlock[] = [];
+    for (const r of dirBatch.results) {
+      if ('error' in r) {
+        failures.push({ path: r.path, error: r.error });
+      } else {
+        directories.push(r.value);
+      }
+    }
     for (const r of batch.results) {
       if ('error' in r) {
         failures.push({ path: r.path, error: r.error });
@@ -219,26 +275,33 @@ export const CREATE = defineTool<typeof CreateInputSchema, CreateOutput>({
 
     const structured = {
       files: results,
+      ...(directories.length > 0 ? { directories } : {}),
       ...(failures.length > 0 ? { failures } : {}),
       ...(skipped.length > 0 ? { skipped } : {}),
+    };
+    // Failed only when every directory and every file failed, across both lists.
+    const summary = {
+      total: dirBatch.summary.total + batch.summary.total,
+      succeeded: dirBatch.summary.succeeded + batch.summary.succeeded,
+      failed: dirBatch.summary.failed + batch.summary.failed,
     };
     // No `text` on purpose. The one-line roster this used to build named the
     // paths and dropped every per-file size, line count and error the caller
     // asked `create` for. Supplying no text makes this a data tool, so
     // `define.ts` renders the JSON and keeps it in `structuredContent`.
-    if (links.length > 0) {
-      return { structured, resources: links, isError: isTotalFailure(batch.summary) };
-    }
-
-    return { structured, isError: isTotalFailure(batch.summary) };
+    return { structured, resources: links, isError: isTotalFailure(summary) };
   },
-  progress: (args) => ({
-    label: 'Create',
-    subject:
-      args.files.length === 1
-        ? basename(args.files[0]?.path ?? '')
-        : `${String(args.files.length)} files`,
-  }),
+  progress: (args) => {
+    const files = args.files ?? [];
+    const dirs = args.directories ?? [];
+    if (files.length + dirs.length === 1) {
+      return { label: 'Create', subject: basename(files[0]?.path ?? dirs[0] ?? '') };
+    }
+    const counts: string[] = [];
+    if (files.length > 0) counts.push(`${String(files.length)} files`);
+    if (dirs.length > 0) counts.push(`${String(dirs.length)} directories`);
+    return { label: 'Create', subject: counts.join(', ') };
+  },
 });
 
 async function createOne(
@@ -281,11 +344,11 @@ async function createOne(
       stats = (await ctx.fs.stat(appended.validPath)).stats;
       // Sniff the resulting file's leading bytes, not the appended
       // chunk: text appended to a binary file is still a binary file.
-      const sample = await ctx.fs.readLeadingSample(appended.validPath, MIME_SAMPLE_SIZE);
+      const sample = await ctx.fs.readLeadingSample(appended.validPath);
       const mimeInfo = detectMimeFromContent(appended.validPath, sample);
       mimeType = mimeInfo.mimeType;
       kind = mimeInfo.kind;
-      lineCount = await countFileLines(appended.validPath);
+      lineCount = await ctx.fs.countFileLines(appended.validPath);
     } catch (error) {
       ctx.log(
         'warning',
@@ -311,6 +374,7 @@ async function createOne(
         stats?.size,
         false,
         stats?.mtime.toISOString(),
+        ctx.transport,
       ),
     };
     created = (stats?.birthtime ?? EPOCH).toISOString();
@@ -320,26 +384,25 @@ async function createOne(
       signal: ctx.signal,
     });
     validPath = written.validPath;
-    const fileStats = (await ctx.fs.stat(path, { signal: ctx.signal })).stats;
-    created = fileStats.birthtime.toISOString();
-    modified = fileStats.mtime.toISOString();
+    const nowIso = new Date().toISOString();
+    let fileStats: Stats | undefined;
+    try {
+      fileStats = (await ctx.fs.stat(written.validPath)).stats;
+    } catch {
+      /* post-commit metadata only */
+    }
+    created = fileStats?.birthtime.toISOString() ?? nowIso;
+    modified = fileStats?.mtime.toISOString() ?? nowIso;
     meta = buildWrittenFileMeta({
       validPath: written.validPath,
       content,
       lastModified: modified,
+      transport: ctx.transport,
     });
   }
 
-  const file: CreateFileResult = {
-    path: validPath,
-    size: meta.size,
-    lineCount: meta.lineCount,
-    mimeType: meta.mimeType,
-    kind: meta.kind,
-    resourceUri: meta.resourceUri,
-    created,
-    modified,
-  };
+  const { resourceLink, ...fileMeta } = meta;
+  const file: CreateFileResult = { path: validPath, ...fileMeta, created, modified };
 
-  return meta.resourceLink ? { file, resourceLink: meta.resourceLink } : { file };
+  return resourceLink ? { file, resourceLink } : { file };
 }

@@ -1,7 +1,6 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import { createHash } from 'node:crypto';
-import type { Stats } from 'node:fs';
 import { basename } from 'node:path';
 
 import * as z from 'zod/v4';
@@ -9,20 +8,28 @@ import * as z from 'zod/v4';
 import { processInParallel } from '../core/concurrency.ts';
 import { ErrorCode, FsError } from '../core/errors.ts';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.ts';
-import { detectMimeFromContent, detectMimeType, type FileKind } from '../core/mime.ts';
-import type { ReadFileResult, ReadSpec } from '../core/read.ts';
-import { readFileWithStats } from '../core/read.ts';
+import {
+  detectMimeFromContent,
+  detectMimeType,
+  type FileKind,
+  isKnownBinaryExtension,
+} from '../core/mime.ts';
+import {
+  BINARY_FILE_MESSAGE,
+  isBinaryRefusal,
+  type ReadFileResult,
+  type ReadSpec,
+} from '../core/read.ts';
 import {
   defaultFalseBoolean,
-  singleOrBatchAccessPaths,
+  mapSingleOrBatchPaths,
   singleOrBatchPathsInput,
   validateReadRange,
 } from '../core/schema.ts';
 import {
+  base64EncodedBytes,
   DEFAULT_CONTINUATION_CHUNK_SIZE,
-  DEFAULT_SEARCH_TIMEOUT_MS,
   getMaxTextFileSize,
-  MAX_OUTBOUND_RESULT_BYTES,
   PARALLEL_CONCURRENCY,
   READ_MANY_MAX_TOTAL_BYTES,
 } from '../core/util.ts';
@@ -32,52 +39,71 @@ import type { ToolCtx } from './define.ts';
 import { defineTool } from './define.ts';
 import { routeBinaryRead } from './read-route.ts';
 
-const rangeField = (description: string) =>
-  z
-    .int32()
-    .min(1, { message: 'Min: 1' })
-    .max(100000, { message: 'Max: 100,000' })
+/**
+ * `z.int32()`'s own ceiling on startLine/endLine, named so a continuation
+ * never asks for more. Not restated as `.max()`: that reports it twice.
+ */
+const MAX_LINE_NUMBER = 2_147_483_647;
+
+/** One spelling of the resource-content digest every read result that carries a hash uses. */
+const sha256Hex = (data: string | Buffer): string =>
+  createHash('sha256').update(data).digest('hex');
+
+const rangeField = (description: string, count = false) => {
+  const field = z.int32().min(1, { message: 'Min: 1' });
+  return (count ? field.max(100000, { message: 'Max: 100,000' }) : field)
     .optional()
     .describe(description);
+};
 
 const readRangeFields = {
-  head: rangeField('Return first N lines'),
-  tail: rangeField('Return last N lines'),
+  head: rangeField('Return first N lines', true),
+  tail: rangeField('Return last N lines', true),
   startLine: rangeField('Start line (1-indexed)'),
-  endLine: rangeField('End line (1-indexed)'),
+  endLine: rangeField('End line (1-indexed); requires startLine'),
 };
+
+/** A slice read: only a full read returns media or a binary resource. */
+function hasLineRange(args: {
+  head?: number | undefined;
+  tail?: number | undefined;
+  startLine?: number | undefined;
+  endLine?: number | undefined;
+}): boolean {
+  return (
+    args.head !== undefined ||
+    args.tail !== undefined ||
+    args.startLine !== undefined ||
+    args.endLine !== undefined
+  );
+}
 
 const ReadFileInputSchema = singleOrBatchPathsInput({
   includeHash: defaultFalseBoolean('Include SHA-256 hash of the returned content in the response'),
+  binary: defaultFalseBoolean(
+    'Return a binary file that is not an image or audio whole, as a base64 embedded resource. Full reads only.',
+  ),
   ...readRangeFields,
-})
-  .superRefine((value, ctx) => {
-    validateReadRange(
-      {
-        head: value.head,
-        tail: value.tail,
-        startLine: value.startLine,
-        endLine: value.endLine,
-      },
-      ctx,
-    );
-  })
-  // Mirror `validateReadRange` on the wire. Without this the four line params
-  // published as four independent optional integers, so `{ path, head, tail }`
-  // passed the advertised schema and was rejected only at call time.
-  //
-  // `oneOf` is restated because `.meta()` replaces the entry
-  // `singleOrBatchPathsInput` set rather than merging into it — dropping it here
-  // would silently un-publish the path/paths rule.
-  .meta({
-    // The line-param exclusivity that used to sit here as a five-branch
-    // `not/anyOf` is one sentence in the description instead: validateReadRange
-    // rejects every conflicting combination by name at runtime, so the wire copy
-    // was paying for a second statement of a rule the model reads better in
-    // prose.
-    oneOf: [{ required: ['path'] }, { required: ['paths'] }],
-    dependentRequired: { endLine: ['startLine'] },
-  });
+}).superRefine((value, ctx) => {
+  validateReadRange(
+    {
+      head: value.head,
+      tail: value.tail,
+      startLine: value.startLine,
+      endLine: value.endLine,
+    },
+    ctx,
+  );
+  if (value.binary && hasLineRange(value)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['binary'],
+      message:
+        "Cannot use 'binary' with 'head'/'tail'/'startLine'/'endLine'. A binary file is read whole.",
+      input: value,
+    });
+  }
+});
 
 interface ReadContinuation {
   tool: 'read';
@@ -90,6 +116,8 @@ interface ReadPerPathValue {
   mimeType?: string;
   kind?: FileKind;
   resourceUri?: string;
+  /** Bytes in the file; set when the bytes ride a media or resource block. */
+  size?: number;
   /** ISO-8601 mtime at read time; also rides the resource_link. */
   modified?: string;
   continuation?: ReadContinuation;
@@ -133,6 +161,8 @@ function buildReadContinuation(
   if (!result.hasMoreLines) return undefined;
   const linesRead = result.linesRead ?? 0;
   const nextStart = (result.startLine ?? 1) + linesRead;
+  // Args the schema would reject are no continuation; clamp the end into it.
+  if (nextStart > MAX_LINE_NUMBER) return undefined;
   let chunkSize: number;
   if (result.head !== undefined) {
     chunkSize = result.head;
@@ -141,7 +171,7 @@ function buildReadContinuation(
   } else {
     chunkSize = DEFAULT_CONTINUATION_CHUNK_SIZE;
   }
-  const nextEnd = nextStart + chunkSize - 1;
+  const nextEnd = Math.min(nextStart + chunkSize - 1, MAX_LINE_NUMBER);
   return {
     tool: 'read',
     args: { path: requestedPath, startLine: nextStart, endLine: nextEnd },
@@ -150,27 +180,42 @@ function buildReadContinuation(
 }
 
 /**
- * The published metadata plus the bytes this call read. `content` and
- * `mediaData` exist only between `readOnePath` and the content blocks `run`
+ * The published metadata plus the bytes this call read. `content`, `mediaData`
+ * and `blobData` exist only between `readOnePath` and the content blocks `run`
  * builds from them — they are stripped before the structured half is returned,
  * which is why they are not in `ReadPerPathValue`.
  */
 type PerPathReadValue = ReadPerPathValue & {
   content?: string;
+  fileSize?: number;
   mediaData?: string;
+  blobData?: string;
 };
 
 interface BatchFileInfo {
   index: number;
   size: number;
-  validPath: string;
-  stats: Stats;
 }
 
 interface BudgetItem {
   path: string;
-  known?: { validPath: string; stats: Stats };
   skip?: FsError;
+}
+
+interface BudgetMode {
+  fullRead: boolean;
+  binary: boolean;
+}
+
+/**
+ * What a file costs the batch: one whose bytes ship as base64 costs that size.
+ * Only a full read ships base64; a slice of an svg is text.
+ */
+function budgetBytes(path: string, size: number, { fullRead, binary }: BudgetMode): number {
+  if (!fullRead) return size;
+  const { kind } = detectMimeType(path);
+  const base64 = kind === 'image' || kind === 'audio' || (binary && isKnownBinaryExtension(path));
+  return base64 ? base64EncodedBytes(size) : size;
 }
 
 async function collectFileBudget(
@@ -178,6 +223,7 @@ async function collectFileBudget(
   maxTotalSize: number,
   maxSize: number,
   ctx: Pick<ToolCtx, 'fs' | 'signal' | 'log'>,
+  mode: BudgetMode,
 ): Promise<BudgetItem[]> {
   const indexed = filePaths.map((path, index) => ({ path, index }));
   const { results } = await processInParallel(
@@ -185,12 +231,7 @@ async function collectFileBudget(
     async ({ path, index }): Promise<BatchFileInfo | undefined> => {
       try {
         const out = await ctx.fs.stat(path);
-        return {
-          index,
-          size: Math.min(out.stats.size, maxSize),
-          validPath: out.validPath,
-          stats: out.stats,
-        };
+        return { index, size: budgetBytes(path, Math.min(out.stats.size, maxSize), mode) };
       } catch (err: unknown) {
         ctx.log('debug', `collectFileBudget: stat failed for "${path}": ${String(err)}`, 'read');
         return undefined;
@@ -208,7 +249,7 @@ async function collectFileBudget(
   let total = 0;
   return filePaths.map((path, i): BudgetItem => {
     const info = byIndex.get(i);
-    // A failed stat is neither known nor skipped, so its read surfaces the
+    // A failed stat is not skipped, so its read surfaces the
     // real error, not a misleading TOO_LARGE.
     if (info === undefined) return { path };
     // Skip this file only; a later, smaller file that still fits is read.
@@ -223,7 +264,7 @@ async function collectFileBudget(
       };
     }
     total += info.size;
-    return { path, known: { validPath: info.validPath, stats: info.stats } };
+    return { path };
   });
 }
 
@@ -236,12 +277,13 @@ function buildPerPathReadValue(
     result.hasMoreLines && result.readMode !== 'tail'
       ? buildReadContinuation(result, options.requestedPath)
       : undefined;
-  const contentHash = options.includeHash
-    ? createHash('sha256').update(result.content, 'utf-8').digest('hex')
-    : undefined;
+  const contentHash = options.includeHash ? sha256Hex(result.content) : undefined;
+
+  const canLink = result.fileSize === undefined || result.fileSize <= getMaxTextFileSize();
 
   return {
     content: result.content,
+    ...(result.fileSize !== undefined ? { fileSize: result.fileSize } : {}),
     mimeType: mimeInfo.mimeType,
     kind: mimeInfo.kind,
     ...(continuation ? { continuation } : {}),
@@ -253,7 +295,7 @@ function buildPerPathReadValue(
     ...(result.startLine !== undefined ? { startLine: result.startLine } : {}),
     ...(result.endLine !== undefined ? { endLine: result.endLine } : {}),
     ...(contentHash !== undefined ? { contentHash } : {}),
-    resourceUri: buildFileResourceUri(result.path),
+    ...(canLink ? { resourceUri: buildFileResourceUri(result.path) } : {}),
     modified: result.modified,
   };
 }
@@ -280,23 +322,46 @@ function readTrailer(v: PerPathReadValue): string[] {
   return lines;
 }
 
+/**
+ * `binary: true` after the text path refused the file as binary. readRaw
+ * re-validates the path (roots, denylist) and enforces the same size cap.
+ * A file refused by its extension can still probe as text: it ships as the
+ * extension says, octet-stream.
+ */
+async function readBinaryResource(
+  filePath: string,
+  args: ReadFileInput,
+  ctx: ToolCtx,
+): Promise<PerPathReadValue> {
+  const raw = await ctx.fs.readRaw(filePath, { signal: ctx.signal });
+  const asText = raw.kind === 'text';
+  const kind: FileKind = asText ? 'binary' : raw.kind;
+  const mimeType = asText ? 'application/octet-stream' : raw.mimeType;
+  const size = raw.content.length;
+  return {
+    content: `[binary ${kind} content: ${String(size)} bytes (${mimeType}); returned as an embedded resource block]`,
+    mimeType,
+    kind,
+    size,
+    resourceUri: buildFileResourceUri(raw.validPath),
+    modified: raw.modified,
+    blobData: raw.content.toString('base64'),
+    ...(args.includeHash ? { contentHash: sha256Hex(raw.content) } : {}),
+  };
+}
+
 async function readOnePath(
   filePath: string,
   args: ReadFileInput,
   ctx: ToolCtx,
-  known?: { validPath: string; stats: Stats },
 ): Promise<PerPathReadValue> {
   // Image/audio full read: return a media content block instead of throwing
   // INVALID_INPUT ("Binary file detected."). Line-range reads are
   // text-oriented and stay rejected. `readRaw` enforces the same size cap as
   // the text path (getMaxTextFileSize), so a too-large image surfaces TOO_LARGE
-  // rather than blowing memory. svg carries kind:'image' but is XML text —
-  // readRaw.isBinary is false for it, so it falls through to the text path.
-  const isRangeRead =
-    args.head !== undefined ||
-    args.tail !== undefined ||
-    args.startLine !== undefined ||
-    args.endLine !== undefined;
+  // rather than blowing memory. svg is kind 'image' in EXT_MAP, so readRaw
+  // reports it binary and it returns as an image block.
+  const isRangeRead = hasLineRange(args);
   if (!isRangeRead) {
     const mime = detectMimeType(filePath);
     if (mime.kind === 'image' || mime.kind === 'audio') {
@@ -306,22 +371,42 @@ async function readOnePath(
           content: `[binary ${mime.kind} content: ${String(raw.content.length)} bytes; returned as a ${mime.kind} content block]`,
           mimeType: raw.mimeType,
           kind: mime.kind,
+          size: raw.content.length,
+          resourceUri: buildFileResourceUri(raw.validPath),
+          modified: raw.modified,
           mediaData: raw.content.toString('base64'),
+          ...(args.includeHash ? { contentHash: sha256Hex(raw.content) } : {}),
         };
       }
     }
   }
 
   const spec = buildReadSpec(args, ctx.signal);
-  const result = known
-    ? await readFileWithStats(filePath, known.validPath, known.stats, spec)
-    : await ctx.fs.readFile(filePath, spec);
+  // The read re-validates and re-stats: the budget pass's stat is only a
+  // size estimate, never a substitute for the guarded open.
+  let result: ReadFileResult;
+  try {
+    result = await ctx.fs.readFile(filePath, spec);
+  } catch (error: unknown) {
+    if (!isBinaryRefusal(error)) throw error;
+    // The schema refuses binary with a range, so this is always a full read.
+    if (args.binary) return await readBinaryResource(filePath, args, ctx);
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      isRangeRead
+        ? `${BINARY_FILE_MESSAGE} It has no lines; read it whole with binary: true to get it as a base64 embedded resource.`
+        : `${BINARY_FILE_MESSAGE} Pass binary: true to get it as a base64 embedded resource.`,
+      filePath,
+      error,
+    );
+  }
 
   return buildPerPathReadValue(result, {
     includeHash: args.includeHash,
     // The continuation is args the caller pastes back, so it echoes the path
-    // they wrote. `result.path` is the resolved absolute one — on Windows that
-    // is a backslash-doubling JSON string that also spells out the server root.
+    // they wrote, or the root-resolved one a relative path was rewritten to.
+    // `result.path` is the real path — on Windows that is a backslash-doubling
+    // JSON string that also spells out the server root.
     requestedPath: filePath,
   });
 }
@@ -332,10 +417,11 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
   description:
     'Read text files, like cat: whole, or one slice via head, tail, or startLine/endLine. ' +
     'Images and audio return as media; PDF/DjVu, e-books, Office files, archives and videos are opened ' +
-    'automatically with read_pdf_pages, read_document or read_video_frames (call those directly for more pages, offsets or frames).',
+    'automatically with read_pdf_pages, read_document or read_video_frames (call those directly for more pages, offsets or frames). ' +
+    'Pass binary: true to get any other binary file, or one of those whole, as a base64 embedded resource.',
   input: ReadFileInputSchema,
   readOnlyHint: true,
-  timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
+  deadline: true,
   defaultErrorCode: ErrorCode.NOT_FILE,
   progress: (args) => {
     const isBatch = args.paths !== undefined;
@@ -354,7 +440,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     }
     return { label: READ_TOOL_LABEL, subject: name, ...(scope ? { scope } : {}) };
   },
-  accessPaths: singleOrBatchAccessPaths,
+  mapPaths: mapSingleOrBatchPaths,
   run: async (args, ctx) => {
     // Fork: a single binary document (PDF/DjVu, e-book, Office, archive, video) goes to the
     // matching document tool; its result shape differs from read's, hence the cast.
@@ -362,15 +448,21 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     if (routed) return routed as never;
     const items: BudgetItem[] =
       args.paths !== undefined
-        ? await collectFileBudget(args.paths, READ_MANY_MAX_TOTAL_BYTES, getMaxTextFileSize(), ctx)
+        ? await collectFileBudget(
+            args.paths,
+            READ_MANY_MAX_TOTAL_BYTES,
+            getMaxTextFileSize(),
+            ctx,
+            { fullRead: !hasLineRange(args), binary: args.binary },
+          )
         : [{ path: args.path ?? '' }];
     const { results: ordered, summary } = await runOverPaths(
       items,
       ctx,
       ErrorCode.NOT_FILE,
-      ({ path, known, skip }) => {
+      ({ path, skip }) => {
         if (skip) throw skip;
-        return readOnePath(path, args, ctx, known);
+        return readOnePath(path, args, ctx);
       },
     );
 
@@ -378,6 +470,13 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     for (const result of ordered) {
       if ('error' in result) continue;
       const v = result.value;
+      if (v.blobData !== undefined && v.resourceUri !== undefined && v.mimeType !== undefined) {
+        resources.push({
+          type: 'resource',
+          resource: { uri: v.resourceUri, mimeType: v.mimeType, blob: v.blobData },
+        });
+        continue;
+      }
       // Image/audio full read: emit the media content block alongside the
       // structured value. The base64 lives in v.mediaData (set in readOnePath).
       if (v.mediaData && v.mimeType && (v.kind === 'image' || v.kind === 'audio')) {
@@ -388,7 +487,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
         );
         continue;
       }
-      if (!v.resourceUri || !v.content) continue;
+      if (!v.resourceUri || v.content === undefined) continue;
       // `result.path` is the path as *requested*; `v.resourceUri` was built from
       // the *validated* one. Rebuilding from the request would emit a second URI
       // for the same file whenever the two differ in case — subscribe by one and
@@ -398,7 +497,7 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
           v.resourceUri,
           basename(result.path),
           v.mimeType ?? 'application/octet-stream',
-          Buffer.byteLength(v.content, 'utf8'),
+          v.fileSize ?? Buffer.byteLength(v.content, 'utf8'),
           v.modified,
         ),
       );
@@ -434,29 +533,15 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
     // hashes, continuations, resourceUri.
     const structuredResults = ordered.map((result) => {
       if ('error' in result) return result;
-      const { content: _content, mediaData: _mediaData, ...value } = result.value;
+      const {
+        content: _content,
+        fileSize: _fileSize,
+        mediaData: _mediaData,
+        blobData: _blobData,
+        ...value
+      } = result.value;
       return { ...result, value };
     });
-
-    // Only stdio has the SDK's fixed 10 MiB ReadBuffer; a result that overflows
-    // it drops the connection. Measure the encoded payload (text, media blocks,
-    // structured half) so escaping and base64 are counted exactly.
-    if (ctx.transport === 'stdio') {
-      const encodedBytes =
-        Buffer.byteLength(JSON.stringify([{ type: 'text', text }, ...resources]), 'utf8') +
-        Buffer.byteLength(JSON.stringify({ results: structuredResults, summary }), 'utf8');
-      if (encodedBytes > MAX_OUTBOUND_RESULT_BYTES) {
-        // Media cannot be sliced, so head/tail is no remedy for it.
-        const isMedia = resources.some((b) => b.type === 'image' || b.type === 'audio');
-        const remedy = isMedia
-          ? 'This media file is too large to return over the stdio transport; connect over HTTP, or raise it as a smaller file.'
-          : 'Read a slice with head, tail, or startLine/endLine.';
-        throw new FsError(
-          ErrorCode.TOO_LARGE,
-          `Read result too large to return (${String(encodedBytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit). ${remedy}`,
-        );
-      }
-    }
 
     return {
       structured: { results: structuredResults, summary },
@@ -464,5 +549,16 @@ export const READ = defineTool<typeof ReadFileInputSchema, BatchResult<ReadPerPa
       isError: isTotalFailure(summary),
       ...(resources.length > 0 ? { resources } : {}),
     };
+  },
+  // Media and binary resources cannot be sliced, so head/tail is no remedy.
+  oversizeRemedy: (result) => {
+    const types = new Set(result.resources?.map((b) => b.type));
+    if (types.has('image') || types.has('audio')) {
+      return 'This media file is too large to return over the stdio transport; connect over HTTP, or raise it as a smaller file.';
+    }
+    if (types.has('resource')) {
+      return 'This binary file is too large to return over the stdio transport; connect over HTTP.';
+    }
+    return 'Read a slice with head, tail, or startLine/endLine.';
   },
 });

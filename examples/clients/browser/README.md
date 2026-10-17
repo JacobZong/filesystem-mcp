@@ -42,7 +42,8 @@ client API:
   passes that to the page, the page shows each request as a dialog, and then
   repeats the same call with `inputResponses` (keyed like `inputRequests`)
   and the unchanged `requestState`, until a normal result comes back. This
-  suits a web backend: no request has to stay open while a person decides.
+  suits a web backend, because no request has to stay open while a person
+  decides.
 - **Protocol era.** `input_required` exists only in the 2026-07-28 revision,
   so `versionNegotiation` pins that revision instead of negotiating. The
   client still declares `elicitation: { form: {} }`, with no handler: without

@@ -36,12 +36,18 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      # Read the CI check runs of the commit being released.
+      checks: read
     outputs:
       version: ${{ steps.ver.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Push with the deploy key: the main-branch ruleset lets only this
+          # key (and the repository admin) update main without a PR (plan 064).
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 
@@ -54,6 +60,36 @@ jobs:
             exit 1
           fi
 
+      # The release re-runs the checks on Ubuntu only. This reads the CI result for
+      # the exact commit being released, so a red or unfinished Windows leg (or a
+      # commit whose CI never ran) cannot ship.
+      # Only check runs from the GitHub Actions app (id 15368) count.
+      - name: Require green CI for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUIRED: 'Check (ubuntu-latest)|Check (windows-latest)|Release build paths'
+        run: |
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+            --jq '.check_runs | map(select(.app.id == 15368)) | sort_by(.id) | reverse | .[] | [.name, .status, (.conclusion // "none")] | @tsv')
+          fail=0
+          IFS='|' read -ra names <<< "$REQUIRED"
+          for name in "${names[@]}"; do
+            line=$(printf '%s\n' "$runs" | awk -F'\t' -v n="$name" '$1 == n' | head -n1)
+            if [ -z "$line" ]; then
+              echo "::error::No '$name' check run for $GITHUB_SHA — CI has not run on this commit"
+              fail=1
+            elif [ "$(printf '%s' "$line" | cut -f2)" != "completed" ]; then
+              echo "::error::'$name' is still $(printf '%s' "$line" | cut -f2) for $GITHUB_SHA — wait for CI"
+              fail=1
+            elif [ "$(printf '%s' "$line" | cut -f3)" != "success" ]; then
+              echo "::error::'$name' concluded $(printf '%s' "$line" | cut -f3) for $GITHUB_SHA"
+              fail=1
+            else
+              echo "ok: $name"
+            fi
+          done
+          exit "$fail"
+
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
@@ -63,13 +99,14 @@ jobs:
         id: ver
         env:
           CUSTOM_VERSION: ${{ inputs.custom_version }}
+          BUMP: ${{ inputs.bump }}
         run: |
           CURRENT=$(node -p "require('./package.json').version")
           if [ -n "$CUSTOM_VERSION" ]; then
             NEW="$CUSTOM_VERSION"
           else
             IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-            case "${{ inputs.bump }}" in
+            case "$BUMP" in
               major) NEW="$((MAJOR + 1)).0.0" ;;
               minor) NEW="$MAJOR.$((MINOR + 1)).0" ;;
               patch) NEW="$MAJOR.$MINOR.$((PATCH + 1))" ;;
@@ -78,7 +115,7 @@ jobs:
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
           echo "### Version: $CURRENT → $NEW" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Bump package.json, server.json and MCPB manifest
+      - name: Bump package.json, server.json, MCPB and plugin manifests
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
@@ -108,12 +145,17 @@ jobs:
           fs.writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
 
           // String replace keeps Prettier's layout; the first "version" key is top-level.
-          const manifestPath = 'mcpb/manifest.json';
-          const manifest = fs.readFileSync(manifestPath, 'utf8');
-          fs.writeFileSync(
-            manifestPath,
-            manifest.replace(/"version": "[^"]*"/, `"version": "${process.env.VERSION}"`),
-          );
+          for (const manifestPath of [
+            'mcpb/manifest.json',
+            '.codex-plugin/plugin.json',
+            '.cursor-plugin/plugin.json',
+          ]) {
+            const manifest = fs.readFileSync(manifestPath, 'utf8');
+            fs.writeFileSync(
+              manifestPath,
+              manifest.replace(/"version": "[^"]*"/, `"version": "${process.env.VERSION}"`),
+            );
+          }
           NODE
           npm install --package-lock-only --ignore-scripts
 
@@ -129,10 +171,10 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          git add package.json package-lock.json server.json mcpb/manifest.json
+          git add package.json package-lock.json server.json mcpb/manifest.json .codex-plugin/plugin.json .cursor-plugin/plugin.json
           git commit -m "release: v$VERSION"
           git tag -a "v$VERSION" -m "v$VERSION"
-          git push origin main --follow-tags
+          git push --atomic origin main --follow-tags
 
       - name: Create GitHub release
         env:
@@ -154,11 +196,11 @@ jobs:
     env:
       VERSION: ${{ needs.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: v${{ needs.release.outputs.version }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
@@ -201,14 +243,14 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: v${{ needs.release.outputs.version }}
 
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -216,7 +258,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -226,7 +268,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build & push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
@@ -262,7 +304,7 @@ jobs:
     env:
       VERSION: ${{ needs.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: v${{ needs.release.outputs.version }}
 
@@ -304,12 +346,12 @@ jobs:
     env:
       VERSION: ${{ needs.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: v${{ needs.release.outputs.version }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 

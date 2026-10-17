@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { globEntries, type GlobEntriesOptions, isSafeGlobSyntax } from '../src/core/glob.ts';
+import { IS_WINDOWS } from '../src/core/path-utils.ts';
 import {
   cleanupTestRoot,
   createTestClientPair,
@@ -106,6 +107,255 @@ describe('globEntries', () => {
       assert.strictEqual(isSafeGlobSyntax('C:foo/*'), false);
       assert.strictEqual(isSafeGlobSyntax('   '), false);
     });
+
+    // Issue #68: the engine expands braces and reads a one-character class as
+    // its character, so `..` can be built from parts the raw string hides.
+    it('refuses a pattern whose expansion builds a .. segment', () => {
+      for (const bad of [
+        '..{,x}/*.txt',
+        '..{,}/*.txt',
+        '.{.,}/*.txt',
+        '{.,x}{.,y}/*.txt',
+        '.{.{,a},b}/*.txt',
+        '{a/.{.,},b}/x',
+        '[.][.]/*.txt',
+        '.[.]/*.txt',
+        '[.-.]./x',
+        '.{Z..a}./*.txt',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(bad), false, bad);
+      }
+    });
+
+    it('refuses a pattern whose expansion starts at a root', () => {
+      for (const bad of [
+        '\\etc\\host*',
+        '{/etc,x}/host*',
+        '{,/}x',
+        '//server/share/*',
+        '{C:,x}/y',
+        '{A..Z}:/y',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(bad), false, bad);
+      }
+    });
+
+    it('accepts brace sets, ranges and classes that stay below the root', () => {
+      for (const ok of [
+        '**/*.{ts,tsx}',
+        '{src/a,test/b}/*.ts',
+        '{,**/}*.ts',
+        '*.{test,spec}.ts',
+        '**/.{git,svn}/**',
+        '{a..c}/x',
+        'v{1..3}.md',
+        '.*/x',
+        '.?/x',
+        '[[]x',
+        'a{b',
+        '{a,b}'.repeat(10),
+        // Extglobs and classes compile to patterns, which the walk never
+        // follows to `..`; main accepted these and they cannot leave cwd.
+        '.!(git)',
+        '**/.!(git|svn|hg)',
+        '**/?(.)*',
+        '@(.|)*',
+        '*.[[:alpha:]],',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(ok), true, ok);
+      }
+    });
+
+    it('refuses wildcard shapes whose match backtracks on a long name', () => {
+      for (const bad of [
+        '**/*(?|?)#',
+        '*(a|a)x',
+        '*(*)x',
+        '*(a*)x',
+        '+(?|?)x',
+        '*(@(a|a))x',
+        '*a*a*a*b',
+        '**a**a**a**b',
+        '?(*)?(*)?(*)?(*)x',
+        '+(a)+(b)+(c)+(d)x',
+        `${'?(a|aa)'.repeat(40)}b`,
+        '@(a|aa)@(a|aa)@(a|aa)@(a|aa)b',
+        '?(a)?(b)?(c)?(d)x',
+        '?(*)?(*)?(*)x',
+        'src/{x,*a*a*a*b}/y',
+        '*([)]|?)#',
+        '+([)]*)x',
+        '*([(]|a)x',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(bad), false, bad);
+      }
+    });
+
+    it('accepts wildcard shapes that match in bounded time', () => {
+      for (const ok of [
+        '**/*.ts',
+        '**/**/*.ts',
+        '*foo*bar*',
+        '*.test.*',
+        'a**a**b',
+        '*(z)oo.txt',
+        '*(ab)x',
+        '*(?)x',
+        '+([ab])x',
+        '*([)])x',
+        '+([()])x',
+        '@(a|aa)@(a|aa)@(a|aa)b',
+        '*.@(ts|tsx)',
+        '.!(git|svn|hg)',
+        '@(.|)*',
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(ok), true, ok);
+      }
+    });
+
+    it('checks a pattern of 1024 long dotted segments without a compile each', () => {
+      // Each alternative's segment holds `?`, so it can never be a literal
+      // `..` and must not cost a minimatch compile (1.5-9 s for all of them).
+      const pattern = `{0..1023}.${'?.'.repeat(495)}`;
+      const started = performance.now();
+      assert.strictEqual(isSafeGlobSyntax(pattern), true);
+      assert.ok(performance.now() - started < 1000, 'validation must not pin the event loop');
+    });
+
+    it('bounds traversal checks for long dotted segments across brace expansions', () => {
+      const pattern = `${'.'.repeat(900)}${'{.,[.]}'.repeat(10)}`;
+      assert.strictEqual(isSafeGlobSyntax(pattern), false);
+    });
+
+    it('refuses a pattern with more brace alternatives than it will expand', () => {
+      assert.strictEqual(isSafeGlobSyntax('{1..1024}.txt'), true);
+      for (const bad of [
+        '{1..1025}.txt',
+        '{a,b}'.repeat(11),
+        '{a,b}'.repeat(200),
+        // Bounds a step cannot move (2^53 + 1 === 2^53) or that read as Infinity.
+        '{9007199254740992..9007199254740994}',
+        `{${'9'.repeat(309)}..${'9'.repeat(309)}}`,
+      ]) {
+        assert.strictEqual(isSafeGlobSyntax(bad), false, bad.slice(0, 40));
+      }
+    });
+
+    it('reads a first segment ending in : as a drive only on Windows', () => {
+      // fs.glob takes `X:` for a drive only on Windows, where no name holds a
+      // `:`; elsewhere `logs:` is an ordinary directory. `C:/x` parses as a
+      // drive root on every host.
+      assert.strictEqual(isSafeGlobSyntax('logs:/*.txt'), !IS_WINDOWS);
+      assert.strictEqual(isSafeGlobSyntax('[C]:/x'), !IS_WINDOWS);
+      assert.strictEqual(isSafeGlobSyntax('C:/x'), false);
+    });
+  });
+
+  // Issue #68: the validator is not the only line. Whatever a pattern spells,
+  // the walk must not hand a caller anything outside its cwd.
+  it('never yields an entry outside its cwd, whatever the pattern spells', async () => {
+    const top = await createTestRoot();
+    try {
+      const cwd = join(top, 'root', 'sub');
+      await mkdir(join(cwd, 'deep'), { recursive: true });
+      await writeFile(join(top, 'outside.txt'), 'x');
+      await writeFile(join(top, 'root', 'top.txt'), 'x');
+      await writeFile(join(cwd, 'inner.txt'), 'x');
+      await writeFile(join(cwd, 'deep', 'd.txt'), 'x');
+      const absoluteTop = top.replaceAll('\\', '/');
+      for (const pattern of [
+        '..{,x}/*.txt',
+        '[.][.]/*.txt',
+        '.{Z..a}./*.txt',
+        '..{,x}/**/*.txt',
+        '**/..{,x}/*.txt',
+        `{${absoluteTop},x}/*.txt`,
+        `${absoluteTop}/*.txt`,
+      ]) {
+        for (const skipIgnored of [false, true]) {
+          for (const includeHidden of [false, true]) {
+            const seen = await walk({
+              cwd,
+              pattern,
+              skipIgnored,
+              includeHidden,
+              baseNameMatch: true,
+              onlyFiles: false,
+              suppressErrors: true,
+            });
+            const escaped = seen.filter((rel) => rel.startsWith('..') || isAbsolute(rel));
+            assert.deepStrictEqual(escaped, [], `${pattern} (skipIgnored: ${String(skipIgnored)})`);
+          }
+        }
+      }
+      // The alternative that stays inside still matches.
+      assert.deepStrictEqual(await walk({ cwd, pattern: '.{.,}/*.txt' }), ['inner.txt']);
+    } finally {
+      await cleanupTestRoot(top);
+    }
+  });
+
+  it('find_files, search_text and replace_text refuse a brace-built .. (issue #68)', async () => {
+    const top = await createTestRoot();
+    const root = join(top, 'root');
+    const sub = join(root, 'sub');
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(top, 'outside.txt'), 'NEEDLE outside');
+    await writeFile(join(root, 'top.txt'), 'NEEDLE top');
+    await writeFile(join(sub, 'inner.txt'), 'NEEDLE inner');
+    const harness = await createTestClientPair([root]);
+    try {
+      for (const path of [sub, root]) {
+        for (const pattern of ['..{,x}/*.txt', '.{.,}/*.txt', '[.][.]/*.txt']) {
+          for (const [name, extra] of [
+            ['find_files', {}],
+            ['search_text', { searchPattern: 'NEEDLE' }],
+            ['replace_text', { searchPattern: 'NEEDLE', replacement: 'CHANGED' }],
+          ] as const) {
+            const result = await harness.client.callTool({
+              name,
+              arguments: { path, pattern, ...extra },
+            });
+            const text = firstTextBlock(result).text ?? '';
+            assert.strictEqual(result.isError, true, `${name} ${pattern}: ${text}`);
+            assert.match(text, /unsafe path/u, `${name} ${pattern}`);
+            assert.doesNotMatch(text, /outside\.txt|top\.txt|inaccessible/u, `${name} ${pattern}`);
+          }
+        }
+      }
+      assert.strictEqual(await readFile(join(root, 'top.txt'), 'utf8'), 'NEEDLE top');
+      assert.strictEqual(await readFile(join(top, 'outside.txt'), 'utf8'), 'NEEDLE outside');
+      assert.strictEqual(await readFile(join(sub, 'inner.txt'), 'utf8'), 'NEEDLE inner');
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(top);
+    }
+  });
+
+  it('find_files, search_text and replace_text refuse a backtracking glob quickly', async () => {
+    const root = await createTestRoot();
+    await writeFile(join(root, 'a'.repeat(40)), 'x');
+    const harness = await createTestClientPair([root]);
+    try {
+      const started = performance.now();
+      for (const [name, extra] of [
+        ['find_files', {}],
+        ['search_text', { searchPattern: 'x' }],
+        ['replace_text', { searchPattern: 'x', replacement: 'y', dryRun: true }],
+      ] as const) {
+        const result = await harness.client.callTool({
+          name,
+          arguments: { path: root, pattern: '**/*(?|?)#', ...extra },
+        });
+        const text = firstTextBlock(result).text ?? '';
+        assert.strictEqual(result.isError, true, `${name}: ${text}`);
+        assert.match(text, /unsafe path/u, name);
+      }
+      assert.ok(performance.now() - started < 5000, 'refusal must not pin the event loop');
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(root);
+    }
   });
 
   it('list, find_files and search_text see the colliding subdirectory', async () => {
@@ -377,6 +627,245 @@ describe('globEntries characterization', () => {
         await walk({ cwd: root, pattern: '**/*', skipIgnored: true, includeHidden: true }),
         ['.hidden/keep.txt'],
       );
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('includeHidden keeps literal names literal at any depth', async () => {
+    const root = await createTestRoot();
+    try {
+      const files = [
+        'target.txt',
+        '.target.txt',
+        'src/target.txt',
+        '.src/target.txt',
+        '.one/.two/target.txt',
+        '.one/.two/.target.txt',
+      ];
+      for (const file of files) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: 'target.txt', includeHidden: true }),
+        ['target.txt'],
+      );
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: 'src/target.txt', includeHidden: true }),
+        ['src/target.txt'],
+      );
+      assert.deepStrictEqual(
+        await walk({
+          cwd: root,
+          pattern: 'target.txt',
+          baseNameMatch: true,
+          includeHidden: true,
+        }),
+        ['.one/.two/target.txt', '.src/target.txt', 'src/target.txt', 'target.txt'],
+      );
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: '**/target.txt', includeHidden: true }),
+        ['.one/.two/target.txt', '.src/target.txt', 'src/target.txt', 'target.txt'],
+      );
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: '**/*', includeHidden: true }),
+        [...files].sort(),
+      );
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('loads gitignore rules inside nested hidden directories', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of [
+        '.workspace/drop.txt',
+        '.workspace/keep.txt',
+        '.workspace/.nested/drop.txt',
+        '.workspace/.nested/keep.txt',
+      ]) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      await writeFile(join(root, '.workspace/.gitignore'), 'drop.txt\n');
+      await writeFile(join(root, '.workspace/.nested/.gitignore'), '!drop.txt\nkeep.txt\n');
+      const options = { cwd: root, pattern: '**/*', includeHidden: true, skipIgnored: true };
+      assert.deepStrictEqual(await walk(options), [
+        '.workspace/.gitignore',
+        '.workspace/.nested/.gitignore',
+        '.workspace/.nested/drop.txt',
+        '.workspace/keep.txt',
+      ]);
+      assert.deepStrictEqual(await walk({ ...options, maxDepth: 1 }), [
+        '.workspace/.gitignore',
+        '.workspace/keep.txt',
+      ]);
+      assert.deepStrictEqual(await walk({ ...options, skipIgnored: false }), [
+        '.workspace/.gitignore',
+        '.workspace/.nested/.gitignore',
+        '.workspace/.nested/drop.txt',
+        '.workspace/.nested/keep.txt',
+        '.workspace/drop.txt',
+        '.workspace/keep.txt',
+      ]);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('without includeHidden, .gitignore discovery stays out of dot-directories', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of ['.workspace/drop.txt', '.workspace/keep.txt']) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      await writeFile(join(root, '.workspace/.gitignore'), 'drop.txt\n');
+      // Searching every hidden tree (.venv, .terraform, ...) for rules would
+      // dwarf a walk that skips hidden entries. Only a pattern naming the
+      // directory reaches inside, and its rules are not looked for there.
+      const options = { cwd: root, pattern: '.workspace/*.txt', skipIgnored: true };
+      assert.deepStrictEqual(await walk(options), ['.workspace/drop.txt', '.workspace/keep.txt']);
+      assert.deepStrictEqual(await walk({ ...options, includeHidden: true }), [
+        '.workspace/keep.txt',
+      ]);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('includeHidden adds dot-prefixed names only where a leading wildcard can match the dot', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of [
+        'foo1.txt',
+        '.foo2.txt',
+        'sub/foo3.txt',
+        'sub/.foo4.txt',
+        '.dir/foo5.txt',
+        'src/foox/bar.ts',
+        'src/.fooy/bar.ts',
+        '.a.txt',
+        'zoo.txt',
+        '.zoo.txt',
+        '.oo.txt',
+      ]) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      const hidden = (pattern: string): Promise<string[]> =>
+        walk({ cwd: root, pattern, includeHidden: true });
+
+      // A segment that starts with a literal, a brace set or a class gets no
+      // dot-prefixed match, wherever its wildcard sits.
+      assert.deepStrictEqual(await hidden('foo*.txt'), ['foo1.txt']);
+      assert.deepStrictEqual(await hidden('**/foo*.txt'), [
+        '.dir/foo5.txt',
+        'foo1.txt',
+        'sub/foo3.txt',
+      ]);
+      assert.deepStrictEqual(await hidden('src/foo*/bar.ts'), ['src/foox/bar.ts']);
+      assert.deepStrictEqual(await hidden('{foo,zoo}*.txt'), ['foo1.txt', 'zoo.txt']);
+      assert.deepStrictEqual(await hidden('[a-z]oo.txt'), ['zoo.txt']);
+      // Nor does an extglob: `*(z)` repeats `z` and never matches the dot.
+      assert.deepStrictEqual(await hidden('*(z)oo.txt'), ['zoo.txt']);
+
+      // A leading `*` can.
+      assert.deepStrictEqual(await hidden('*.txt'), [
+        '.a.txt',
+        '.foo2.txt',
+        '.oo.txt',
+        '.zoo.txt',
+        'foo1.txt',
+        'zoo.txt',
+      ]);
+      assert.deepStrictEqual(await hidden('**/*.txt'), [
+        '.a.txt',
+        '.dir/foo5.txt',
+        '.foo2.txt',
+        '.oo.txt',
+        '.zoo.txt',
+        'foo1.txt',
+        'sub/.foo4.txt',
+        'sub/foo3.txt',
+        'zoo.txt',
+      ]);
+
+      // A leading `?` is one character, so the dot takes its place.
+      assert.deepStrictEqual(await hidden('?oo.txt'), ['.oo.txt', 'zoo.txt']);
+      assert.deepStrictEqual(await hidden('**/?oo.txt'), ['.oo.txt', 'zoo.txt']);
+      assert.deepStrictEqual(await walk({ cwd: root, pattern: '?oo.txt' }), ['zoo.txt']);
+      // A lone `?` never becomes `.`, the directory itself.
+      assert.deepStrictEqual(
+        await walk({ cwd: root, pattern: 'sub/?', includeHidden: true, onlyFiles: false }),
+        [],
+      );
+      // Nor, through a brace set or a class, `..`, the directory above.
+      for (const pattern of ['?{.,x}/*.txt', '?{,.}/*.txt', '?[.]/*.txt', '?.{,x}/*.txt']) {
+        assert.deepStrictEqual(
+          await walk({ cwd: join(root, 'sub'), pattern, includeHidden: true }),
+          [],
+          pattern,
+        );
+      }
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('includeHidden never adds dot names a negated extglob excluded', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of [
+        'a.ts',
+        'a.test.ts',
+        '.eslintrc.ts',
+        'sub/.prettierrc.ts',
+        'sub/b.test.ts',
+        'src/x.ts',
+        '.src',
+        '.gitignore',
+        '.env.local',
+      ]) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      const hidden = (pattern: string): Promise<string[]> =>
+        walk({ cwd: root, pattern, includeHidden: true });
+      assert.ok(!(await hidden('!(.gitignore)')).includes('.gitignore'));
+      assert.ok(!(await hidden('!(.env.local)')).includes('.env.local'));
+      // Hidden names are left out of a negated segment: the documented limit.
+      assert.deepStrictEqual(await hidden('**/!(*.test).ts'), ['a.ts', 'src/x.ts']);
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('an includeHidden walk yields each entry once across its pattern variants', async () => {
+    const root = await createTestRoot();
+    try {
+      for (const file of ['a.txt', '.b.txt', '.d/c.txt', '.d/.e.txt', 'sub/.f.txt']) {
+        await mkdir(dirname(join(root, file)), { recursive: true });
+        await writeFile(join(root, file), 'x');
+      }
+      const paths: string[] = [];
+      for await (const entry of globEntries({
+        cwd: root,
+        pattern: '**/*',
+        includeHidden: true,
+      })) {
+        paths.push(relative(root, entry.path).replaceAll('\\', '/'));
+      }
+      assert.strictEqual(new Set(paths).size, paths.length);
+      assert.deepStrictEqual(paths.sort(), [
+        '.b.txt',
+        '.d/.e.txt',
+        '.d/c.txt',
+        'a.txt',
+        'sub/.f.txt',
+      ]);
     } finally {
       await cleanupTestRoot(root);
     }

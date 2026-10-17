@@ -243,6 +243,65 @@ describe('Security (P0)', () => {
       assert.strictEqual(matcher.isSensitive('.env '), true, '".env " should be caught as ".env"');
       assert.strictEqual(matcher.isSensitive('.env.'), true, '".env." should be caught as ".env"');
     });
+
+    it('TC-SENS-007: folding only adds matches, and never widens what --allow relieves', () => {
+      // A class or `?` next to a combining mark matches as typed, as before folding.
+      const classPattern = new SensitiveMatcher(['caf[e\u0301].txt']);
+      assert.strictEqual(classPattern.isSensitive('/w/cafe.txt'), true, 'class keeps its members');
+      const anyChar = new SensitiveMatcher(['cafe?.txt']);
+      assert.strictEqual(anyChar.isSensitive('/w/cafe\u0301.txt'), true, '? keeps the mark');
+      // An allow entry relieves only the spelling it names.
+      const relieved = new SensitiveMatcher(['*.key'], ['my\u00a0file.key']);
+      assert.strictEqual(
+        relieved.isSensitive('/w/my\u00a0file.key'),
+        false,
+        'the allowed spelling',
+      );
+      assert.strictEqual(
+        relieved.isSensitive('/w/my file.key'),
+        true,
+        'another spelling stays denied',
+      );
+    });
+
+    it('TC-SENS-008: folding leaves classes as typed and never revokes an allow match', () => {
+      // Folded endpoints would make these ranges reversed, and construction throw.
+      const nbspRange = new SensitiveMatcher(['[a-\u00a0].txt']);
+      assert.strictEqual(nbspRange.isSensitive('/w/b.txt'), true, 'range up to U+00A0');
+      const singletonRange = new SensitiveMatcher(['[z-\u037e].txt']);
+      assert.strictEqual(singletonRange.isSensitive('/w/\u00e9.txt'), true, 'range up to U+037E');
+      // A '[' with no closer in its own segment is a literal; the class is the
+      // one the next segment opens, so its range stays as typed too.
+      const segmentClass = new SensitiveMatcher(['[/[]a-\u00a0]']);
+      assert.strictEqual(segmentClass.isSensitive('/w/[/b'), true, 'class in a later segment');
+      // An allow entry still relieves every spelling it relieved before folding.
+      const anyChar = new SensitiveMatcher(['*.key'], ['cafe?.key']);
+      assert.strictEqual(
+        anyChar.isSensitive('/w/cafe\u0301.key'),
+        false,
+        '? over a combining mark',
+      );
+      const classAllow = new SensitiveMatcher(['*.key'], ['caf[e\u0301].key']);
+      assert.strictEqual(classAllow.isSensitive('/w/cafe.key'), false, 'class member e');
+    });
+
+    it('TC-SENS-006: a pattern matches every Unicode spelling of a name', () => {
+      const matcher = new SensitiveMatcher(['caf\u00e9.txt', 'secret notes.txt']);
+      assert.strictEqual(matcher.isSensitive('/w/cafe\u0301.txt'), true, 'NFD name, NFC pattern');
+      assert.strictEqual(matcher.isSensitive('/w/secret\u00a0notes.txt'), true, 'U+00A0');
+      assert.strictEqual(matcher.isSensitive('/w/secret\u202fnotes.txt'), true, 'U+202F');
+      assert.strictEqual(
+        matcher.isSensitive('/w/secret\tnotes.txt'),
+        false,
+        'a tab is not a space',
+      );
+      const nfdPattern = new SensitiveMatcher(['cafe\u0301/**']);
+      assert.strictEqual(
+        nfdPattern.isSensitive('/w/caf\u00e9/a.txt'),
+        true,
+        'NFC path, NFD pattern',
+      );
+    });
   });
 
   describe('SensitiveMatcher allow-list relief (--allow / FS_ALLOWLIST)', () => {

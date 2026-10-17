@@ -102,8 +102,8 @@ the allowed roots; every flag in the
 argument list (for example `--read-only`).
 
 - Set `cwd` to the workspace. Relative paths in tool calls resolve against the
-  server process's working directory, not against its root (see
-  [Folders and paths](#folders-and-paths)).
+  server process's working directory when that is inside a root, and against
+  the root otherwise (see [Folders and paths](#folders-and-paths)).
 - The server prints its allowed folders and its logs on stderr. Pipe stderr
   (`stderr: 'pipe'` in TypeScript, `errlog=` in Python) if it would mix with
   your own output, and keep the tail of it for error messages.
@@ -137,11 +137,11 @@ async with Client(transport) as client: ...
 - With `FS_API_KEY` set on the server, every request needs
   `Authorization: Bearer <key>`. Without it, connecting fails with HTTP 401
   (`SdkHttpError`, code `CLIENT_HTTP_AUTHENTICATION`, in TypeScript).
-- The server is stateless per request: there is no session ID. One server can
+- The server is stateless per request, with no session ID. One server can
   serve many clients at once, and they share its allowed folders, including
   folders granted by any one of them.
-- Send absolute paths. Relative paths resolve against the directory the server
-  was started in, which a remote client cannot know.
+- Prefer absolute paths. A relative path resolves against the root unless the
+  server was started inside one, which a remote client cannot know.
 - 2025-era clients get no confirmations and no change notifications over HTTP;
   see the table below.
 
@@ -198,13 +198,50 @@ the user accepts. Call the `list_roots` tool for the current set:
 `structuredContent.roots` is an array of absolute paths. With no roots at all
 it also has a `hint` saying how to add one.
 
-**Relative paths resolve against the server's working directory**, not
-against a root. Over stdio, start the server with `cwd` set to the
-workspace. Over HTTP, use absolute paths built from `list_roots`. A relative
-path that lands outside the roots does not fail outright: it becomes a request
-to grant access to the server's working directory, which a client that
-approves grants automatically would accept. `~` expands to the home directory
-of the user running the server.
+**Relative paths resolve against the server's working directory** while that
+lands inside a root. Otherwise they resolve against the roots: against the
+one root, or with several, against the one root the path exists under. Only
+the roots you configured and the ones your client declared count here, not a
+folder granted during the session, so approving a grant never changes what a
+relative path names. A relative path that exists under several roots, or
+under none of several, is refused with `INVALID_INPUT`, and the error names
+the roots. When it is a subfolder of a root, as with `--walk-cwd`, relative
+paths resolve against that subfolder, so send absolute paths. With no
+configured or declared roots, a relative path still
+resolves against the working directory, and so becomes a request to grant
+access there, which a client that approves grants automatically would accept.
+Absolute paths built from `list_roots` are never ambiguous. `~` expands to the
+home directory of the user running the server.
+
+**A name spelled differently from the disk in Unicode still resolves.** When a
+name is not on disk as typed, the server compares it with the entries of its
+folder after NFC normalization, reading every space character as a plain
+space. `café` finds a folder stored decomposed (`cafe` plus U+0301), and
+`shot PM.png` finds a macOS screenshot whose name holds U+202F. This works for
+reads, writes, moves and deletes, below a root only: the root itself must be
+spelled as configured. A write lands on the entry it finds, so `create` asks
+before replacing it, as for any existing file. When two entries match, the
+call fails with `INVALID_INPUT` (`Ambiguous Unicode path component`) and shows
+each spelling with `\u` escapes; send the exact name. A match the denylist
+covers is refused as that file is, and never shown. A name of plain ASCII
+with no space is never matched this way.
+
+**Result paths read back as given.** `search_text`, `find_files` and
+`replace_text` print each path relative to the root that holds the folder
+they searched, whatever that folder was, and name that root, as
+`list_roots` shows it, in a `root` field. A search of `src` prints
+`src/a.ts`, which `read` and `edit` take as it is. A path whose relative
+spelling would not read back as the same file is printed absolute instead:
+everything when the working directory is a subfolder of a root, everything
+when there are several roots and the working directory is outside them (a
+name two roots share would read back as ambiguous), everything under a
+folder granted during the session, and a name such as `~` or a blank one. On
+macOS and Linux a backslash in a name stays a backslash. `list` draws a tree
+of names and keeps `relativePath` relative to its `path`; the tree's first
+line names a listed subfolder the same way (`src/core`). With `includeSizes`,
+each file's size rides its tree line and a `// N files, M directories, X total`
+line closes the listing; `sortBy: 'size'` orders files largest-first within
+each directory.
 
 **Access grants.** A tool call with a path outside the roots does not touch
 the filesystem. It asks the user first (see [Confirmations](#confirmations)),
@@ -244,9 +281,11 @@ found by `resources/read`.
 - `--read-only` removes the six tools that change files from `tools/list`.
   Calling one anyway throws `Tool create not found`. Check the list rather
   than assuming.
-- Input schemas are JSON Schema draft 2020-12. `read`, `stat`, and `edit` have
-  a top-level `oneOf` (`path` or `paths`; `path`+`edits` or `files`), and
-  `read` has `dependentRequired` (`endLine` needs `startLine`).
+- Input schemas are JSON Schema draft 2020-12 with no top-level `oneOf`,
+  `anyOf`, or `allOf`, so they can go to the OpenAI and Anthropic APIs as they
+  are. Rules that span fields (`path` or `paths`; `path` with `edits`, or
+  `files`; `endLine` needs `startLine`) are checked when the tool runs and come
+  back as `Input validation error: ...`.
 - On 2026-07-28 the TypeScript SDK caches `tools/list` for the hour the
   server allows. The list only changes when the server restarts with other
   flags.
@@ -272,16 +311,16 @@ So read `result.structuredContent ?? result._meta` (Python:
 
 What is where:
 
-| Tool                             | Data                                                                                                     |
-| :------------------------------- | :------------------------------------------------------------------------------------------------------- |
-| `list`                           | `path`, `entries[]` (`name`, `relativePath`, `type`), `totalEntries`, `nextCursor`                       |
-| `find_files`                     | `root`, `results[]` (`path`, relative to `root`), `totalMatches`, `filesScanned`, `nextCursor`           |
-| `search_text`                    | `matches[]` (`file`, `line`, `column`, `content`, `before`, `after`), `totalMatches`, `nextCursor`       |
-| `stat`, `read`, `edit`, `delete` | `results[]`, each `{ path, value }` or `{ path, error }`, and `summary` (`total`, `succeeded`, `failed`) |
-| `replace_text`                   | `results[]`, `summary`, `totalMatches`, `filesScanned`, and `diff` with `returnDiff: true`               |
-| `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...) and `failures[]`                 |
-| `move`                           | `moves[]` (`from`, `to`) and `failures[]`                                                                |
-| `diff`, `patch`                  | `a`/`b` or `path`, `linesAdded`, `linesRemoved`; a `patch` dry run also has `diff`                       |
+| Tool                             | Data                                                                                                                                                                                                    |
+| :------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list`                           | `path`, `entries[]` (`name`, `relativePath`, `type`, `size` with `includeSizes`/`sortBy: 'size'`), `totalEntries`, `totalFiles`, `totalDirectories`, `totalBytes` (with the same options), `nextCursor` |
+| `find_files`                     | `root`, `results[]` (`path`, relative to `root`), `totalMatches`, `filesScanned`, `nextCursor`                                                                                                          |
+| `search_text`                    | `root`, `matches[]` (`file`, relative to `root`, `line`, `column`, `content`, `before`, `after`), `totalMatches`, `nextCursor`                                                                          |
+| `stat`, `read`, `edit`, `delete` | `results[]`, each `{ path, value }` or `{ path, error }`, and `summary` (`total`, `succeeded`, `failed`)                                                                                                |
+| `replace_text`                   | `root`, `results[]` (`path` relative to `root`), `summary`, `totalMatches`, `filesScanned`, and `diff` with `returnDiff: true`                                                                          |
+| `create`                         | `files[]` (`path`, `size`, `lineCount`, `mimeType`, `resourceUri`, ...), `directories[]`, and `failures[]`                                                                                              |
+| `move`                           | `moves[]` (`from`, `to`) and `failures[]`                                                                                                                                                               |
+| `diff`, `patch`                  | `a`/`b` or `path`, `linesAdded`, `linesRemoved`; a `patch` dry run also has `diff`                                                                                                                      |
 
 Notes on individual tools:
 
@@ -295,9 +334,15 @@ Notes on individual tools:
   `_meta.results[].value.continuation` holds the arguments for the next
   chunk. `includeHash: true` adds `contentHash` (SHA-256). Images and audio
   come back as `image` and `audio` content blocks; other binary files fail
-  with `Binary file detected.`
+  with `Binary file detected.` unless the call passes `binary: true`. Then a
+  full read returns the file as a `resource` block (`resource.blob` is base64,
+  `resource.mimeType` the type), and `_meta.results[].value` holds `size` and
+  `kind`. Line ranges are refused for binary files.
 - `read` and `create` add a `resource_link` block per file, pointing at its
   `filesystem-mcp://file/...` resource.
+- `stat` on a folder has no `size`; its `entryCount` is the number of entries
+  directly inside it, hidden ones included and secret files left out. `0` means
+  the folder is empty.
 - A dry run of `edit` or `replace_text` returns a unified diff as its text.
   A dry run of `patch` returns the patched file as its text; the diff it
   applied is in `_meta.diff`.
@@ -346,7 +391,7 @@ appear in `resources/list`, and each one added or expired sends
 
 A `find_files` or `search_text` scan that hit a limit ends with
 `// scan stopped early: ...` and sets `_meta.stoppedReason` (`maxResults` or
-`timeout`): the totals are then a floor, not a count. Narrow the path or the
+`timeout`). The totals are then a floor, not a count. Narrow the path or the
 pattern. The [limits table](configuration.md#limits) has the numbers.
 
 ## Progress, cancellation, and timeouts
@@ -359,11 +404,16 @@ pattern. The [limits table](configuration.md#limits) has the numbers.
   progress. The SDK's default request timeout is 60 seconds.
 - Abort the call's `AbortSignal` to cancel it. The SDK sends
   `notifications/cancelled` and rejects with an `AbortError`.
-- `list` and `stat` stop themselves after about 5 seconds with a `TIMEOUT`
-  error. `find_files` and `search_text` stop at the same deadline but return
-  what they found so far, with `_meta.stoppedReason: 'timeout'` (see
-  [Pagination](#pagination-and-cached-results)). `maxResults` does not
-  shorten a scan; a narrower `path`, `pattern`, or `maxDepth` does.
+- `list`, `stat` and `read` stop themselves after 5 seconds by default (the
+  server's `--tool-timeout` or `FS_TOOL_TIMEOUT_MS` changes this) with a
+  `TIMEOUT` error. `find_files` and `search_text` stop at the same
+  deadline but return what they found so far, with
+  `_meta.stoppedReason: 'timeout'` (see
+  [Pagination](#pagination-and-cached-results)). `replace_text` stops at
+  the same deadline too: in a live run the files it already rewrote stay
+  rewritten, and the text names them. Run a wide replacement with
+  `dryRun: true` first. `maxResults` does not shorten a scan; a narrower
+  `path`, `pattern`, or `maxDepth` does.
 
 ## Confirmations
 
@@ -385,7 +435,7 @@ and a `requestedSchema` that has exactly one property. Answer with
 `{ action: 'accept', content: { <property>: <value> } }`, or with
 `{ action: 'decline' }`. Declining fails that item with `CANCELLED`; for a
 grant, the path then fails with `ACCESS_DENIED`. Accepting with `skip` is not
-a failure, and nothing changes: `create` and `move` list the path under
+a failure, and nothing changes. `create` and `move` list the path under
 `skipped` instead of `files` or `moves`, and `delete` reports
 `deleted: false` with the text `SKIPPED`. A client that announces success
 should check for those. A handler that understands
@@ -436,7 +486,7 @@ while (result.resultType === 'input_required') {
 }
 ```
 
-`requestState` is opaque: send it back unchanged with the same tool name and
+`requestState` is opaque. Send it back unchanged with the same tool name and
 arguments. The server signs it, binds it to the request, and lets it expire
 after 10 minutes; a changed or expired one is rejected with
 `Invalid or expired requestState`. It is signed with a key made at startup,
@@ -458,8 +508,8 @@ percent-encoded with `/` kept:
 Unencoded, a `#` or `?` in a file name would cut the URI short. A Unix path
 therefore gives a double slash: `filesystem-mcp://file//home/me/a.txt`.
 Reading one returns `text` for text files and base64 `blob` for images and
-other binaries, with a `mimeType`. `resources/read` does not ask for access:
-a file outside the roots is not found, so call a tool (`stat`) first if the
+other binaries, with a `mimeType`. `resources/read` does not ask for access.
+A file outside the roots is not found, so call a tool (`stat`) first if the
 user should be asked.
 
 **Fresh reads.** On 2026-07-28, results carry cache hints, and the TypeScript
@@ -518,12 +568,11 @@ if (client.getProtocolEra() === 'modern') {
 
 ## Using the tools from a model
 
-- Pass `tools/list` to the model as function definitions. OpenAI and Anthropic
-  reject a top-level `oneOf`/`anyOf`/`allOf`/`not` in function parameters:
-  remove those keys before sending, and leave validation to the server.
+- Pass `tools/list` to the model as function definitions. The schemas need no
+  rewriting, and the server validates every call.
 - Use `internal://instructions` as, or in, the system prompt.
 - Send the model the text blocks, including on `isError` (prefix them with
-  `ERROR:` or similar). The messages are written so a model can recover.
+  `ERROR:` or similar). The server writes the messages so a model can recover.
 - Gate the tools with `destructiveHint`, and show the `dryRun` diff before
   asking the user, as [gatekeeper](../examples/clients/gatekeeper/) does.
 
@@ -532,7 +581,7 @@ if (client.getProtocolEra() === 'modern') {
 - Start the server with `--read-only` for anything that only reads.
 - Do not approve access grants automatically. Over HTTP, a grant one client
   accepts applies to every client of that server until it restarts.
-- Use absolute paths over HTTP, and set `cwd` over stdio (see
+- Prefer absolute paths, above all with several roots or no roots (see
   [Folders and paths](#folders-and-paths)).
 - Treat `requestState` as opaque and keep it with the call it came from.
 - Over HTTP, set an API key, keep the server on `127.0.0.1` unless clients

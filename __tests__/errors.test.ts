@@ -36,7 +36,10 @@ describe('isSkippableErrno', () => {
     assert.ok(isSkippableErrno(errnoError('ENOENT')));
     assert.ok(isSkippableErrno(errnoError('EACCES')));
     assert.ok(isSkippableErrno(errnoError('ELOOP')));
-    assert.ok(!isSkippableErrno(errnoError('EPERM')));
+    // EPERM maps to PERMISSION_DENIED, which SKIPPABLE_FS_CODES treats as
+    // skippable; the errno set is derived from that map, so EPERM is too.
+    assert.ok(isSkippableErrno(errnoError('EPERM')));
+    assert.ok(!isSkippableErrno(errnoError('ENOTDIR')));
     assert.ok(!isSkippableErrno(new Error('no code')));
     assert.ok(!isSkippableErrno('ENOENT'));
   });

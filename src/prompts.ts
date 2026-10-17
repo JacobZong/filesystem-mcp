@@ -9,13 +9,13 @@ import { buildSectionsRecord, INSTRUCTIONS_SUMMARY, renderSections } from './ins
 
 interface PromptRegistrarDeps {
   readonly server: McpServer;
-  readonly readOnly?: boolean;
+  readonly readOnly: boolean;
 }
 
 // --- Prompt entries ---
 
 export function registerPrompts(deps: PromptRegistrarDeps): void {
-  const sections = buildSectionsRecord(deps.readOnly ?? false);
+  const sections = buildSectionsRecord(deps.readOnly);
   const instructions = renderSections(sections);
   const topics = Object.keys(sections);
 

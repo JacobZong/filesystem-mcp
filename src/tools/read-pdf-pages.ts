@@ -170,11 +170,13 @@ const readPdfPagesDef: ToolDef<typeof ReadPdfPagesInputSchema, ReadPdfPagesOutpu
   timeoutMs: PAGE_RENDER_TIMEOUT_MS * 3,
   defaultErrorCode: ErrorCode.NOT_FILE,
   progress: (args) => ({ label: 'Read PDF', subject: basename(args.path), scope: args.pages }),
-  accessPaths: (args) => [args.path],
+  mapPaths: (args, fn) => ({ ...args, path: fn(args.path) }),
   run: async (args, ctx) => {
     const { stats, validPath } = await ctx.fs.stat(args.path, { signal: ctx.signal });
     if (!stats.isFile()) throw new FsError(ErrorCode.NOT_FILE, 'Not a file.', args.path);
-    const head = (await ctx.fs.readLeadingSample(args.path, DJVU_MAGIC.length)).toString('latin1');
+    const head = (await ctx.fs.readLeadingSample(args.path))
+      .subarray(0, DJVU_MAGIC.length)
+      .toString('latin1');
     let source: PageSource;
     if (head.startsWith(PDF_MAGIC)) source = pdfSource(validPath, ctx.signal);
     else if (head === DJVU_MAGIC) source = djvuSource(validPath, ctx.signal);

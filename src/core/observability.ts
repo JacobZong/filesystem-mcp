@@ -1,4 +1,5 @@
 import { cli } from './config.ts';
+import { formatUnknownErrorMessage } from './errors.ts';
 import { warnInvalidSetting } from './path-utils.ts';
 
 export type LoggingLevel =
@@ -90,6 +91,13 @@ export const Logger = {
     write('debug', message, args);
   },
 };
+
+/** A failed notify means the connection went away: nothing to recover, so log and drop it. */
+export function voidSend(send: Promise<unknown> | undefined, label: string, fields?: object): void {
+  void send?.catch((error: unknown) => {
+    Logger.debug(`${label} not delivered`, { ...fields, error: formatUnknownErrorMessage(error) });
+  });
+}
 
 export function logRuntimeFailure(id: string, scope: string, method: string, error: unknown): void {
   write('error', `Runtime failure: ${id} [${scope}.${method}]`, [error]);

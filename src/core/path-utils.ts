@@ -1,5 +1,15 @@
 import { homedir, platform } from 'node:os';
-import { basename, delimiter, dirname, join, parse, resolve, sep, win32 } from 'node:path';
+import {
+  basename,
+  delimiter,
+  dirname,
+  join,
+  parse,
+  relative,
+  resolve,
+  sep,
+  win32,
+} from 'node:path';
 
 // ─── Shared primitives (no intra-package imports; every core module may import this) ──
 
@@ -41,21 +51,6 @@ export function warnInvalidSetting(
   );
 }
 
-/**
- * Parse a boolean env flag: `true`/`1` enable, `false`/`0`/empty disable.
- * Any other value warns once per var (when `name` is given) and reads as
- * false, so a typo like `FS_ALLOW_SENSITIVE=yes` is never silent.
- */
-export function parseTrueEnvFlag(value: string | undefined, name?: string): boolean {
-  if (value === undefined) return false;
-  const trimmed = value.trim().toLowerCase();
-  if (trimmed === 'true' || trimmed === '1') return true;
-  if (name && trimmed !== '' && trimmed !== 'false' && trimmed !== '0') {
-    warnInvalidSetting(name, value, '"true" or "1"', false);
-  }
-  return false;
-}
-
 export function splitDirList(val: string | undefined): string[] {
   if (!val) return [];
   return val
@@ -75,9 +70,14 @@ export const isAlpha = (code: number): boolean =>
 
 export const toPosixPath = (value: string): string => value.replaceAll('\\', '/');
 
+/** `path.relative` with forward slashes, so displayed paths match across platforms. */
+export function toPosixRelative(from: string, to: string): string {
+  return toPosixPath(relative(from, to));
+}
+
 // ─── Path normalization and containment ──────────────────────────────────────
 
-const CHAR_COLON = 58;
+export const CHAR_COLON = 58;
 const HOMEDIR = homedir();
 
 const RESERVED_DEVICE_NAMES = new Set<string>([
@@ -105,8 +105,15 @@ const RESERVED_DEVICE_NAMES = new Set<string>([
   'LPT9',
 ]);
 
+/**
+ * Win32 strips trailing dots and spaces at the syscall boundary (a request for
+ * `.env ` creates `.env`), so every name check must trim them first or it is
+ * bypassed on Windows.
+ */
+export const trimTrailingDotsAndSpaces = (segment: string): string => segment.replace(/[. ]+$/, '');
+
 function getReservedDeviceName(segment: string): string | undefined {
-  const trimmed = segment.replace(/[. ]+$/, '');
+  const trimmed = trimTrailingDotsAndSpaces(segment);
   const withoutStream = trimmed.split(':')[0] ?? '';
   const baseName = (withoutStream.split('.')[0] ?? '').toUpperCase();
   return RESERVED_DEVICE_NAMES.has(baseName) ? baseName : undefined;
@@ -132,7 +139,22 @@ export function isWindowsDriveRelativePath(requestedPath: string): boolean {
   return root.length === 2;
 }
 
-function expandHome(filepath: string): string {
+/**
+ * True for a path that names a Windows drive: `C:\x`, `C:/x`, `C:`, and the
+ * drive-relative `C:x`. Only Windows resolves one. On POSIX it is a relative
+ * path, so `C:\x` would become a file of that name under the root.
+ */
+export const isWindowsDrivePath = (requestedPath: string): boolean =>
+  /^[A-Za-z]:/u.test(win32.parse(requestedPath).root);
+
+/**
+ * A drive path this host refuses before resolving it: drive-relative anywhere,
+ * and any drive path where the host is not Windows.
+ */
+export const isUnresolvableDrivePath = (requestedPath: string): boolean =>
+  IS_WINDOWS ? isWindowsDriveRelativePath(requestedPath) : isWindowsDrivePath(requestedPath);
+
+export function expandHome(filepath: string): string {
   if (filepath === '~' || filepath.startsWith('~/') || filepath.startsWith('~\\')) {
     const rest = filepath.slice(1).replace(/^[/\\]+/, '');
     return rest ? join(HOMEDIR, rest) : HOMEDIR;
@@ -157,7 +179,7 @@ export function normalizePath(p: string): string {
 
 const IS_CASE_INSENSITIVE_FS = IS_WINDOWS || platform() === 'darwin';
 
-export function normalizeCaseForComparison(value: string): string {
+function normalizeCaseForComparison(value: string): string {
   return IS_CASE_INSENSITIVE_FS ? value.toLowerCase() : value;
 }
 
@@ -171,17 +193,63 @@ export function isSamePath(left: string, right: string): boolean {
 }
 
 /**
- * On a case-insensitive filesystem a write target that already exists is
- * realpathed to its on-disk spelling, so a case-only rename (`foo.txt` ->
- * `Foo.txt`) resolves to the source itself. Returns the resolved target
- * re-spelled with the requested basename when the two differ only by case;
+ * What two names share when they differ only in Unicode form (NFC or NFD) or
+ * in which space character they use (U+0020, U+00A0, U+202F, and every other
+ * Zs), case-folded where the filesystem folds case. A model types back
+ * `caf\u00e9` and `shot PM.png` for the `cafe\u0301` and `shot\u202fPM.png` a
+ * listing showed it (#101).
+ */
+export function unicodeMatchKey(name: string): string {
+  return normalizeCaseForComparison(name.normalize('NFC').replace(/\p{Zs}/gu, ' '));
+}
+
+/**
+ * True when two paths are one path once case (where the filesystem folds it)
+ * and Unicode spelling are folded: the spellings the path guard resolves to
+ * one entry when only one of them is on disk.
+ */
+export function isEquivalentPath(left: string, right: string): boolean {
+  return (
+    isSamePath(left, right) || unicodeMatchKey(resolve(left)) === unicodeMatchKey(resolve(right))
+  );
+}
+
+/**
+ * False for a name of printable ASCII with no space, which no other entry can
+ * share a `unicodeMatchKey` with — except a name holding U+212A, U+037E or
+ * U+1FEF, which NFC maps to ASCII; those stay unmatched. A missed lookup of
+ * such a name skips the directory scan, so creating `new-file.ts` costs what
+ * it did.
+ */
+export function mayHaveEquivalentSpelling(name: string): boolean {
+  return /[^\x21-\x7e]/u.test(name);
+}
+
+/** `name` with each non-ASCII code unit as a `\uXXXX` escape, which a JSON string argument accepts. */
+export function escapeNonAscii(name: string): string {
+  return name.replace(/[^\x20-\x7e]/gu, (char) =>
+    Array.from(
+      { length: char.length },
+      (_, index) => `\\u${char.charCodeAt(index).toString(16).padStart(4, '0')}`,
+    ).join(''),
+  );
+}
+
+/**
+ * A write target that already exists is realpathed to its on-disk spelling,
+ * so a rename that changes only case (`foo.txt` -> `Foo.txt` on a
+ * case-insensitive filesystem) or only Unicode spelling (`cafe\u0301.txt` ->
+ * `caf\u00e9.txt`) resolves to the source itself. Returns the resolved target
+ * re-spelled with the requested basename when the two differ only that way;
  * otherwise the resolved target unchanged. Parent segments are not re-spelled.
  */
-export function respellCaseOnlyTarget(requestedPath: string, resolvedTarget: string): string {
+export function respellSpellingOnlyTarget(requestedPath: string, resolvedTarget: string): string {
   const requestedName = basename(requestedPath);
-  if (requestedName === basename(resolvedTarget)) return resolvedTarget;
-  const respelled = join(dirname(resolvedTarget), requestedName);
-  return isSamePath(respelled, resolvedTarget) ? respelled : resolvedTarget;
+  const resolvedName = basename(resolvedTarget);
+  if (requestedName === resolvedName) return resolvedTarget;
+  return unicodeMatchKey(requestedName) === unicodeMatchKey(resolvedName)
+    ? join(dirname(resolvedTarget), requestedName)
+    : resolvedTarget;
 }
 
 export function normalizeAllowedDirectory(dir: string): string {

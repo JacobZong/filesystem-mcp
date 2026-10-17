@@ -201,4 +201,24 @@ describe('read routes binary documents', () => {
     });
     assert.doesNotMatch(firstTextBlock(ranged).text ?? '', /read_document/);
   });
+
+  it('reads a TypeScript .ts file as text, not as an MPEG-TS video', async () => {
+    const source = join(tmpDir, 'index.ts');
+    await writeFile(source, 'export const NEEDLE = 1;\n');
+    const result = await harness.client.callTool({ name: 'read', arguments: { path: source } });
+    assert.notStrictEqual(result.isError, true);
+    assert.match(firstTextBlock(result).text ?? '', /NEEDLE = 1/);
+  });
+
+  it('binary: true returns the raw file instead of routing it', async () => {
+    const epub = join(tmpDir, 'raw.epub');
+    await writeFile(epub, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0xff, 0x00]));
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: epub, binary: true },
+    });
+    assert.notStrictEqual(result.isError, true);
+    assert.doesNotMatch(firstTextBlock(result).text ?? '', /read_document/);
+    assert.ok((result.content as Block[]).some((b) => b.type === 'resource'));
+  });
 });

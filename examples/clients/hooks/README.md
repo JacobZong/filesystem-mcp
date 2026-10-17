@@ -47,7 +47,7 @@ list of created, modified and deleted files, on every turn. Ctrl+C exits.
 `--yes` applies the model's file changes without the `apply?` prompt. It does
 not answer the server's own questions (access outside `<dir>`, overwrites,
 recursive deletes): those still read stdin and are declined when stdin is
-closed, so an unattended `--yes` run cannot be talked out of the workspace.
+closed, so an unattended `--yes` run cannot gain access outside the workspace.
 
 | `--provider`       | Key env var         | Tested                       |
 | :----------------- | :------------------ | :--------------------------- |
@@ -82,11 +82,12 @@ Each part maps to one piece of the MCP client API:
   `client.listen({ resourceSubscriptions: ['filesystem-mcp://file/<dir>'] })`
   on the root directory. The server puts a recursive watch on it, so new
   files and subdirectories are covered. Each change arrives as
-  `notifications/resources/updated` — naming only the directory, never the
-  file — and restarts a one-second quiet period; a burst of saves is one turn.
+  `notifications/resources/updated`, which names only the directory and never
+  the file. Each one restarts a one-second quiet period, so a burst of saves
+  is one turn.
 - **What changed.** When the quiet period ends, the app takes a snapshot with
-  the server's own tools — `find_files` for the paths, `stat` with `paths[]`
-  for their `modified` times — and diffs it against the previous one. The
+  the server's own tools (`find_files` for the paths, `stat` with `paths[]`
+  for their `modified` times) and diffs it against the previous one. The
   model's first message is the task plus that list. Nothing in this process
   reads the workspace with Node `fs`. A listing the server could not complete
   (a `// showing … Next page` or `// scan stopped early` trailer) is refused:
@@ -94,7 +95,7 @@ Each part maps to one piece of the MCP client API:
 - **Not reacting to itself.** A destructive tool call the model made records
   two things: every path named in its arguments (a directory covers what is
   under it), and a time window from 2 s before the call to just after it. A
-  changed file matching either is the model's own write — renames included —
+  changed file matching either, renames included, is the model's own write
   and starts no turn. A file someone else changed while the turn ran gets its
   own turn right after.
 - **The gate.** A tool is gated when its `annotations.destructiveHint` is set,
@@ -105,8 +106,8 @@ Each part maps to one piece of the MCP client API:
   of enum values when several folders need access at once. `listen()` needs
   the 2026-07-28 protocol, selected with `versionNegotiation: { mode: 'auto' }`.
 - **System prompt.** `client.readResource({ uri: 'internal://instructions' })`
-  is the server's own usage guide. Every turn starts fresh from it; the
-  workspace is the memory.
+  is the server's own usage guide. Every turn starts from it with no chat
+  history; the files in the workspace are the only state that carries over.
 - **Errors.** A tool failure comes back as `isError` and is sent to the model
   as `ERROR: ...`. A failing model endpoint ends the turn and the app keeps
   watching; the server exiting ends the app with exit code 1.

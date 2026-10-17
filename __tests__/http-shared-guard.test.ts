@@ -1,9 +1,8 @@
 import { Client, type McpSubscription } from '@modelcontextprotocol/client';
 
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
@@ -33,7 +32,7 @@ describe('HTTP shared PathGuard (grant persistence + watcher visibility)', () =>
 
   before(async () => {
     rootDir = await createTestRoot();
-    outDir = await mkdtemp(join(tmpdir(), 'fsmcp-shared-guard-'));
+    outDir = await createTestRoot();
     outFile = await writeTestFile(outDir, 'granted.txt', 'initial');
 
     // Without a boundary an applied grant is filtered back out on recompute

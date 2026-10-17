@@ -6,8 +6,8 @@
 ## Context
 
 Every file-walking tool exposes one input, `includeIgnored`, whose schema has a
-single owner at
-[`schema.ts:192`](../../src/core/schema.ts#L192). Its _meaning_ had none: the
+single owner, `IncludeIgnored` in
+[`schema.ts`](../../src/core/schema.ts). Its _meaning_ had none: the
 core walk took two separate options, `excludePatterns` and `respectGitignore`,
 and each of the four tools translated the one input into that pair itself.
 `list` translated it a third way — it passed `excludePatterns` but never
@@ -36,12 +36,12 @@ the pair wrong was the one whose divergence the missing owner had produced.
 ## Decision
 
 We will express "what a walk should not surface" as exactly one boolean,
-`skipIgnored`, on `GlobEntriesOptions`
-([`glob.ts:193`](../../src/core/glob.ts#L193)) and on the search options that
+`skipIgnored`, on `GlobEntriesOptions` in
+[`glob.ts`](../../src/core/glob.ts) and on the search options that
 forward to it. `glob.ts` is the sole owner of what it means: `skipIgnored`
-selects `DEFAULT_EXCLUDE_PATTERNS`
-([`glob.ts:429`](../../src/core/glob.ts#L429)) _and_ the `.gitignore` walk
-([`glob.ts:410`](../../src/core/glob.ts#L410)). Tools translate their public
+selects the default excluded names (then `DEFAULT_EXCLUDE_PATTERNS`, now
+`DEFAULT_EXCLUDED_NAMES`) _and_ the `.gitignore` walk
+(`GitignoreManager.load`). Tools translate their public
 `includeIgnored` input into it and decide nothing further — the only form a
 call site may take is `skipIgnored: !args.includeIgnored`.
 
@@ -67,16 +67,16 @@ caller that post-filters is re-deriving the rule this record gives to `glob.ts`.
 - **Resolved 2026-09-26: A second cost, discovered after landing:** with the
   array of patterns gone from the public option, `createExcludeFilter`'s
   choice between returning a pattern array and returning a predicate
-  ([`glob.ts:336-341`](../../src/core/glob.ts#L336-L341), now `createWalkFilter`)
+  (now `createWalkFilter` in [`glob.ts`](../../src/core/glob.ts))
   became invisible to callers — and the two are not equivalent. Node's
   `fs.glob` drops a rejected entry given an array, but given a function it
   prunes descent while still yielding the rejected dirent and any rejected
   entry below the top level. The presence of a `.gitignore` anywhere under the
-  root silently switched modes. The guard at
-  [`glob.ts:416`](../../src/core/glob.ts#L416) (the `createWalkFilter` call
-  site) makes the two forms agree, and it is load-bearing for this decision:
-  consolidating on one flag is only safe while both branches of that filter
-  mean the same thing.
+  root silently switched modes. The guard, the `filter.isExcluded` re-check
+  in `processGlobPattern` ([`glob.ts`](../../src/core/glob.ts), the
+  `isExcluded` half of what `createWalkFilter` returns), makes the two forms
+  agree, and it is load-bearing for this decision: consolidating on one flag
+  is only safe while both branches of that filter mean the same thing.
 - Revisiting this means reintroducing a second field. Before doing so, check
   whether the new case genuinely varies twice — the first version of this option
   pair did not, which is what produced the finding.
@@ -89,7 +89,7 @@ caller that post-filters is re-deriving the rule this record gives to `glob.ts`.
 - **Amended 2026-10-02:** the Decision's "only form a call site may take" rule
   covers tools that translate their public `includeIgnored` input. An internal
   walk that has no such input passes `skipIgnored: false`. The move protection
-  walk, `assertTreeHasNoProtectedEntries`
-  ([`move.ts:443`](../../src/tools/move.ts#L443)), is that kind of walk. It must
+  walk, `assertTreeHasNoProtectedEntries` in
+  [`move.ts`](../../src/tools/move.ts), is that kind of walk. It must
   also see ignored and excluded trees, because a protected file under
   `node_modules` or a `.gitignore`d path still changes status when moved.

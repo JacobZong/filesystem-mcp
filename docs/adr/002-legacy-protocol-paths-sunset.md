@@ -19,13 +19,13 @@ months from that date, so the earliest the SDK can remove the deprecated
 This server keeps three code paths that exist only to serve a 2025-era
 connection, each already commented as legacy-only but with no date attached:
 `seedRootsFromClient` in
-[`src/transport/stdio.ts:63`](../../src/transport/stdio.ts#L63), wired only
+[`src/transport/stdio.ts`](../../src/transport/stdio.ts), wired only
 when `era === 'legacy'`, calls the deprecated `listRoots()` to push-seed
 allowed roots; the `resources/subscribe` / `resources/unsubscribe` request
-handlers in [`src/resources.ts:490-553`](../../src/resources.ts#L490-L553),
-registered only when `deps.era !== 'modern'`; and the deprecated
-`getClientCapabilities()` fallback in
-[`src/tools/define.ts:169-170`](../../src/tools/define.ts#L169-L170), reached
+handlers in `registerResources`
+([`src/resources.ts`](../../src/resources.ts)), registered only when `deps.era !== 'modern'`; and the deprecated
+`getClientCapabilities()` fallback in `toToolCtx`
+([`src/tools/define.ts`](../../src/tools/define.ts)), reached
 only when a request carries no modern capabilities envelope.
 
 They exist today because every mainstream MCP host still opens a connection
@@ -109,3 +109,10 @@ project.
   `resources.ts`) rather than passed through `deps`: adding a field to
   plumbing this record schedules for deletion would be a new seam in code
   meant to be temporary.
+- **Amended 2026-10-13:** the Decision's "six test files" undercounts.
+  `grep -l "createTestClientPair\|createLinkedPair" __tests__/*.ts`
+  without `__tests__/helpers.ts` returned 15 files on 2026-10-13. The
+  migration that blocks removal is that grep's file list, not a fixed
+  number. Also, `src/tools/index.ts` no longer declares its own `era`
+  field: its registrar deps extend `ToolDeps` in `src/tools/define.ts`,
+  so the `era` removal there is one field, not two.

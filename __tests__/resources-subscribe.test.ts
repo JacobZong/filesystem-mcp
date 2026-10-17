@@ -1,7 +1,8 @@
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
@@ -162,5 +163,46 @@ describe('createServer disposal on connection close', () => {
       registry.destroy();
       await cleanupTestRoot(root);
     }
+  });
+});
+
+describe('Resource subscription guards', () => {
+  let top: string;
+  let root: string;
+  let pair: Awaited<ReturnType<typeof createTestClientPair>>;
+
+  before(async () => {
+    top = await createTestRoot();
+    root = join(top, 'root');
+    await mkdir(root);
+    await writeFile(join(top, 'outside.txt'), 'x');
+    await writeFile(join(root, '.env'), 'x');
+    pair = await createTestClientPair([root]);
+  });
+
+  after(async () => {
+    await pair.close();
+    await cleanupTestRoot(top);
+  });
+
+  it('subscribe refuses a file outside the root and a sensitive file', async () => {
+    const paths = [join(top, 'outside.txt'), join(root, '.env')];
+    for (const p of paths) {
+      await assert.rejects(
+        pair.client.subscribeResource({ uri: buildFileResourceUri(p) }),
+        (err: unknown) => {
+          assert.equal((err as { code?: unknown }).code, ProtocolErrorCode.InvalidParams);
+          return true;
+        },
+      );
+    }
+
+    let received: string | undefined;
+    pair.client.setNotificationHandler('notifications/resources/updated', (n) => {
+      received = (n.params as { uri: string }).uri;
+    });
+    for (const p of paths) await writeFile(p, 'changed');
+    await waitFor(() => received !== undefined, 300);
+    assert.strictEqual(received, undefined, 'no watcher may be attached to a refused file');
   });
 });

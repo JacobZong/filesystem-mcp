@@ -1,26 +1,26 @@
 import type { ContentBlock } from '@modelcontextprotocol/server';
 
 import { Buffer, isUtf8 } from 'node:buffer';
-import { dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
 import type { StoppedReason } from '../core/concurrency.ts';
 import { processEntriesConcurrently } from '../core/concurrency.ts';
 import { unifiedPatch } from '../core/diff.ts';
-import { ErrorCode, FsError, Problem } from '../core/errors.ts';
+import { ErrorCode, FsError, isFsError, isSkippableErrno, Problem } from '../core/errors.ts';
 import { buildWrittenFileMeta } from '../core/file-uri.ts';
 import { stoppedEarlyLine, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
-import { toPosixRelative } from '../core/path.ts';
+import type { ResultPaths } from '../core/path.ts';
 import { createTooLargeError, readFileBufferWithLimit } from '../core/read.ts';
 import {
   defaultFalseBoolean,
   IncludeHidden,
   IncludeIgnored,
-  isBlank,
+  mapOptionalPath,
   MaxDepth,
+  nonBlankString,
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
@@ -31,10 +31,10 @@ import {
   execMatches,
   freeRegex,
   RE2_MAX_INPUT_BYTES,
+  resolveSearchScope,
 } from '../core/search.ts';
 import {
   DEFAULT_SEARCH_RESULTS,
-  DEFAULT_SEARCH_TIMEOUT_MS,
   escapeRegExp,
   getMaxTextFileSize,
   MAX_SEARCH_RESULTS,
@@ -51,13 +51,8 @@ const SearchAndReplaceInputSchema = z.strictObject({
   pattern: SafeGlobPattern.optional().describe(
     'Glob to restrict replacements to specific file types (e.g. **/*.ts); default: all text files',
   ),
-  searchPattern: z
-    .string()
-    .min(1)
+  searchPattern: nonBlankString('searchPattern')
     .max(10000)
-    .refine((val) => !isBlank(val), {
-      message: 'searchPattern cannot be empty or whitespace-only',
-    })
     .describe(
       'Exact literal text or RE2 regex pattern to search for. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences are supported). Cannot be empty or whitespace-only.',
     ),
@@ -94,6 +89,8 @@ const SearchAndReplaceInputSchema = z.strictObject({
 });
 
 type SearchAndReplaceOutput = BatchResult<{ matches: number }> & {
+  /** The root `results[].path` is relative to; a path that would not read back from it is absolute. */
+  root: string;
   totalMatches: number;
   filesScanned: number;
   skippedBinary?: number;
@@ -114,13 +111,18 @@ interface Failure {
   error: Problem;
 }
 
-function recordFailure(failures: Failure[], failure: Failure): void {
-  if (failures.length >= MAX_FAILURES) return;
-  failures.push(failure);
+/** Counts every failure; keeps the first MAX_FAILURES of them for the result. */
+function recordFailure(summary: ReplaceSummary, entryPath: string, error: unknown): void {
+  summary.failedFiles++;
+  if (summary.failures.length >= MAX_FAILURES) return;
+  summary.failures.push({
+    path: summary.paths.show(entryPath),
+    error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, entryPath),
+  });
 }
 
 function recordChangedFile(summary: ReplaceSummary, plan: ReplacementPlan, filePath: string): void {
-  const relativePath = toPosixRelative(summary.root, filePath);
+  const relativePath = summary.paths.show(filePath);
   // The first changed file is the one the resource_link points at; keep what
   // was written so the link needs no read-back.
   summary.primary ??= { path: filePath, content: plan.updatedContent };
@@ -263,7 +265,8 @@ function createCaseSensitiveLiteralMatcher(searchPattern: string): ReplacementMa
 type SearchAndReplaceArgs = z.infer<typeof SearchAndReplaceInputSchema>;
 
 interface ReplaceContext {
-  options: { dryRun: boolean; returnDiff: boolean };
+  dryRun: boolean;
+  returnDiff: boolean;
   replacement: string;
   matcher: ReplacementMatcher;
   maxFileSize: number;
@@ -280,16 +283,22 @@ interface ReplacementPlan {
 }
 
 async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<void> {
-  const { options, signal, summary } = ctx;
+  const { dryRun, returnDiff, signal, summary } = ctx;
+  // Discovery/read failures on a walked file are skipped silently; a failed
+  // write is the caller's edit not landing, so it is always reported.
+  const write = { started: false };
 
   try {
     // Lock the read→write per file so a concurrent writer is not lost; a dry
     // run never writes and skips the lock.
-    const plan = options.dryRun
+    const plan = dryRun
       ? await readReplacementPlan(entryPath, ctx)
       : await ctx.fs.lockForWrite(entryPath, async () => {
           const planned = await readReplacementPlan(entryPath, ctx);
-          if (planned) await ctx.fs.writeFile(entryPath, planned.updatedContent, { signal });
+          if (planned) {
+            write.started = true;
+            await ctx.fs.writeFile(entryPath, planned.updatedContent, { signal });
+          }
           return planned;
         });
     if (!plan) {
@@ -307,18 +316,26 @@ async function processEntry(entryPath: string, ctx: ReplaceContext): Promise<voi
       filePath: entryPath,
       originalContent: plan.originalContent,
       updatedContent: plan.updatedContent,
-      includeDiff: options.dryRun || options.returnDiff,
+      includeDiff: dryRun || returnDiff,
     });
   } catch (error) {
     // A timeout/cancel aborts the whole scan, not just this file: don't record
     // it as a per-file failure. processEntriesConcurrently reports the run as
     // stoppedReason 'timeout' instead.
     if (signal?.aborted) return;
-    summary.failedFiles++;
-    recordFailure(summary.failures, {
-      path: toPosixRelative(summary.root, entryPath),
-      error: Problem.fromUnknown(error, ErrorCode.UNKNOWN, entryPath),
-    });
+    if (
+      !ctx.singleFile &&
+      !write.started &&
+      ((isFsError(error) &&
+        (error.code === ErrorCode.ACCESS_DENIED ||
+          error.code === ErrorCode.NOT_FOUND ||
+          error.code === ErrorCode.SYMLINK_NOT_ALLOWED)) ||
+        isSkippableErrno(error))
+    ) {
+      summary.processedFiles--;
+      return;
+    }
+    recordFailure(summary, entryPath, error);
   }
 }
 
@@ -372,7 +389,7 @@ function maybeAppendPatchDiff(
     summary.diffTruncated = true;
     return;
   }
-  const header = toPosixRelative(summary.root, params.filePath);
+  const header = summary.paths.show(params.filePath);
   const patch = unifiedPatch(header, params.originalContent, params.updatedContent);
   if (patch === undefined) {
     summary.diffTruncated = true;
@@ -386,7 +403,8 @@ function maybeAppendPatchDiff(
 }
 
 interface ReplaceSummary {
-  root: string;
+  /** How changed files, failures and diff headers name a path: relative to the root. */
+  paths: ResultPaths;
   totalMatches: number;
   filesChanged: number;
   failedFiles: number;
@@ -402,9 +420,9 @@ interface ReplaceSummary {
   stoppedReason?: StoppedReason;
 }
 
-function createReplaceSummary(root: string): ReplaceSummary {
+function createReplaceSummary(paths: ResultPaths): ReplaceSummary {
   return {
-    root,
+    paths,
     totalMatches: 0,
     filesChanged: 0,
     failedFiles: 0,
@@ -416,28 +434,6 @@ function createReplaceSummary(root: string): ReplaceSummary {
     diff: '',
     diffTruncated: false,
   };
-}
-
-async function resolveSearchRoot(
-  pathValue: string | undefined,
-  fs: GuardedFileSystem,
-): Promise<{ root: string; singleFile?: string }> {
-  if (!pathValue) {
-    return { root: fs.pathGuard.resolvePathOrRoot(undefined) };
-  }
-  const resolvedPath = await fs.pathGuard.validateExistingPath(pathValue);
-  const { stats: fileStats } = await fs.stat(resolvedPath);
-  if (fileStats.isFile()) {
-    // A single explicit file target bypasses the glob machinery entirely:
-    // routing it through globEntries with baseNameMatch would rewrite the
-    // escaped basename to `**/${basename}` and match every same-named file
-    // under the parent tree, not just this one.
-    return {
-      root: dirname(resolvedPath),
-      singleFile: resolvedPath,
-    };
-  }
-  return { root: resolvedPath };
 }
 
 function buildSearchPattern(args: SearchAndReplaceArgs): string {
@@ -466,6 +462,7 @@ function buildSearchAndReplaceStructuredResult(
     ...summary.failures.map((f) => ({ path: f.path, error: f.error })),
   ];
   return {
+    root: summary.paths.root,
     results,
     // `failedFiles` counts every failure; `failures` itself is capped at
     // MAX_FAILURES, so the summary must not be derived from the array length.
@@ -496,7 +493,7 @@ async function handleSearchAndReplace(
   link?: ContentBlock;
 }> {
   const maxFileSize = getMaxTextFileSize();
-  const { root, singleFile } = await resolveSearchRoot(args.path, ctx.fs);
+  const { basePath: root, explicitFile: singleFile } = await resolveSearchScope(args.path, ctx.fs);
   const effectivePattern = args.pattern ?? '**/*';
   const ceiling = ctx.fs.pathGuard.allowedRootContaining(root);
 
@@ -509,6 +506,7 @@ async function handleSearchAndReplace(
         pattern: effectivePattern,
         includeHidden: args.includeHidden,
         skipIgnored: !args.includeIgnored,
+        pathGuard: ctx.fs.pathGuard,
         ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
         signal: ctx.signal,
         baseNameMatch: true,
@@ -517,7 +515,9 @@ async function handleSearchAndReplace(
         ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
       });
 
-  const summary = createReplaceSummary(root);
+  // Relative to the root, not to the walked directory: `a.ts` from a run over
+  // `src` would name `<root>/a.ts` when passed back.
+  const summary = createReplaceSummary(ctx.fs.pathGuard.resultPaths(root));
 
   // The matcher may own a compiled RE2 pattern, whose wasm memory re2-wasm
   // never reclaims on its own. Nothing past the scan touches it, so free it the
@@ -526,10 +526,8 @@ async function handleSearchAndReplace(
   let stoppedReason: StoppedReason | undefined;
   try {
     const context: ReplaceContext = {
-      options: {
-        dryRun: args.dryRun,
-        returnDiff: args.returnDiff,
-      },
+      dryRun: args.dryRun,
+      returnDiff: args.returnDiff,
       replacement: args.replacement,
       matcher,
       maxFileSize,
@@ -549,11 +547,7 @@ async function handleSearchAndReplace(
         ctx.onProgress({ current: summary.processedFiles });
       },
       onError: (entryPath, err) => {
-        summary.failedFiles++;
-        recordFailure(summary.failures, {
-          path: toPosixRelative(summary.root, entryPath),
-          error: Problem.fromUnknown(err, ErrorCode.UNKNOWN, entryPath),
-        });
+        recordFailure(summary, entryPath, err);
       },
       runEntry: (entryPath) => processEntry(entryPath, context),
     });
@@ -596,6 +590,7 @@ async function handleSearchAndReplace(
         content: summary.primary.content,
         dryRun: args.dryRun,
         lastModified: primaryModified,
+        transport: ctx.transport,
       }).resourceLink
     : undefined;
   return link ? { structured, link } : { structured };
@@ -610,7 +605,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     'and ^ and $ anchor to file start and end. edit replaces one unique exact match.',
   input: SearchAndReplaceInputSchema,
   readOnlyHint: false,
-  timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
+  deadline: true,
   progress: (args) => {
     const dryLabel = args.dryRun ? ' [dry run]' : '';
     return {
@@ -618,7 +613,7 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       subject: `${truncateProgressPattern(args.searchPattern)} → ${truncateProgressPattern(args.replacement)}`,
     };
   },
-  accessPaths: (args) => (args.path ? [args.path] : []),
+  mapPaths: mapOptionalPath,
   run: async (args, ctx) => {
     const truncatedPattern = truncateProgressPattern(args.searchPattern);
     const { structured, link } = await handleSearchAndReplace(args, ctx);
@@ -635,8 +630,25 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
     // model, so the stop state and the diff preview must ride the text.
     const lines = [summaryText];
     const stop = structured.stoppedReason;
-    if (stop === 'timeout') lines.push(stoppedEarlyLine(stop));
-    else if (stop !== undefined) {
+    if (stop === 'timeout') {
+      lines.push(stoppedEarlyLine(stop));
+      // A live run writes as it scans, so a timeout leaves the files it reached
+      // rewritten. The paths ship under `_meta`, which the model does not see; name
+      // them here, or a re-run of a self-matching replacement applies it twice.
+      if (!args.dryRun && structured.summary.succeeded > 0) {
+        const total = structured.summary.succeeded;
+        const shown = structured.results
+          .filter((x) => !('error' in x))
+          .slice(0, 5)
+          .map((x) => x.path)
+          .join(', ');
+        const more = total > 5 ? `, and ${String(total - 5)} more` : '';
+        lines.push(
+          `// ${String(total)} file(s) were already rewritten and stay changed: ${shown}${more}. ` +
+            'Re-running the same replacement applies it to them again; exclude them, or use dryRun first.',
+        );
+      }
+    } else if (stop !== undefined) {
       // maxResults/maxFiles here are the caller's own caps, so raising one is
       // what reaches the rest; the search engine's advice to narrow is not.
       lines.push(
@@ -670,10 +682,11 @@ export const REPLACE_TEXT = defineTool<typeof SearchAndReplaceInputSchema, Searc
       );
     }
     const text = lines.join('\n') + (structured.diff ? `\n\n${structured.diff}` : '');
-    const isError = isTotalFailure(structured.summary);
-    if (link) {
-      return { structured, text, resources: [link], isError };
-    }
-    return { structured, text, isError };
+    return {
+      structured,
+      text,
+      resources: link ? [link] : [],
+      isError: isTotalFailure(structured.summary),
+    };
   },
 });

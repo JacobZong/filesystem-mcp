@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "filesystem-mcp",
   "display_name": "Filesystem MCP",
-  "version": "2.7.6",
+  "version": "2.9.1",
   "description": "Secure filesystem MCP server for reading, writing, searching, diffing, and patching files.",
   "long_description": "Reads, writes, searches, diffs, and patches files inside the directories you choose. Paths outside those directories are refused unless you approve access when asked, and sensitive files such as `.env`, `*.pem`, and SSH keys are denied by default. Content search uses RE2, so no pattern can hang the server. Requires Node.js 24 or later.",
   "author": { "name": "j0hanz", "url": "https://github.com/j0hanz" },
@@ -19,7 +19,11 @@
     "entry_point": "dist/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/dist/index.js", "${user_config.allowed_directories}"]
+      "args": ["${__dirname}/dist/index.js", "${user_config.allowed_directories}"],
+      "env": {
+        "FS_READ_ONLY": "${user_config.read_only}",
+        "FS_DENYLIST": "${user_config.deny_patterns}"
+      }
     }
   },
   "tools": [
@@ -46,7 +50,10 @@
       "description": "Render PDF or DjVu pages to images, with their text layer."
     },
     { "name": "read_video_frames", "description": "Return evenly spaced video frames as images." },
-    { "name": "create", "description": "Create, overwrite, or append to text files." },
+    {
+      "name": "create",
+      "description": "Create, overwrite, or append to text files, or make empty directories."
+    },
     {
       "name": "write_binary",
       "description": "Write one binary file from base64, with optional SHA-256 check."
@@ -64,6 +71,20 @@
       "description": "Directories the server may read and write. Other paths need your approval first.",
       "multiple": true,
       "required": true
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read-only mode",
+      "description": "Remove every tool that changes files. The AI can still list, search, and read.",
+      "default": false,
+      "required": false
+    },
+    "deny_patterns": {
+      "type": "string",
+      "title": "Extra blocked files",
+      "description": "Comma-separated patterns to block, for example private/**,*.sqlite. Secret files such as .env and private keys are already blocked.",
+      "default": "",
+      "required": false
     }
   },
   "compatibility": {

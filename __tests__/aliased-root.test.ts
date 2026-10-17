@@ -53,6 +53,9 @@ describe('a root configured through an alias', () => {
       const result = await harness.client.callTool({ name, arguments: args });
       assert.notStrictEqual(result.isError, true, `${name}: ${firstTextBlock(result).text ?? ''}`);
       assert.match(firstTextBlock(result).text ?? '', /alias-probe\.txt/u, name);
+      if (name === 'list') {
+        assert.match(firstTextBlock(result).text ?? '', /^alias-root\n/u);
+      }
     }
   });
 

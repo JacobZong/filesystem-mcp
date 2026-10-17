@@ -30,10 +30,20 @@ import { randomBytes } from 'node:crypto';
 import * as z from 'zod/v4';
 
 import { ErrorCode, FsError } from './errors.ts';
+import type { FileType } from './fs.ts';
 import { Logger } from './observability.ts';
 
 /** The destructive operation a pending confirmation authorizes. */
 type PendingOp = 'delete' | 'move' | 'copy' | 'create' | 'grant';
+
+/** The original filesystem object covered by a recursive-delete confirmation. */
+export interface PendingDeleteIdentity {
+  readonly path: string;
+  readonly itemType: FileType;
+  readonly dev: number;
+  readonly ino: number;
+  readonly birthtimeMs: number;
+}
 
 /**
  * Integrity-protected state minted into an `input_required` result and echoed
@@ -44,6 +54,8 @@ type PendingOp = 'delete' | 'move' | 'copy' | 'create' | 'grant';
 export interface PendingState {
   readonly op: PendingOp;
   readonly paths: readonly string[];
+  /** Original objects, preserved on reissue; legacy tokens without these cannot authorize delete. */
+  readonly deleteIdentities?: readonly PendingDeleteIdentity[];
   /**
    * Set on the state of a round minted because the previous round's answer
    * was dropped by the SDK (`droppedInputResponseKeys`). Sealed in the HMAC
@@ -178,6 +190,7 @@ export async function buildInputRequired(
     {
       op: pending.op,
       paths: [...pending.paths].sort(),
+      ...(pending.deleteIdentities ? { deleteIdentities: pending.deleteIdentities } : {}),
       ...(pending.reissued ? { reissued: true as const } : {}),
     },
     ctx,
@@ -203,6 +216,7 @@ export async function buildInputRequired(
 interface PendingRoundTripOpts {
   readonly op: PendingOp;
   readonly pending: readonly string[];
+  readonly deleteIdentities?: readonly PendingDeleteIdentity[];
   readonly buildInputs: (pending: readonly string[]) => readonly PendingInput[];
 }
 
@@ -268,7 +282,11 @@ export async function pendingRoundTrip(
   if (state?.op !== opts.op) {
     assertCanElicit(opts.op, ctx.clientCapabilities);
     return buildInputRequired(
-      { op: opts.op, paths: opts.pending },
+      {
+        op: opts.op,
+        paths: opts.pending,
+        ...(opts.deleteIdentities ? { deleteIdentities: opts.deleteIdentities } : {}),
+      },
       opts.buildInputs(opts.pending),
       ctx.serverCtx,
     );
@@ -288,11 +306,7 @@ export async function pendingRoundTrip(
     const dropped = new Set(ctx.droppedInputResponseKeys);
     const inputs = opts.buildInputs(opts.pending);
     if (inputs.some((input) => dropped.has(input.key))) {
-      return buildInputRequired(
-        { op: opts.op, paths: opts.pending, reissued: true },
-        inputs,
-        ctx.serverCtx,
-      );
+      return buildInputRequired({ ...state, reissued: true }, inputs, ctx.serverCtx);
     }
   }
   return undefined;
@@ -379,6 +393,23 @@ export function describeRefusal(
   if (view.action === 'decline') return 'declined by the user';
   if (view.action === 'cancel') return 'dismissed by the user';
   return 'answered without a valid choice';
+}
+
+/**
+ * How the caller answered one item of a sorted pending set: `'accepted'` for
+ * `acceptChoice`, `'skipped'` for skip, otherwise the refusal's wording.
+ */
+export function readPendingVerdict(
+  ctx: Pick<PendingCtx, 'inputResponses' | 'droppedInputResponseKeys'>,
+  pendingSorted: readonly string[],
+  item: string,
+  acceptChoice: string,
+): 'accepted' | 'skipped' | { refused: string } {
+  const key = confirmKey(pendingSorted.indexOf(item));
+  const choice = readAcceptedChoice(ctx.inputResponses, key);
+  if (choice === acceptChoice) return 'accepted';
+  if (choice === 'skip') return 'skipped';
+  return { refused: describeRefusal(ctx, key) };
 }
 
 /**

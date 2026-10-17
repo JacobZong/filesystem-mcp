@@ -24,8 +24,8 @@ export interface Problem {
 }
 
 interface ProblemFactoryOptions {
-  path?: string;
-  suggestion?: string;
+  path?: string | undefined;
+  suggestion?: string | undefined;
 }
 
 function build(code: ErrorCode, message: string, opts: ProblemFactoryOptions = {}): Problem {
@@ -53,11 +53,7 @@ export const Problem = {
       (shouldOverride ? DEFAULT_SUGGESTIONS[code] : undefined) ??
       problem.suggestion ??
       DEFAULT_SUGGESTIONS[problem.code];
-    const resolvedPath = path ?? problem.path;
-    return build(code, problem.message, {
-      ...(resolvedPath !== undefined ? { path: resolvedPath } : {}),
-      ...(suggestion !== undefined ? { suggestion } : {}),
-    });
+    return build(code, problem.message, { path: path ?? problem.path, suggestion });
   },
   toText(error: unknown, defaultCode: ErrorCode): string {
     return formatDetailedError(Problem.fromUnknown(error, defaultCode));
@@ -107,7 +103,15 @@ export const SKIPPABLE_FS_CODES: ReadonlySet<ErrorCode> = new Set([
   ErrorCode.SYMLINK_NOT_ALLOWED,
 ]);
 
-const SKIPPABLE_ERRNOS: ReadonlySet<string> = new Set(['ENOENT', 'EACCES', 'ELOOP']);
+// Derived, not hand-maintained: an errno is skippable exactly when the code
+// ERRNO_MAP classifies it as a code in SKIPPABLE_FS_CODES. EPERM maps to
+// PERMISSION_DENIED, so OS-level EPERM is as skippable as EACCES — the hand-
+// maintained list above omitted it and diverged from its own comment.
+const SKIPPABLE_ERRNOS: ReadonlySet<string> = new Set(
+  Object.entries(ERRNO_MAP)
+    .filter(([, code]) => SKIPPABLE_FS_CODES.has(code))
+    .map(([errno]) => errno),
+);
 
 /**
  * Walk `error` and its `cause` chain once for the three facts error handling
@@ -154,9 +158,7 @@ export function classifyCauseChain(error: unknown): Problem {
   if (aborted) return Problem.cancelled(message);
   if (timedOut) return build(ErrorCode.TIMEOUT, message);
   if (errno !== undefined) {
-    return build(ERRNO_MAP[errno.code] ?? ErrorCode.IO_ERROR, message, {
-      ...(errno.path !== undefined ? { path: errno.path } : {}),
-    });
+    return build(ERRNO_MAP[errno.code] ?? ErrorCode.IO_ERROR, message, { path: errno.path });
   }
   return build(ErrorCode.UNKNOWN, message);
 }
@@ -244,15 +246,16 @@ function formatDetailedError(
 export class FsError extends Error {
   readonly problem: Problem;
 
-  constructor(code: ErrorCode, message: string, path?: string, cause?: unknown) {
+  /** `suggestion` replaces the code's default for a thrower that knows the better next step. */
+  constructor(
+    code: ErrorCode,
+    message: string,
+    path?: string,
+    cause?: unknown,
+    suggestion: string | undefined = DEFAULT_SUGGESTIONS[code],
+  ) {
     super(message, cause === undefined ? {} : { cause });
-    const suggestion = DEFAULT_SUGGESTIONS[code];
-    this.problem = {
-      code,
-      message,
-      ...(path !== undefined ? { path } : {}),
-      ...(suggestion !== undefined ? { suggestion } : {}),
-    };
+    this.problem = build(code, message, { path, suggestion });
     this.name = 'FsError';
   }
 

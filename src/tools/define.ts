@@ -7,7 +7,6 @@ import type {
   Notification,
   RegisteredTool,
   RequestId,
-  RequestMeta,
   RequestStateAccessor,
   ServerContext,
   StandardSchemaWithJSON,
@@ -21,7 +20,7 @@ import {
 
 import type * as z from 'zod/v4';
 
-import { ErrorCode, formatUnknownErrorMessage, Problem } from '../core/errors.ts';
+import { ErrorCode, formatUnknownErrorMessage, FsError, Problem } from '../core/errors.ts';
 import type { ProgressCtx } from '../core/fmt.ts';
 import { plainMessage } from '../core/fmt.ts';
 import { GuardedFileSystem } from '../core/fs.ts';
@@ -37,21 +36,18 @@ import { isSamePath } from '../core/path-utils.ts';
 import type { PathGuard } from '../core/path.ts';
 import { withSplitArgsRecovery } from '../core/schema.ts';
 import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
+import { getToolTimeoutMs, jsonBytesOver, MAX_OUTBOUND_RESULT_BYTES } from '../core/util.ts';
 import { ProgressSession } from './progress.ts';
 
 export interface ToolCtx {
   readonly signal: AbortSignal;
-  readonly _meta?: RequestMeta | undefined;
   /** The JSON-RPC id of the `tools/call` this context serves; prefixes every log line. */
   readonly requestId: RequestId;
-  /** W3C trace context the client put in `_meta`, when it did; rides the log prefix. */
-  readonly traceparent?: string | undefined;
   readonly fs: GuardedFileSystem;
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore;
   /** Emits a log line to stderr via `Logger.emit`, gated by `FS_LOG_LEVEL`. */
   readonly log: (level: LoggingLevel, data: unknown, logger?: string) => void;
-  readonly sendNotification: (notification: Notification) => Promise<void>;
   readonly onProgress: (params: { current: number; total?: number }) => void;
   /**
    * Multi-round-trip `inputResponses` carried by a retried `tools/call`
@@ -89,11 +85,11 @@ export interface ToolCtx {
   readonly clientCapabilities?: ClientCapabilities | undefined;
   /** The SDK request context this call runs under; `pendingRoundTrip` binds minted state to it. */
   readonly serverCtx: ServerContext;
-  /** `stdio` alone has a 10 MiB frame limit; unset on HTTP and the in-memory test pair. */
+  /** `stdio` alone has a 10 MiB frame limit; `http` on HTTP, unset on the in-memory test pair. */
   readonly transport?: 'stdio' | 'http' | undefined;
 }
 
-interface ToolDeps {
+export interface ToolDeps {
   readonly server: McpServer;
   readonly pathGuard: PathGuard;
   readonly pageStore: PageSnapshotStore;
@@ -121,20 +117,31 @@ export interface ToolDef<I extends z.ZodType, O extends object> {
   readonly input: I;
   /** Required: drives both the --read-only gate and published annotations. */
   readonly readOnlyHint: boolean;
+  /** Abort the call after getToolTimeoutMs() (`--tool-timeout`, FS_TOOL_TIMEOUT_MS). */
+  readonly deadline?: boolean;
+  /** Fork: a per-tool deadline in ms for slow converters (PDF, documents, video); wins over `deadline`. */
   readonly timeoutMs?: number;
   readonly progress?: (args: z.infer<I>) => ProgressCtx;
   readonly progressDone?: (args: z.infer<I>, result: O) => Partial<ProgressCtx>;
   readonly defaultErrorCode?: ErrorCode;
   /**
-   * The filesystem paths this tool will operate on, extracted from its parsed
-   * args. The executor runs an access-grant pre-check over these BEFORE `run`
+   * The parsed args with every caller-supplied filesystem path passed through
+   * `fn`. Before `run`, the executor reads the paths through it to resolve
+   * relative ones (`PathGuard.resolveRelativePaths`) and writes the results
+   * back, so every check `run` makes — duplicates and overlaps included — sees
+   * one spelling. It then runs the access-grant pre-check over the same paths
    * (R7): any path outside the granted roots yields an `input_required`
    * round-trip requesting a grant, and nothing is touched until the client
    * retries with an accepted grant (R8). Omit for tools that do not operate on
    * caller-supplied filesystem paths.
    */
-  readonly accessPaths?: (args: z.infer<I>) => readonly string[];
+  readonly mapPaths?: (args: z.infer<I>, fn: (path: string) => string) => z.infer<I>;
   readonly run: (args: z.infer<I>, ctx: ToolCtx) => Promise<RunResult<O> | InputRequiredResult>;
+  /**
+   * What the stdio size refusal tells the caller to do instead, for a tool
+   * that knows better than the generic advice (see `refuseOversized`).
+   */
+  readonly oversizeRemedy?: (result: RunResult<O>) => string;
 }
 
 export interface DefinedTool {
@@ -144,13 +151,7 @@ export interface DefinedTool {
   register(deps: ToolDeps): RegisteredTool;
 }
 
-function toToolCtx(
-  ctx: ServerContext,
-  deps: Pick<
-    ToolDeps,
-    'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era' | 'transport'
-  >,
-): Omit<ToolCtx, 'log' | 'onProgress'> {
+function toToolCtx(ctx: ServerContext, deps: ToolDeps): Omit<ToolCtx, 'log' | 'onProgress'> {
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
   // legacy connection fixed them at `initialize` and has no envelope at all.
@@ -178,15 +179,10 @@ function toToolCtx(
 
   return {
     signal: ctx.mcpReq.signal,
-    ...(ctx.mcpReq._meta ? { _meta: ctx.mcpReq._meta } : {}),
     requestId: ctx.mcpReq.id,
-    ...(typeof ctx.mcpReq._meta?.[TRACEPARENT_META_KEY] === 'string'
-      ? { traceparent: ctx.mcpReq._meta[TRACEPARENT_META_KEY] }
-      : {}),
     fs: new GuardedFileSystem(deps.pathGuard),
     pageStore: deps.pageStore,
     resourceStore: deps.resourceStore,
-    sendNotification: async (notification) => ctx.mcpReq.notify(notification),
     inputResponses: ctx.mcpReq.inputResponses,
     droppedInputResponseKeys: ctx.mcpReq.droppedInputResponseKeys,
     requestState: ctx.mcpReq.requestState,
@@ -221,7 +217,8 @@ function buildSuccessResponse<O extends object>(result: RunResult<O>): CallToolR
 class ToolExecutor<I extends z.ZodType, O extends object> {
   readonly signal: AbortSignal;
   private readonly def: ToolDef<I, O>;
-  private readonly parsedArgs: z.infer<I>;
+  /** Rewritten once, by `resolveRelativePaths`, before anything reads a path. */
+  private parsedArgs: z.infer<I>;
   private readonly toolCtx: ToolCtx;
 
   readonly #progressCtx: ProgressCtx;
@@ -235,18 +232,27 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
   ) {
     this.def = def;
     this.parsedArgs = parsedArgs;
-    this.signal = def.timeoutMs
-      ? AbortSignal.any([ctx.signal, AbortSignal.timeout(def.timeoutMs)])
-      : ctx.signal;
+    const timeoutMs = def.timeoutMs ?? (def.deadline ? getToolTimeoutMs() : undefined);
+    this.signal =
+      timeoutMs !== undefined
+        ? AbortSignal.any([ctx.signal, AbortSignal.timeout(timeoutMs)])
+        : ctx.signal;
     this.#progressCtx = def.progress ? def.progress(parsedArgs) : { label: def.title };
-    const token = ctx._meta?.progressToken;
+    const { mcpReq } = ctx.serverCtx;
+    const token = mcpReq._meta?.progressToken;
+    const notify = async (notification: Notification): Promise<void> => mcpReq.notify(notification);
     this.#progressSession = new ProgressSession({
       label: this.#progressCtx.label,
-      ...(token !== undefined ? { sink: { toolName, token, notify: ctx.sendNotification } } : {}),
+      ...(token !== undefined ? { sink: { toolName, token, notify } } : {}),
     });
+    const traceparent = mcpReq._meta?.[TRACEPARENT_META_KEY];
     this.toolCtx = {
       ...ctx,
       signal: this.signal,
+      // Per-call views, so a response refused after `run` can take back the
+      // cached result and page snapshot behind a link or cursor it never sent.
+      pageStore: ctx.pageStore.forCall(),
+      resourceStore: ctx.resourceStore.forCall(),
       log: (level: LoggingLevel, data: unknown, logger?: string) => {
         const msg = typeof data === 'string' ? data : String(data);
         // `[req <id>]` first so one grep finds every line of one call; the
@@ -256,7 +262,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
         // The message is flattened too (uncapped): it can carry a resolved
         // path or OS error text, and input schemas reject CR/LF but not the
         // Unicode line separators.
-        const trace = ctx.traceparent ? ` ${sanitizeLogField(ctx.traceparent)}` : '';
+        const trace = typeof traceparent === 'string' ? ` ${sanitizeLogField(traceparent)}` : '';
         const prefix = logger ? `[${logger}] ` : '';
         const text = sanitizeLogField(msg, Infinity);
         Logger.emit(
@@ -279,23 +285,49 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
     this.#progressSession.set({ ...p, message: plainMessage('tick', tickCtx) });
   }
 
-  private async completeProgress(result: O): Promise<void> {
+  private completeProgress(result: O): void {
     const doneCtx: ProgressCtx = this.def.progressDone
       ? { ...this.#progressCtx, ...this.def.progressDone(this.parsedArgs, result) }
       : this.#progressCtx;
     this.#progressSession.complete(plainMessage('done', doneCtx));
-    await this.#progressSession.flush();
   }
 
-  private async failProgress(error: unknown): Promise<{ isError: true; content: ContentBlock[] }> {
+  private failProgress(error: unknown): { isError: true; content: ContentBlock[] } {
     const errMsg = formatUnknownErrorMessage(error);
     this.#progressSession.fail(plainMessage('fail', { ...this.#progressCtx, error: errMsg }));
-    await this.#progressSession.flush();
     const errorText = Problem.toText(error, this.def.defaultErrorCode ?? ErrorCode.UNKNOWN);
     return {
       content: [{ type: 'text' as const, text: errorText }],
       isError: true,
     };
+  }
+
+  private collectPaths(): string[] {
+    const paths: string[] = [];
+    this.def.mapPaths?.(this.parsedArgs, (path) => {
+      paths.push(path);
+      return path;
+    });
+    return paths;
+  }
+
+  private async resolveRelativePaths(): Promise<void> {
+    const { mapPaths } = this.def;
+    if (!mapPaths) return;
+    const resolved = await this.toolCtx.fs.pathGuard.resolveRelativePaths(this.collectPaths());
+    if (resolved.size === 0) return;
+    const rewritten = mapPaths(this.parsedArgs, (path) => resolved.get(path) ?? path);
+    // The schema compared the spellings the caller sent, so `a.txt` and
+    // `<root>/a.txt` passed create's and edit's one-entry-per-file rule as two
+    // files. Its checks judge the resolved paths too.
+    const check = this.def.input.safeParse(rewritten);
+    if (!check.success) {
+      const issues = check.error.issues.map(
+        (issue) => `${issue.path.map(String).join('.')}: ${issue.message}`,
+      );
+      throw new FsError(ErrorCode.INVALID_INPUT, issues.join('; '));
+    }
+    this.parsedArgs = rewritten;
   }
 
   /**
@@ -309,9 +341,7 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
    * when no round-trip is needed and any applicable grants have been applied.
    */
   private async precheckGrant(): Promise<InputRequiredResult | undefined> {
-    const extract = this.def.accessPaths;
-    if (!extract) return undefined;
-    const paths = extract(this.parsedArgs);
+    const paths = this.collectPaths();
     if (paths.length === 0) return undefined;
     const grantDirs = await this.toolCtx.fs.pathGuard.precheckAccess(paths);
     if (grantDirs.length === 0) return undefined;
@@ -362,9 +392,43 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
         );
     for (const dir of accepted) {
       if (!grantDirs.some((g) => isSamePath(g, dir))) continue;
-      await this.toolCtx.fs.pathGuard.applyGrant(dir);
+      await this.toolCtx.fs.pathGuard.applyGrant(dir, 'access');
     }
     return undefined;
+  }
+
+  /**
+   * stdio's SDK reader drops the connection on a message past 10 MiB, so a
+   * response that would overflow it becomes TOO_LARGE instead. Only a call
+   * that changed nothing can be refused after `run` — a read-only tool, or a
+   * dry run (every tool with `dryRun` writes nothing under it); a mutation may
+   * already have committed. The whole encoded response counts, duplicated
+   * metadata and escaping included; the ceiling leaves room for the envelope.
+   */
+  private refuseOversized(result: RunResult<O>, response: CallToolResult): void {
+    if (this.toolCtx.transport !== 'stdio') return;
+    const dryRun = (this.parsedArgs as { dryRun?: unknown }).dryRun === true;
+    if (!this.def.readOnlyHint && !dryRun) return;
+    const encodedBytes = jsonBytesOver(response, MAX_OUTBOUND_RESULT_BYTES);
+    if (encodedBytes === undefined) return;
+    // The client never receives the link or cursor these back, so they would
+    // only push live entries out of the stores' caps.
+    this.toolCtx.resourceStore.discard();
+    this.toolCtx.pageStore.discard();
+    const remedy =
+      this.def.oversizeRemedy?.(result) ??
+      (dryRun
+        ? 'Nothing was written. Preview fewer files or a smaller file per call, or connect over HTTP.'
+        : 'Reduce the requested output or connect over HTTP.');
+    // The remedy stands in for TOO_LARGE's default head/tail advice, which
+    // fits neither media nor a dry run.
+    throw new FsError(
+      ErrorCode.TOO_LARGE,
+      `${this.def.name} result too large to return (${String(encodedBytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit).`,
+      undefined,
+      undefined,
+      remedy,
+    );
   }
 
   async execute(): Promise<CallToolResult | InputRequiredResult> {
@@ -373,7 +437,10 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       // grant input_required short-circuits here (progress paused, not
       // finished); an R9 mismatch throws, which this catch surfaces as an
       // isError tool result like every other handler failure — not a raw
-      // JSON-RPC error (GRANT-1 impact #2).
+      // JSON-RPC error (GRANT-1 impact #2). Relative paths resolve first, so
+      // the pre-check judges the path the call will use; with several roots
+      // that probes each candidate through validation, and reads nothing.
+      await this.resolveRelativePaths();
       const grantRequired = await this.precheckGrant();
       if (grantRequired !== undefined) return grantRequired;
       const result = await this.def.run(this.parsedArgs, this.toolCtx);
@@ -384,10 +451,12 @@ class ToolExecutor<I extends z.ZodType, O extends object> {
       if (isInputRequiredResult(result)) {
         return result;
       }
-      await this.completeProgress(result.structured);
-      return buildSuccessResponse(result);
+      const response = buildSuccessResponse(result);
+      this.refuseOversized(result, response);
+      this.completeProgress(result.structured);
+      return response;
     } catch (error) {
-      return await this.failProgress(error);
+      return this.failProgress(error);
     } finally {
       await this.#progressSession.flush();
     }

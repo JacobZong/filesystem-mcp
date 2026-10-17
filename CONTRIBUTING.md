@@ -9,8 +9,8 @@ Thanks for helping. This guide takes you from a fresh clone to a pull request.
   Keep reports short, and remove secrets, private paths, and file contents
   from logs.
 - Improve the docs. If something in the README or the
-  [configuration reference](docs/configuration.md) confused you, a fix is
-  very welcome.
+  [configuration reference](docs/configuration.md) confused you, send a
+  fix.
 - Pick up an issue, but comment on it first so nobody duplicates the work.
 - Spread the word by starring the repo or suggesting it for a list of MCP
   servers.
@@ -37,7 +37,7 @@ node dist/index.js /path/to/a/test/folder
 ```
 
 The server speaks MCP over stdio, so it waits for a client. You can try it in
-two easy ways:
+two ways:
 
 - Use MCP Inspector, a web UI for calling tools by hand:
 
@@ -59,12 +59,13 @@ starting the server.
 
 ## Checks
 
-| Command                | What it runs                                                      |
-| :--------------------- | :---------------------------------------------------------------- |
-| `npm run check`        | Everything CI runs: build, type checks, lint, format, knip, tests |
-| `npm run fix`          | Formats and lint-fixes, then runs the full check                  |
-| `npm run check:static` | Static checks only, no tests                                      |
-| `npm test`             | Tests only, on Node's built-in test runner                        |
+| Command                 | What it runs                                                                                        |
+| :---------------------- | :-------------------------------------------------------------------------------------------------- |
+| `npm run check`         | Build, type checks, lint, format, knip and tests (CI's Ubuntu leg also enforces the coverage floor) |
+| `npm run fix`           | Formats and lint-fixes, then runs the full check                                                    |
+| `npm run check:static`  | Static checks only, no tests                                                                        |
+| `npm test`              | Tests only, on Node's built-in test runner                                                          |
+| `npm run test:coverage` | Tests plus the src coverage floor CI enforces on Ubuntu                                             |
 
 Pass test runner flags after `--`, for example
 `npm test -- --test-name-pattern="resources"`.
@@ -72,8 +73,37 @@ Pass test runner flags after `--`, for example
 `__tests__/dist-smoke.test.ts` starts the built `dist/index.js` and skips when
 `dist/` is missing, so run `npm run build` (or `npm run check`) first.
 
-CI runs `npm run check` on Ubuntu and Windows. Please run it before you open a
-pull request.
+`__tests__/contract.test.ts` snapshots the tools, prompts, resource templates, capabilities, and instructions the server advertises. When you change any of them on purpose, regenerate the snapshot with `node --test --test-update-snapshots __tests__/contract.test.ts` (no `FS_*` variables set), and review the snapshot diff in your PR.
+
+CI runs the same checks as separate steps on Ubuntu and Windows, and the Ubuntu leg runs `npm run test:coverage` instead of `npm test`. Please run `npm run check` before you open a pull request.
+
+## Isolated capability lab
+
+Run the repeatable bug-hunt scenarios with Node.js 24 or later:
+
+```bash
+npm ci
+node --test --test-timeout=60000 __tests__/sandbox.test.ts
+```
+
+The lab uses synthetic files in disposable temporary directories, an explicit
+`FS_ROOT_BOUNDARY`, a real stdio subprocess, and authenticated HTTP on a loopback
+ephemeral port. The test cleans up clients, servers, and fixtures after each scenario.
+It checks all 13 tools through a file lifecycle, compares previews and responses
+with actual disk bytes, and exercises bounded concurrency and pagination.
+You do not need to share personal files or existing project directories with the server.
+
+Extend the fixtures and assertions in `__tests__/sandbox.test.ts` to experiment.
+Check both the human-readable `content` and the metadata (`_meta` for text tools,
+`structuredContent` otherwise); a successful batch can still contain failed paths.
+Use the focused `mutation-regressions.test.ts` and `outbound-regressions.test.ts`
+suites for confirmation races and oversized stdio responses.
+
+For manual experiments, point your client at a newly created disposable directory
+and pass that same absolute path as both the allowed directory and
+`--root-boundary`. Start with `--read-only` or mutation tools' `dryRun` options.
+These are application-level guards, not an OS sandbox. Use a disposable container
+or VM without host-data mounts when experimenting with untrusted code.
 
 ## Project structure
 
@@ -110,7 +140,7 @@ tools use to read and write files.
 
 1. Give each tool its own file in `src/tools/`, build it with `defineTool`
    from `src/tools/define.ts`, and describe its inputs with Zod schemas.
-2. Set `readOnlyHint` honestly, because it decides whether `--read-only`
+2. Set `readOnlyHint` to match what the tool does, because it decides whether `--read-only`
    removes the tool and which annotations clients see.
 3. Register it in `ALL_TOOLS` in `src/tools/index.ts`.
 4. Read and write through the guarded filesystem, so `PathGuard` checks every
@@ -141,8 +171,9 @@ Checklist:
 Commit messages are free-form. Say what changed and why, and call out
 breaking changes.
 
-Don't change the version in `package.json`, `server.json`, or
-`mcpb/manifest.json`. The Release workflow bumps all three together.
+Don't change the version in `package.json`, `server.json`,
+`mcpb/manifest.json`, `.codex-plugin/plugin.json`, or
+`.cursor-plugin/plugin.json`. The Release workflow bumps them together.
 
 ## Issues and the project board
 
