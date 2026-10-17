@@ -9,7 +9,7 @@ import type { ReadResourceResult, ServerContext } from '@modelcontextprotocol/se
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../src/core/config.ts';
@@ -290,6 +290,43 @@ describe('MCP Resources', () => {
       assert.strictEqual(notifications, 1, 'insert plus eviction must be coalesced');
       assert.strictEqual(store.keys().length, 64, 'entry limit must still be enforced');
     });
+
+    it("a call view's discard drops its own entries and announces it", () => {
+      let notifications = 0;
+      const store = new ResourceStore(() => {
+        notifications += 1;
+      });
+      const kept = store.putText({ name: 'kept', text: 'kept' });
+      const view = store.forCall();
+      const viewed = view.putText({ name: 'viewed', text: 'viewed' });
+      assert.strictEqual(store.getEntry(viewed.uri).text, 'viewed', 'the view shares the store');
+      assert.strictEqual(notifications, 2);
+
+      view.discard();
+      assert.throws(() => store.getEntry(viewed.uri), fsErrorMatcher(ErrorCode.NOT_FOUND));
+      assert.strictEqual(store.getEntry(kept.uri).text, 'kept');
+      assert.strictEqual(notifications, 3, 'taking the entry back changed the list');
+      view.discard();
+      assert.strictEqual(notifications, 3, 'nothing left to take back, nothing to announce');
+    });
+
+    it('maxReadResultBytes refuses an entry whose resources/read result encodes past it', () => {
+      const text = '"'.repeat(1000);
+      const store = new ResourceStore(undefined, { maxReadResultBytes: 1500 });
+      assert.throws(
+        () => store.putText({ name: 'escaped', text }),
+        fsErrorMatcher(ErrorCode.TOO_LARGE, /once JSON-encoded/),
+      );
+      assert.deepStrictEqual(store.keys(), []);
+      // Measured as read, not as stored: the same bytes unescaped fit.
+      assert.ok(store.putText({ name: 'plain', text: 'x'.repeat(1000) }));
+      assert.ok(store.forCall().putText({ name: 'view', text: 'x'.repeat(1000) }));
+      assert.throws(
+        () => store.forCall().putText({ name: 'escaped', text }),
+        fsErrorMatcher(ErrorCode.TOO_LARGE),
+        'a call view keeps the limit',
+      );
+    });
   });
 
   describe('filesystem-mcp://file/{+path} (TC-FUNC-061–066)', () => {
@@ -406,6 +443,56 @@ describe('MCP Resources', () => {
       assert.strictEqual(binaryResource.blob, pngBytes.toString('base64'));
       assert.ok(!('text' in binaryResource));
     });
+
+    it(
+      'gives a POSIX name holding a backslash its own URI, which reads that file',
+      { skip: process.platform === 'win32' && 'backslash is a separator on Windows' },
+      async () => {
+        const named = await writeTestFile(tmpDir, 'bs\\name.txt', 'one file');
+        const nested = await writeTestFile(tmpDir, 'bs/name.txt', 'nested file');
+        const namedUri = buildFileResourceUri(named);
+        assert.notStrictEqual(namedUri, buildFileResourceUri(nested));
+        assert.strictEqual(extractPath(namedUri), named);
+
+        const fileContract = getResourceContracts({
+          resourceStore: store,
+          pathGuard,
+          readOnly: false,
+        }).find((c) => c.name === 'filesystem-mcp-file');
+        assert.ok(fileContract);
+        for (const [path, text] of [
+          [named, 'one file'],
+          [nested, 'nested file'],
+        ] as const) {
+          const result = await fileContract.read(
+            new URL(buildFileResourceUri(path)),
+            {},
+            dummyContext,
+          );
+          const content = firstResourceContent(result);
+          assert.ok('text' in content);
+          assert.strictEqual(content.text, text);
+        }
+      },
+    );
+
+    it(
+      'refuses a Windows drive path on a POSIX host',
+      { skip: process.platform === 'win32' && 'a drive path is native on Windows' },
+      async () => {
+        const fileContract = getResourceContracts({
+          resourceStore: store,
+          pathGuard,
+          readOnly: false,
+        }).find((c) => c.name === 'filesystem-mcp-file');
+        assert.ok(fileContract);
+        await assert.rejects(
+          async () =>
+            fileContract.read(new URL(buildFileResourceUri('C:/x/f.txt')), {}, dummyContext),
+          fsErrorMatcher(ErrorCode.INVALID_INPUT, 'Windows-style path received on a POSIX host'),
+        );
+      },
+    );
 
     it('TC-FUNC-063: WatcherRegistry - acquire attaches a watcher and debounces notifications', async () => {
       const registry = createWatcherRegistry();
@@ -847,6 +934,38 @@ describe('filesystem resource path completion', () => {
       // SDK slices.
       assert.ok(result.completion.values[0]?.endsWith('f000.txt'));
       assert.ok(result.completion.values[99]?.endsWith('f099.txt'));
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('does not list inside a directory whose own name is sensitive', async () => {
+    const vault = join(root, 'vault.key');
+    await mkdir(vault);
+    await writeFile(join(vault, 'inner.txt'), 'x');
+    const harness = await createTestClientPair([root]);
+    try {
+      const result = await harness.client.complete({
+        ref: { type: 'ref/resource', uri: FILESYSTEM_FILE_URI_TEMPLATE },
+        argument: { name: 'path', value: encodeFileUriPath(`${vault}${sep}`) },
+      });
+      assert.deepStrictEqual(result.completion.values, []);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('still suggests roots when the guard refuses the searched directory', async () => {
+    const harness = await createTestClientPair([root]);
+    try {
+      const result = await harness.client.complete({
+        ref: { type: 'ref/resource', uri: FILESYSTEM_FILE_URI_TEMPLATE },
+        argument: { name: 'path', value: encodeFileUriPath(`${dirname(root)}${sep}`) },
+      });
+      assert.ok(
+        result.completion.values.some((v) => v.includes(basename(root))),
+        `root missing from ${JSON.stringify(result.completion.values)}`,
+      );
     } finally {
       await harness.close();
     }

@@ -3,7 +3,13 @@ import { InMemoryTransport } from '@modelcontextprotocol/client';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { ElicitRequest, ElicitResult } from '@modelcontextprotocol/client';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { createMcpHandler, InMemoryServerEventBus } from '@modelcontextprotocol/server';
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  CLIENT_INFO_META_KEY,
+  createMcpHandler,
+  InMemoryServerEventBus,
+  PROTOCOL_VERSION_META_KEY,
+} from '@modelcontextprotocol/server';
 import type { JSONRPCMessage } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
@@ -16,6 +22,7 @@ import { createInterface } from 'node:readline';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
+import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import {
   ErrorCode,
   formatUnknownErrorMessage,
@@ -81,12 +88,20 @@ export async function waitForResourceUpdate(
   uri: string,
   timeoutMs = 5000,
 ): Promise<void> {
+  const started = Date.now();
   let arrived = false;
+  const others: string[] = [];
   client.setNotificationHandler('notifications/resources/updated', (n) => {
-    if ((n.params as { uri: string }).uri === uri) arrived = true;
+    const got = (n.params as { uri: string }).uri;
+    if (got === uri) arrived = true;
+    else others.push(got);
   });
   await waitFor(() => arrived, timeoutMs);
-  assert.ok(arrived, `no notifications/resources/updated for ${uri} within ${timeoutMs}ms`);
+  assert.ok(
+    arrived,
+    `no notifications/resources/updated for ${uri} within ${timeoutMs}ms ` +
+      `(waited ${String(Date.now() - started)}ms; other URIs notified: ${others.length ? others.join(', ') : 'none'})`,
+  );
 }
 
 /** An assert.rejects matcher: FsError with `code`; `message` is included (string) or matched (RegExp). */
@@ -303,6 +318,8 @@ export async function createTestHttpHarness(
           era,
           resourceStore: sharedStore,
           pageStore: sharedPageStore,
+          // As http.ts passes it: a guard that started refusing on HTTP fails here.
+          transport: 'http',
         },
       );
       return serverCtx.mcp;
@@ -333,7 +350,7 @@ export async function createTestHttpHarness(
   };
 }
 
-export const TEST_API_KEY = 'x-test-key-0123456789';
+export const TEST_API_KEY = 'example-test-key-0123456789';
 
 export interface HttpTestContext {
   port: number;
@@ -532,6 +549,18 @@ export async function writeNLineFile(
 ): Promise<string> {
   const lines = Array.from({ length: lineCount }, (_, i) => `Line ${i + 1}`);
   return writeTestFile(root, name, lines.join('\n') + '\n');
+}
+
+/**
+ * The `_meta` stamp a raw 2026-era request carries. The revision is derived
+ * from `MODERN_PROTOCOL_REVISION`, so an era migration edits one constant.
+ */
+export function modernClientMeta(name: string, clientCapabilities: Record<string, unknown> = {}) {
+  return {
+    [PROTOCOL_VERSION_META_KEY]: MODERN_PROTOCOL_REVISION,
+    [CLIENT_CAPABILITIES_META_KEY]: clientCapabilities,
+    [CLIENT_INFO_META_KEY]: { name, version: '1.0.0' },
+  };
 }
 
 /** First text content block of a tool result (assert its shape at one owner). */

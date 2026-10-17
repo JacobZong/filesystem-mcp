@@ -1,7 +1,7 @@
 # Security policy
 
-Filesystem MCP gives AI assistants access to files, so security reports are
-taken seriously and handled first.
+Filesystem MCP gives AI assistants access to files, so security reports come
+before other work.
 
 ## Reporting a vulnerability
 
@@ -19,8 +19,8 @@ A useful report includes:
 - the tool calls or requests that reproduce the problem;
 - what happened, and what you expected.
 
-You will get a reply as soon as possible. Once a fix is released, the advisory
-is published with credit to you, unless you prefer otherwise.
+You will get a reply as soon as possible. Once a fix ships, the maintainer
+publishes the advisory and credits you, unless you prefer otherwise.
 
 ## Supported versions
 

@@ -1,7 +1,6 @@
 import type { InputRequiredResult } from '@modelcontextprotocol/server';
 import { isInputRequiredResult } from '@modelcontextprotocol/server';
 
-import { stat } from 'node:fs/promises';
 import { basename, dirname, relative, resolve } from 'node:path';
 
 import * as z from 'zod/v4';
@@ -19,17 +18,12 @@ import { joinRoster, pathLabel } from '../core/fmt.ts';
 import { destExists } from '../core/fs.ts';
 import type { GuardedFileSystem } from '../core/fs.ts';
 import { globEntries } from '../core/glob.ts';
-import {
-  confirmKey,
-  describeRefusal,
-  pendingRoundTrip,
-  readAcceptedChoice,
-} from '../core/input-required.ts';
+import { confirmKey, pendingRoundTrip, readPendingVerdict } from '../core/input-required.ts';
 import {
   isPathInsideDirectory,
   isSamePath,
-  normalizeCaseForComparison,
-  respellCaseOnlyTarget,
+  respellSpellingOnlyTarget,
+  unicodeMatchKey,
 } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
@@ -83,15 +77,16 @@ interface TransferPlan {
   resolvedSource: string;
   validDest: string;
   /**
-   * A rename that only changes the destination's case. Move must perform it —
+   * A rename that only changes the destination's case or Unicode spelling
+   * (#101). Move must perform it —
    * it is real work — so it is exempt from the destination-exists checks that
    * would otherwise read the source itself as an existing destination. Never
-   * true for a copy, which treats a case-only target as a self-copy and skips.
+   * true for a copy, which treats such a target as a self-copy and skips.
    */
-  isCaseOnlyRename: boolean;
+  isSpellingOnlyRename: boolean;
   /** Whether the destination existed when planned (drives the TOCTOU guard). */
   destExistedOriginally: boolean;
-  /** Destination exists and is not a self/case-only target → needs overwrite confirmation. */
+  /** Destination exists and is not a self or spelling-only target → needs overwrite confirmation. */
   pending: boolean;
 }
 
@@ -115,12 +110,11 @@ async function planTransfer(
   let realSource: string;
   let opSource: string;
   let validDest: string;
+  let isDirectory: boolean;
   try {
-    ({ realSource, opSource } = await validateTransferSource(op, pair.source, fs));
+    const source = await validateTransferSource(op, pair.source, fs, signal);
+    ({ realSource, opSource, isDirectory } = source);
     validDest = await fs.pathGuard.validatePathForWrite(pair.destination);
-    if (!(op === 'move' && opSource !== realSource) && (await stat(realSource)).isDirectory()) {
-      await assertTreeHasNoProtectedEntries(op, realSource, pair.source, validDest, fs, signal);
-    }
   } catch (error) {
     return { status: 'fail', failure: pairFailure(pair, error) };
   }
@@ -131,24 +125,44 @@ async function planTransfer(
   const resolvedSource = resolve(realSource);
   let resolvedDest = resolve(validDest);
 
-  // validatePathForWrite realpaths an existing destination to its on-disk
-  // spelling, so a case-only rename resolves to the source itself; re-spell
-  // it with the requested basename before deciding self vs. rename.
-  if (resolvedSource === resolvedDest) {
-    validDest = respellCaseOnlyTarget(pair.destination, validDest);
+  // The entry the destination names, without following a final link. When it
+  // is the source's own entry in another case or Unicode spelling, this is a
+  // rename of that entry, re-spelled with the requested basename: of the link
+  // itself when the source is a link, which validatePathForWrite resolved to
+  // its target. Onto its target, in any spelling, a link is a self-move: a
+  // rename would replace that file with the link.
+  const destEntry = await fs.pathGuard
+    .validatePathForDelete(pair.destination)
+    .catch(() => undefined);
+  const sameEntry = destEntry !== undefined && isSamePath(destEntry, opSource);
+  if (sameEntry) {
+    validDest = respellSpellingOnlyTarget(pair.destination, opSource);
     resolvedDest = resolve(validDest);
   }
 
-  const isSelf = resolvedSource === resolvedDest;
-  const isCaseOnlyRename = !isSelf && isSamePath(resolvedSource, resolvedDest);
+  // On the final destination spelling: a re-spelled directory moves its
+  // entries in or out of a spelling-specific allow or deny rule.
+  if (!(op === 'move' && opSource !== realSource) && isDirectory) {
+    try {
+      await assertTreeHasNoProtectedEntries(op, realSource, pair.source, validDest, fs, signal);
+    } catch (error) {
+      return { status: 'fail', failure: pairFailure(pair, error) };
+    }
+  }
 
-  // A copy onto a case-only variant of its own source is the same file, so it
-  // is a no-op; the same rename is real work for move and proceeds.
-  if (isSelf || (isCaseOnlyRename && op === 'copy')) {
+  const isSelf = sameEntry ? resolvedDest === resolve(opSource) : resolvedSource === resolvedDest;
+  // Only a destination naming the source's own entry is renamed in place:
+  // onto a separate `a\u202fb.txt`, a move of `a\u00a0b.txt` is an overwrite.
+  const isSpellingOnlyRename = !isSelf && (sameEntry || isSamePath(resolvedSource, resolvedDest));
+
+  // A copy onto a case-only or Unicode-only variant of its own source is the
+  // same file, so it is a no-op; the same rename is real work for move and
+  // proceeds.
+  if (isSelf || (isSpellingOnlyRename && op === 'copy')) {
     return { status: 'noop' };
   }
 
-  if (!isCaseOnlyRename && isPathInsideDirectory(resolvedSource, resolvedDest)) {
+  if (!isSpellingOnlyRename && isPathInsideDirectory(resolvedSource, resolvedDest)) {
     return {
       status: 'fail',
       failure: pairFailure(
@@ -162,7 +176,7 @@ async function planTransfer(
     };
   }
 
-  const destExistedOriginally = !isCaseOnlyRename && (await destExists(fs, validDest, op));
+  const destExistedOriginally = !isSpellingOnlyRename && (await destExists(fs, validDest, op));
   const pending = destExistedOriginally && !overwrite;
 
   return {
@@ -172,7 +186,7 @@ async function planTransfer(
       opSource,
       resolvedSource,
       validDest,
-      isCaseOnlyRename,
+      isSpellingOnlyRename,
       destExistedOriginally,
       pending,
     },
@@ -193,15 +207,14 @@ async function executeTransfer(
   pendingSorted: readonly string[],
 ): Promise<TransferExecResult> {
   if (plan.pending) {
-    const key = confirmKey(pendingSorted.indexOf(plan.validDest));
-    const choice = readAcceptedChoice(ctx.inputResponses, key);
-    if (choice === 'skip') {
+    const verdict = readPendingVerdict(ctx, pendingSorted, plan.validDest, 'overwrite');
+    if (verdict === 'skipped') {
       return { skipped: plan.pair.destination };
     }
-    if (choice !== 'overwrite') {
+    if (verdict !== 'accepted') {
       throw new FsError(
         ErrorCode.CANCELLED,
-        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${describeRefusal(ctx, key)}`,
+        `${VERB[op]} cancelled: overwrite of "${plan.pair.destination}" was ${verdict.refused}`,
         plan.pair.destination,
       );
     }
@@ -210,7 +223,7 @@ async function executeTransfer(
   // TOCTOU check before any mutation: a destination that did not exist when
   // planned but exists now was created during the confirmation gap.
   if (
-    !plan.isCaseOnlyRename &&
+    !plan.isSpellingOnlyRename &&
     !plan.destExistedOriginally &&
     (await destExists(ctx.fs, plan.validDest, op))
   ) {
@@ -299,7 +312,9 @@ async function runTransfers(
   const seenDest = new Set<string>();
   const ready: TransferPlan[] = [];
   for (const candidate of candidates) {
-    const destKey = normalizeCaseForComparison(candidate.validDest);
+    // Unicode-folded too: two spellings of one missing name land on one file
+    // once the first move creates it (#101).
+    const destKey = unicodeMatchKey(candidate.validDest);
     if (seenDest.has(destKey)) {
       failures.push(
         pairFailure(
@@ -319,14 +334,28 @@ async function runTransfers(
 
   // One entry's (resolved) source overlapping another's destination means the
   // two race and a file is lost: a swap [A->B, B->A] or a chain [B->C, A->B].
+  // Destination subtrees must also be disjoint: two recursive copies otherwise
+  // race over shared descendants even when their destination paths differ.
   // Refuse both sides so the survivors are independent and can run concurrently.
-  // isPathInsideDirectory covers equality and containment, case-folded.
-  const touches = (x: string, y: string): boolean =>
-    isPathInsideDirectory(x, y) || isPathInsideDirectory(y, x);
+  // isPathInsideDirectory covers equality and containment, case-folded; the
+  // keys fold Unicode spelling too, parents included. Two moves compare the
+  // entries they rename (opSource), not where a link points, and unfolded:
+  // validated sources are on-disk names, so two that fold alike are distinct.
+  const touches = (x: string, y: string): boolean => {
+    const [keyX, keyY] = [unicodeMatchKey(x), unicodeMatchKey(y)];
+    return isPathInsideDirectory(keyX, keyY) || isPathInsideDirectory(keyY, keyX);
+  };
   const overlapping = new Set<TransferPlan>();
   for (const [i, a] of ready.entries()) {
     for (const b of ready.slice(i + 1)) {
-      if (touches(a.resolvedSource, b.validDest) || touches(b.resolvedSource, a.validDest)) {
+      if (
+        (op === 'move' &&
+          (isPathInsideDirectory(a.opSource, b.opSource) ||
+            isPathInsideDirectory(b.opSource, a.opSource))) ||
+        touches(a.resolvedSource, b.validDest) ||
+        touches(b.resolvedSource, a.validDest) ||
+        touches(a.validDest, b.validDest)
+      ) {
         overlapping.add(a);
         overlapping.add(b);
       }
@@ -433,6 +462,8 @@ interface TransferSource {
   realSource: string;
   /** The path the mutation runs on: symlink preserved for move, resolved for copy. */
   opSource: string;
+  /** Whether the resolved source is a directory (from the same guarded stat). */
+  isDirectory: boolean;
 }
 
 /**
@@ -447,13 +478,25 @@ async function validateTransferSource(
   op: PairOp,
   source: string,
   fs: ToolCtx['fs'],
+  signal: AbortSignal | undefined,
 ): Promise<TransferSource> {
   try {
-    const realSource = await fs.pathGuard.validateExistingPath(source);
-    const opSource = op === 'move' ? await fs.pathGuard.validatePathForDelete(source) : realSource;
-    return { realSource, opSource };
+    if (op === 'move') {
+      const opSource = await fs.pathGuard.validatePathForDelete(source);
+      try {
+        const { stats, validPath: realSource } = await fs.stat(source, { signal });
+        return { realSource, opSource, isDirectory: stats.isDirectory() };
+      } catch (err) {
+        if (!isFsError(err) || err.code !== ErrorCode.NOT_FOUND) throw err;
+        const { stats } = await fs.lstat(source, { signal });
+        if (!stats.isSymbolicLink()) throw err;
+        return { realSource: opSource, opSource, isDirectory: false };
+      }
+    }
+    const { stats, validPath: realSource } = await fs.stat(source, { signal });
+    return { realSource, opSource: realSource, isDirectory: stats.isDirectory() };
   } catch (error) {
-    if (isFsError(error)) throw error;
+    if (isFsError(error) || signal?.aborted) throw error;
     throw new FsError(ErrorCode.ACCESS_DENIED, `${VERB[op]} failed for ${source}`, source);
   }
 }
@@ -584,7 +627,10 @@ export const MOVE = defineTool<typeof MoveInputSchema, MoveOutput>({
     }
     return { label, subject: `${String(args.moves.length)} files` };
   },
-  accessPaths: (args) => args.moves.flatMap((m) => [m.source, m.destination]),
+  mapPaths: (args, fn) => ({
+    ...args,
+    moves: args.moves.map((m) => ({ ...m, source: fn(m.source), destination: fn(m.destination) })),
+  }),
   run: async (args, ctx) => {
     const op: PairOp = args.copy ? 'copy' : 'move';
     // `overwrite` is copy-only; move has no confirmation bypass.

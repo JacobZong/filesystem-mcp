@@ -240,6 +240,8 @@
       const sep = (p) => (p.includes('\\') ? '\\' : '/');
       const join = (dir, name) =>
         (dir.endsWith(sep(dir)) ? dir : dir + sep(dir)) + name.replaceAll('/', sep(dir));
+      // Search results are relative to the root the server names, or absolute.
+      const isAbsolute = (p) => /^([a-zA-Z]:)?[\\/]/.test(p);
 
       // One tool call, questions included. An input_required result lists the
       // server's questions; the page answers them and repeats the call with the
@@ -464,7 +466,7 @@
           side(
             d.matches.map((m) => [
               `${m.file}:${m.line}  ${m.content.trim()}`,
-              () => view(join(cwd, m.file)),
+              () => view(isAbsolute(m.file) ? m.file : join(d.root, m.file)),
             ]),
             d.nextCursor && (() => search(searchPattern, d.nextCursor)),
             Boolean(cursor),

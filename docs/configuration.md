@@ -65,8 +65,8 @@ add these folders, even if you say yes:
   `~/.docker`, `~/.config/gcloud`.
 
 Symlinks are resolved first, so a link that points at one of these folders is
-refused too. Folders you pass as arguments or in `FS_ALLOWED_DIRS` are used as
-given: you named them on purpose.
+refused too. The server uses folders you pass as arguments or in `FS_ALLOWED_DIRS` as
+given, because you named them on purpose.
 
 ## Secret files
 
@@ -81,11 +81,13 @@ reading, writing, searching, and listing:
 | Keys and certificates | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `*.cer`                                                                                     |
 | SSH private keys      | `*id_rsa*`, `*id_dsa*`, `*id_ecdsa*`, `*id_ed25519*`                                                                                     |
 
-Matching ignores case, so `.ENV` is blocked too.
+Matching ignores case, so `.ENV` is blocked too. It also ignores Unicode
+spelling: a pattern blocks a name stored decomposed (NFD) or with a
+non-breaking space (U+00A0, U+202F) as it blocks the plain spelling.
 
 Three switches change the list:
 
-| You want to…                     | Use                                                    |
+| You want to                      | Use                                                    |
 | :------------------------------- | :----------------------------------------------------- |
 | Block more paths                 | `--deny <pattern>` (repeatable) and/or `FS_DENYLIST`   |
 | Unblock one built-in pattern     | `--allow <pattern>` (repeatable) and/or `FS_ALLOWLIST` |
@@ -112,6 +114,8 @@ filesystem-mcp ~/code/app --deny 'private/**' --deny '*.sqlite' --allow '.env.ex
 read, compare, and inspect. Use it for code review, research, or any folder
 you do not want changed.
 
+Set `FS_READ_ONLY=true` to do the same from the environment, for example in a client that can only pass environment variables.
+
 For the strongest setup in Docker, combine it with a read-only mount
 (`-v /path:/workspace:ro`), so the operating system also refuses writes.
 
@@ -123,14 +127,14 @@ exceptions:
 - Lists add up. Folder arguments join `FS_ALLOWED_DIRS`, `--deny` joins
   `FS_DENYLIST`, and `--allow` joins `FS_ALLOWLIST`. So an `FS_ALLOWLIST`
   inherited from your shell still applies when you pass `--allow`.
-- On/off flags only turn things on. `--allow-sensitive`, `--walk-cwd`, and
-  `--allow-missing-roots` cannot switch off their environment variable, so
-  unset the variable instead.
+- On/off flags only turn things on. `--read-only`, `--allow-sensitive`,
+  `--walk-cwd`, and `--allow-missing-roots` cannot switch off their environment
+  variable, so unset the variable instead.
 
 | Flag                      | Default     | What it does                                                                                                                     |
 | :------------------------ | :---------- | :------------------------------------------------------------------------------------------------------------------------------- |
 | `[folders...]`            |             | Allowed folders. See [Choosing folders](#choosing-folders).                                                                      |
-| `--read-only`             | off         | Remove the tools that change files.                                                                                              |
+| `--read-only`             | off         | Remove the tools that change files. Env: `FS_READ_ONLY`.                                                                         |
 | `--deny <pattern>`        |             | Block paths matching the pattern. Repeatable. Env: `FS_DENYLIST`.                                                                |
 | `--allow <pattern>`       |             | Unblock a built-in secret-file pattern. Repeatable. Env: `FS_ALLOWLIST`.                                                         |
 | `--allow-sensitive`       | off         | Turn off the built-in secret-file list. Env: `FS_ALLOW_SENSITIVE`.                                                               |
@@ -139,6 +143,7 @@ exceptions:
 | `--allow-missing-roots`   | off         | Start even if an allowed folder does not exist yet. Env: `FS_ALLOW_MISSING_ROOTS`.                                               |
 | `--root-boundary <path>`  |             | Only allow folders inside this path. Env: `FS_ROOT_BOUNDARY`.                                                                    |
 | `--max-file-size <bytes>` | 10485760    | Largest file `read` will load, and the total content of one `create` call. 1 MiB to 100 MiB. Env: `FS_MAX_FILE_SIZE`.            |
+| `--tool-timeout <ms>`     | 5000        | Time limit for one listing, read, search, or `replace_text` call. 1000 to 600000. Env: `FS_TOOL_TIMEOUT_MS`.                     |
 | `--port <n>`              |             | Serve over HTTP on this port instead of stdio. Env: `FS_PORT`.                                                                   |
 | `--http-host <host>`      | `127.0.0.1` | Address to listen on over HTTP. Env: `FS_HTTP_HOST`.                                                                             |
 | `--api-key <key>`         |             | Require `Authorization: Bearer <key>` over HTTP. Prefer `FS_API_KEY`: other users on the machine can see command-line arguments. |
@@ -163,15 +168,17 @@ These variables control folders and access:
 | `FS_DENYLIST`            | Extra blocked patterns, comma-separated. Combined with `--deny`.          |
 | `FS_ALLOWLIST`           | Built-in patterns to unblock, comma-separated. Combined with `--allow`.   |
 | `FS_ALLOW_SENSITIVE`     | Same as `--allow-sensitive`.                                              |
+| `FS_READ_ONLY`           | Same as `--read-only`.                                                    |
 
 These variables control limits and logging:
 
-| Variable           | What it does                                                          |
-| :----------------- | :-------------------------------------------------------------------- |
-| `FS_MAX_FILE_SIZE` | Same as `--max-file-size`.                                            |
-| `FS_MAX_WATCHERS`  | Most files watched for changes at once. Default 256, range 1 to 4096. |
-| `FS_LOG_LEVEL`     | Same as `--log-level`. Logs go to stderr.                             |
-| `NO_COLOR`         | Any value turns off colored output.                                   |
+| Variable             | What it does                                                          |
+| :------------------- | :-------------------------------------------------------------------- |
+| `FS_MAX_FILE_SIZE`   | Same as `--max-file-size`.                                            |
+| `FS_TOOL_TIMEOUT_MS` | Same as `--tool-timeout`.                                             |
+| `FS_MAX_WATCHERS`    | Most files watched for changes at once. Default 256, range 1 to 4096. |
+| `FS_LOG_LEVEL`       | Same as `--log-level`. Logs go to stderr.                             |
+| `NO_COLOR`           | Any value turns off colored output.                                   |
 
 These variables are for HTTP only:
 
@@ -190,21 +197,34 @@ These variables are for HTTP only:
 
 ## Limits
 
-| Limit                                   | Value                                                      |
-| :-------------------------------------- | :--------------------------------------------------------- |
-| Largest file `read` loads               | 10 MiB by default (`--max-file-size`, up to 100 MiB)       |
-| Total content of one `create` call      | Same as the file size limit                                |
-| Total text of one batched `read`        | 512 KiB; files past the budget are reported as skipped     |
-| Files per `create`, `move` call         | 100                                                        |
-| Paths per `read`, `stat`, `delete` call | 1000                                                       |
-| Files per `edit` call                   | 5, with up to 100 edits per file                           |
-| `find_files` / `search_text` results    | Up to 10,000 per call, paged                               |
-| `list` entries                          | 1000 per page by default, up to 20,000                     |
-| `list`, `stat`, and search tools        | Time out after about 5 seconds; narrow the path or pattern |
-| Cached results and page cursors         | Expire after about 60 seconds                              |
+| Limit                                                   | Value                                                                              |
+| :------------------------------------------------------ | :--------------------------------------------------------------------------------- |
+| Largest file `read` loads                               | 10 MiB by default (`--max-file-size`, up to 100 MiB)                               |
+| Total content of one `create` call                      | Same as the file size limit                                                        |
+| Total text of one batched `read`                        | 512 KiB; files past the budget are reported as skipped                             |
+| Files per `create`, `move` call                         | 100                                                                                |
+| Paths per `read`, `stat`, `delete` call                 | 1000                                                                               |
+| Files per `edit` call                                   | 5, with up to 100 edits per file                                                   |
+| `find_files` / `search_text` results                    | Up to 10,000 per call, paged                                                       |
+| `list` entries                                          | 1000 per page by default, up to 20,000                                             |
+| `list`, `stat`, `read`, search tools and `replace_text` | Time out after 5 seconds by default (`--tool-timeout`); narrow the path or pattern |
+| Cached results and page cursors                         | Expire after about 60 seconds                                                      |
 
 `read` handles text files and returns images and audio as media. It refuses
-other binary files and UTF-16 text files.
+other binary files unless the call passes `binary: true`, which returns them
+whole as an embedded resource under the same `--max-file-size` cap; over
+stdio, a file above about 7 MiB is too large once base64-encoded. It refuses
+UTF-16 text files.
+
+A stdio request ID may take at most 1024 bytes when JSON-encoded, counting
+quotes and escapes. The server rejects a longer ID before running the request,
+with JSON-RPC `InvalidRequest` (`-32600`) and no `id`, and does not echo the
+oversized ID. Use a shorter ID and retry. A string `_meta.progressToken` has
+the same limit, because every progress notification echoes it. The server
+rejects a request with a longer token the same way, but that error carries the
+request's `id`. The limit keeps room for IDs and tokens in responses, errors,
+and progress notifications under the client's 10 MiB stdio buffer. It does not
+apply over HTTP.
 
 ## Running over HTTP
 
@@ -249,15 +269,16 @@ filesystem-mcp --port 3000 --http-host 0.0.0.0 ~/code/app
 
 Over HTTP, clients that speak the newest MCP revision (2026-07-28) get every
 feature. Older (2025-era) clients can use all tools, resources, and prompts,
-but not confirmations or file change notifications: an overwrite, a recursive
+but not confirmations or file change notifications. An overwrite, a recursive
 delete, or a request for a new folder fails with an error that says so. For
 those clients, use stdio, or `overwrite: true` where a tool offers it.
 
 The server never picks up a client's workspace folders over HTTP, whatever
 the client's version, so pass folders as arguments when you start it. All
 clients of one server share its folders, including any folder one of them was
-granted. Clients should send absolute paths: a relative path resolves against
-the folder the server was started in, not against a root. The
+granted. A relative path resolves against the root unless the server was
+started inside one, and with several roots it must exist under exactly one,
+so clients are safest sending absolute paths. The
 [client guide](client-guide.md) covers this and the rest of what a client
 needs to know.
 
@@ -317,7 +338,7 @@ client. In clients without confirmations, the server refuses a path outside
 the allowed folders instead of asking about it.
 
 **`Sensitive file blocked`.** The file matches the [secret-file list](#secret-files)
-or one of your `--deny` rules. Unblock just that built-in pattern with
+or one of your `--deny` rules. Unblock that built-in pattern with
 `--allow`, for example `--allow '.env.example'`. `--deny` rules cannot be
 lifted this way; remove the rule instead.
 
@@ -333,8 +354,15 @@ folder's files one by one, or using a path that does not exist yet.
 `.gitignore`d files, and folders like `node_modules`, `dist`, and `.git`. Ask
 for `includeHidden` or `includeIgnored`.
 
+**A search stops early with `scan stopped early: timeout`.** Narrow `path` or
+`pattern` first. On a very large folder, raise the limit, for example
+`--tool-timeout 30000`. Most clients give up on a call after 60 seconds, so stay
+below that unless your client resets its timeout on progress.
+
 **Windows paths in JSON.** Escape backslashes (`"C:\\Users\\me\\project"`)
-or use forward slashes (`"C:/Users/me/project"`).
+or use forward slashes (`"C:/Users/me/project"`). A server on Linux or macOS,
+for example in Docker, refuses a drive path with `Windows-style path received
+on a POSIX host`. Pass a path on the server's own filesystem instead.
 
 **See what the server is doing.** Start it with `--log-level debug`. Logs go
 to stderr, which most clients show in their MCP output panel.

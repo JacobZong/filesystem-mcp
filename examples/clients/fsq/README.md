@@ -72,8 +72,8 @@ FS_API_KEY="$(openssl rand -hex 24)" npx -y @j0hanz/filesystem-mcp --port 3000 ~
 FS_API_KEY=... node fsq.ts --url http://127.0.0.1:3000/mcp read path="$HOME/code/app/README.md" head=20
 ```
 
-Over HTTP, send absolute paths: a relative path resolves against the server
-process's working directory, not against its root.
+Over HTTP, prefer absolute paths: a relative path resolves against the
+server's root only when the server was started outside it.
 
 ## How it works
 

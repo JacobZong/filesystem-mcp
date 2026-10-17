@@ -4,32 +4,30 @@ import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { stat, writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { isNodeError } from '../src/core/errors.ts';
 import { buildFileResourceUri } from '../src/core/file-uri.ts';
-import { MIB } from '../src/core/util.ts';
+import { MAX_STDIO_REQUEST_ID_BYTES, MIB } from '../src/core/util.ts';
 import { MUTATING_TOOL_NAMES } from '../src/tools/index.ts';
 import {
   ALL_REGISTERED_TOOL_NAMES,
   cleanupTestRoot,
   createRawStdioServer,
   createStdioClient,
+  createTestHttpHarness,
   createTestRoot,
   firstTextBlock,
+  modernClientMeta,
   waitFor,
   waitForResourceUpdate,
   writeTestFile,
 } from './helpers.ts';
 
-const MODERN_META = {
-  'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-  'io.modelcontextprotocol/clientCapabilities': {},
-  'io.modelcontextprotocol/clientInfo': { name: 'raw-stdio-test', version: '1.0.0' },
-};
+const MODERN_META = modernClientMeta('raw-stdio-test');
 
 const within = <T>(p: Promise<T>, ms: number) =>
   Promise.race([
@@ -247,6 +245,172 @@ describe('Stdio CLI flags (real subprocess)', () => {
   });
 });
 
+describe('Stdio request ID envelope bounds', () => {
+  it('rejects oversized IDs without echoing them or dispatching work, and stays usable', async () => {
+    const root = await createTestRoot();
+    const harness = await createRawStdioServer(root, { FS_ROOT_BOUNDARY: root });
+    try {
+      const target = join(root, 'must-not-exist.txt');
+      for (const request of [
+        {
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-11-25',
+            capabilities: {},
+            clientInfo: { name: 'test', version: '1' },
+          },
+        },
+        {
+          method: 'tools/call',
+          params: {
+            name: 'create',
+            arguments: { files: [{ path: target, content: 'not authorized' }] },
+          },
+        },
+        { method: 'resources/read', params: { uri: buildFileResourceUri(target) } },
+        {
+          method: 'subscriptions/listen',
+          params: { notifications: { resourceSubscriptions: [buildFileResourceUri(target)] } },
+        },
+      ]) {
+        for (const id of [
+          'x'.repeat(MAX_STDIO_REQUEST_ID_BYTES - 1),
+          '"'.repeat(MAX_STDIO_REQUEST_ID_BYTES / 2),
+          'é'.repeat(MAX_STDIO_REQUEST_ID_BYTES / 2),
+          'x'.repeat(11 * MIB),
+        ]) {
+          await harness.send({
+            jsonrpc: '2.0',
+            id,
+            ...request,
+            params: { ...request.params, _meta: MODERN_META },
+          });
+          const response = await within(harness.nextMessage(), 5000);
+          assert.ok('error' in response);
+          assert.equal(response.id, undefined);
+          assert.equal(response.error.code, ProtocolErrorCode.InvalidRequest);
+          assert.match(response.error.message, /request ID.*1024.*shorter ID/);
+          assert.ok(Buffer.byteLength(JSON.stringify(response)) < 1024);
+        }
+      }
+      await assert.rejects(stat(target), { code: 'ENOENT' });
+      await discoverModern(harness);
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('rejects oversized progress tokens under their request ID before dispatching work', async () => {
+    const root = await createTestRoot();
+    const harness = await createRawStdioServer(root, { FS_ROOT_BOUNDARY: root });
+    try {
+      await discoverModern(harness);
+      const target = join(root, 'token-target.txt');
+      const createCall = (id: string, progressToken: string, content: string) =>
+        harness.send({
+          jsonrpc: '2.0',
+          id,
+          method: 'tools/call',
+          params: {
+            name: 'create',
+            arguments: { files: [{ path: target, content }] },
+            _meta: { ...MODERN_META, progressToken },
+          },
+        });
+      for (const progressToken of [
+        'x'.repeat(MAX_STDIO_REQUEST_ID_BYTES - 1),
+        '"'.repeat(MAX_STDIO_REQUEST_ID_BYTES / 2),
+        'é'.repeat(MAX_STDIO_REQUEST_ID_BYTES / 2),
+        'x'.repeat(11 * MIB),
+      ]) {
+        await createCall('token', progressToken, 'not authorized');
+        // The refusal is the first frame: no progress notification went out.
+        const response = await within(harness.nextMessage(), 5000);
+        assert.ok('error' in response, JSON.stringify(response).slice(0, 200));
+        assert.equal(response.id, 'token');
+        assert.equal(response.error.code, ProtocolErrorCode.InvalidRequest);
+        assert.match(response.error.message, /progress token.*1024.*shorter token/);
+        assert.ok(Buffer.byteLength(JSON.stringify(response)) < 1024);
+      }
+      await assert.rejects(stat(target), { code: 'ENOENT' });
+
+      // A token exactly at the bound runs, and every progress frame echoes it.
+      const progressToken = 'x'.repeat(MAX_STDIO_REQUEST_ID_BYTES - 2);
+      await createCall('bounded', progressToken, 'authorized');
+      let frames = 0;
+      let response = await within(harness.nextMessage(), 5000);
+      while ('method' in response) {
+        assert.equal(response.method, 'notifications/progress');
+        assert.equal(response.params?.['progressToken'], progressToken);
+        frames++;
+        response = await within(harness.nextMessage(), 5000);
+      }
+      assert.ok('result' in response, JSON.stringify(response).slice(0, 200));
+      assert.equal(response.id, 'bounded');
+      assert.ok(frames > 0, 'progress frames carry the bounded token');
+      assert.equal(await readFile(target, 'utf8'), 'authorized');
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('echoes numeric and boundary-sized encoded IDs with near-limit tool and resource results', async () => {
+    const root = await createTestRoot();
+    const harness = await createRawStdioServer(root, { FS_ROOT_BOUNDARY: root });
+    try {
+      const file = await writeTestFile(root, 'near-limit.txt', 'x'.repeat(9.5 * MIB));
+      await discoverModern(harness);
+      for (const id of [
+        0,
+        'x'.repeat(MAX_STDIO_REQUEST_ID_BYTES - 2),
+        '"'.repeat((MAX_STDIO_REQUEST_ID_BYTES - 2) / 2),
+        'é'.repeat((MAX_STDIO_REQUEST_ID_BYTES - 2) / 2),
+      ]) {
+        for (const request of [
+          { method: 'tools/call', params: { name: 'read', arguments: { path: file } } },
+          { method: 'resources/read', params: { uri: buildFileResourceUri(file) } },
+        ]) {
+          await harness.send({
+            jsonrpc: '2.0',
+            id,
+            ...request,
+            params: { ...request.params, _meta: MODERN_META },
+          });
+          const response = await within(harness.nextMessage(), 5000);
+          assert.ok('result' in response);
+          assert.equal(response.id, id);
+          const bytes = Buffer.byteLength(JSON.stringify(response));
+          assert.ok(bytes > 9.5 * MIB && bytes < 10 * MIB, `wire response: ${String(bytes)} bytes`);
+        }
+      }
+      await writeFile(file, '"'.repeat(6 * MIB));
+      const id = 'x'.repeat(MAX_STDIO_REQUEST_ID_BYTES - 2);
+      for (const request of [
+        { method: 'tools/call', params: { name: 'read', arguments: { path: file } } },
+        { method: 'resources/read', params: { uri: buildFileResourceUri(file) } },
+      ]) {
+        await harness.send({
+          jsonrpc: '2.0',
+          id,
+          ...request,
+          params: { ...request.params, _meta: MODERN_META },
+        });
+        const response = await within(harness.nextMessage(), 5000);
+        assert.ok('id' in response);
+        assert.equal(response.id, id);
+        assert.match(JSON.stringify(response), /TOO_LARGE/);
+        assert.ok(Buffer.byteLength(JSON.stringify(response)) < 4096);
+      }
+      await discoverModern(harness);
+    } finally {
+      await harness.close();
+      await cleanupTestRoot(root);
+    }
+  });
+});
+
 describe('Stdio subscription lease lifecycle', () => {
   it('STDIO-014: buffer overflow releases watchers and exits with stdin still open', async () => {
     const root = await createTestRoot();
@@ -264,11 +428,7 @@ describe('Stdio subscription lease lifecycle', () => {
         id: 'overflow-listen',
         method: 'subscriptions/listen',
         params: {
-          _meta: {
-            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-            'io.modelcontextprotocol/clientCapabilities': {},
-            'io.modelcontextprotocol/clientInfo': { name: 'raw-stdio-test', version: '1.0.0' },
-          },
+          _meta: MODERN_META,
           notifications: { resourceSubscriptions: [buildFileResourceUri(file)] },
         },
       });
@@ -827,4 +987,57 @@ describe('Stdio subscription lease lifecycle', () => {
       });
     }
   }
+});
+
+describe('H5: a read whose encoded result exceeds the transport buffer errors cleanly', () => {
+  let tmpDir: string;
+  let harness: Awaited<ReturnType<typeof createStdioClient>>;
+
+  before(async () => {
+    tmpDir = await createTestRoot();
+    harness = await createStdioClient(tmpDir);
+  });
+  after(async () => {
+    await harness.close();
+    await cleanupTestRoot(tmpDir);
+  });
+
+  it('a ~9.9 MiB full read fails TOO_LARGE and the connection survives', async () => {
+    // Under the 10 MiB file-size limit (full read allowed), but every "\n"
+    // doubles under JSON escaping, so the serialized result clears the SDK
+    // client's 10 MiB ReadBuffer. Without the outbound cap this drops the
+    // session; with it, a small TOO_LARGE comes back and head still works.
+    const big = join(tmpDir, 'too-big-to-return.txt');
+    await writeFile(big, 'line\n'.repeat(Math.floor((9.9 * 1024 * 1024) / 5)));
+
+    const full = await harness.client.callTool({ name: 'read', arguments: { path: big } });
+    assert.strictEqual(full.isError, true, JSON.stringify(full.content).slice(0, 200));
+    assert.match(firstTextBlock(full).text ?? '', /TOO_LARGE/);
+    assert.match(firstTextBlock(full).text ?? '', /head|tail|startLine/);
+
+    const head = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: big, head: 10 },
+    });
+    assert.notStrictEqual(head.isError, true, 'connection survived; head still works');
+    assert.ok(firstTextBlock(head).text?.includes('line'));
+  });
+
+  it('the same ~9.9 MiB read still succeeds over HTTP, which has no ReadBuffer frame limit', async () => {
+    // The stdio cap must not shrink what a direct HTTP read returns: HTTP
+    // streams the response with no 10 MiB framing. This guards against the
+    // cap being applied transport-blind.
+    const httpTmp = await createTestRoot();
+    const http = await createTestHttpHarness([httpTmp]);
+    try {
+      const big = join(httpTmp, 'big-over-http.txt');
+      await writeFile(big, 'line\n'.repeat(Math.floor((9.9 * 1024 * 1024) / 5)));
+      const result = await http.client.callTool({ name: 'read', arguments: { path: big } });
+      assert.notStrictEqual(result.isError, true, 'HTTP returns the large read, not TOO_LARGE');
+      assert.ok((firstTextBlock(result).text ?? '').startsWith('line\n'));
+    } finally {
+      await http.close();
+      await cleanupTestRoot(httpTmp);
+    }
+  });
 });

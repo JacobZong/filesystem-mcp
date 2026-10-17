@@ -1,11 +1,12 @@
-import { stat as fsStat, readFile } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { processEntriesConcurrently, resolveStopReason } from './concurrency.ts';
-import { globEntries, type GlobEntry } from './glob.ts';
+import { ErrorCode, FsError, isFsError } from './errors.ts';
+import { GuardedFileSystem } from './fs.ts';
+import { globEntries } from './glob.ts';
 import type { PathGuard } from './path.ts';
 import { escapeRegExp, getMaxTextFileSize, MIB, PARALLEL_CONCURRENCY } from './util.ts';
 
@@ -58,6 +59,86 @@ export function createYielder(signal: AbortSignal | undefined): () => Promise<bo
  * aborts the module. 4 MiB leaves room for the copy and the pattern set.
  */
 export const RE2_MAX_INPUT_BYTES = 4 * MIB;
+
+/** The chunk `FileHandle#readFile` reads in, and checks its signal between. */
+const READ_CHUNK_BYTES = 512 * 1024;
+
+/** One line's matches: how many, and where the first starts (UTF-16 units). */
+interface LineHit {
+  count: number;
+  column: number;
+}
+
+/**
+ * A literal needle matched in native code, as RE2 would match it. RE2 copies
+ * its whole input into the wasm heap on every call, and for a literal that
+ * copy is most of what a search costs: once per file to rule it out, then once
+ * per line of every file it could not rule out.
+ */
+interface LiteralMatcher {
+  /** True when this file holds a character RE2 folds onto one of the needle's letters. */
+  needsRe2(buffer: Buffer): boolean;
+  /** False only when the raw bytes cannot hold a match. */
+  mayMatch(buffer: Buffer): boolean;
+  matchLine(line: string): LineHit | undefined;
+}
+
+/** The only non-ASCII characters RE2's case folding maps onto ASCII letters. */
+const KELVIN_SIGN_UTF8 = Buffer.from('\u212A', 'utf8'); // folds onto k
+const LONG_S_UTF8 = Buffer.from('\u017F', 'utf8'); // folds onto s
+const ASCII_UPPER_RE = /[A-Z]+/gu;
+
+/** Non-overlapping occurrences, left to right, as a global RE2 exec walks them. */
+function countOccurrences(line: string, needle: string): LineHit | undefined {
+  const column = line.indexOf(needle);
+  if (column === -1) return undefined;
+  let count = 0;
+  let at = column;
+  while (at !== -1 && count < MAX_MATCHES_PER_LINE) {
+    count++;
+    at = line.indexOf(needle, at + needle.length);
+  }
+  return { count, column };
+}
+
+/** `undefined` when RE2 must judge the needle: these shortcuts are exact only for the needles they take. */
+function createLiteralMatcher(needle: string, caseSensitive: boolean): LiteralMatcher | undefined {
+  // The file is decoded with U+FFFD for every invalid byte, and a lone
+  // surrogate reaches RE2 as U+FFFD, so a needle holding either can match
+  // decoded text that the raw bytes, or indexOf, do not.
+  if (needle.includes('\uFFFD') || Buffer.from(needle, 'utf8').toString('utf8') !== needle) {
+    return undefined;
+  }
+  if (caseSensitive) {
+    const bytes = Buffer.from(needle, 'utf8');
+    return {
+      needsRe2: () => false,
+      mayMatch: (buffer) => buffer.includes(bytes),
+      matchLine: (line) => countOccurrences(line, needle),
+    };
+  }
+  // Every non-ASCII character takes more than one UTF-8 byte per UTF-16 unit.
+  if (Buffer.byteLength(needle, 'utf8') !== needle.length) return undefined;
+  const lower = needle.toLowerCase();
+  const folds = [
+    ...(lower.includes('k') ? [KELVIN_SIGN_UTF8] : []),
+    ...(lower.includes('s') ? [LONG_S_UTF8] : []),
+  ];
+  return {
+    needsRe2: (buffer) => folds.some((fold) => buffer.includes(fold)),
+    // Latin-1 decoding keeps one char per byte, and lowercasing it maps A-Z
+    // onto a-z and every other byte onto a non-ASCII char, so an ASCII needle
+    // is found exactly where the bytes spell it in either case.
+    mayMatch: (buffer) => buffer.toString('latin1').toLowerCase().includes(lower),
+    // ASCII letters only: String#toLowerCase turns U+0130 into two code units,
+    // which shifts every later column and spells an `i` RE2 does not match.
+    matchLine: (line) =>
+      countOccurrences(
+        line.replace(ASCII_UPPER_RE, (upper) => upper.toLowerCase()),
+        lower,
+      ),
+  };
+}
 
 const BUFFER_ANCHOR_RE = /\\[AzZ]/u;
 /** `(?i)`, `(?-m)`, `(?s:…)`: inline flags can undo the `m` the prefilter relies on. */
@@ -189,7 +270,7 @@ async function findLineMatches(
   regex: Regex,
   line: string,
   tick: () => Promise<boolean>,
-): Promise<{ count: number; column: number } | undefined> {
+): Promise<LineHit | undefined> {
   let count = 0;
   let column = -1;
   // Awaiting mid-drain is safe with a shared regex: execMatches re-writes
@@ -250,41 +331,64 @@ export interface SearchContentOutcome {
 }
 
 type FileScan =
+  | { kind: 'sensitive' }
   | { kind: 'inaccessible' }
   | { kind: 'tooLarge' }
   | { kind: 'binary' }
   | { kind: 'scanned'; matches: SearchResult[] };
 
 interface ScanContext {
-  pathGuard: PathGuard;
+  fs: GuardedFileSystem;
   signal: AbortSignal | undefined;
   maxFileSize: number;
   maxResults: number;
   regex: Regex;
   prefilter: Regex;
+  /** Set for a literal needle it can match; RE2 then judges only the files it hands back. */
+  literal: LiteralMatcher | undefined;
   source: string;
   context: number;
 }
 
 async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileScan> {
-  try {
-    await scanCtx.pathGuard.validateExistingPath(entryPath);
-  } catch {
-    return { kind: 'inaccessible' };
-  }
-
-  try {
-    const stats = await fsStat(entryPath);
-    if (stats.size > scanCtx.maxFileSize) return { kind: 'tooLarge' };
-  } catch {
-    return { kind: 'inaccessible' };
-  }
-
   let buffer: Buffer;
   try {
-    buffer = await readFile(entryPath, { signal: scanCtx.signal });
+    // open() validates, refuses a swapped final symlink (O_NOFOLLOW) and
+    // re-checks the descriptor's real path (H4), so these bytes are the
+    // validated file's, not whatever the name points at by now.
+    await using handle = await scanCtx.fs.open(entryPath);
+    const { size } = await handle.stat();
+    if (size > scanCtx.maxFileSize) return { kind: 'tooLarge' };
+    // Read the size fstat reported: handle.readFile would fstat again and then
+    // read once more to find EOF, two extra round trips on every file a walk
+    // touches. A file that grows meanwhile is searched as it was at the fstat.
+    // A size of 0 is also what procfs and other virtual files report while
+    // holding text, so those still read to EOF.
+    if (size === 0) {
+      buffer = await handle.readFile({ signal: scanCtx.signal });
+      if (buffer.length > scanCtx.maxFileSize) return { kind: 'tooLarge' };
+    } else {
+      buffer = Buffer.allocUnsafe(size);
+      let filled = 0;
+      while (filled < size) {
+        // In readFile's own chunks, with its check of the signal before each,
+        // so a deadline on a slow filesystem lands as soon as it did there.
+        scanCtx.signal?.throwIfAborted();
+        const length = Math.min(size - filled, READ_CHUNK_BYTES);
+        const { bytesRead } = await handle.read(buffer, filled, length, filled);
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      buffer = buffer.subarray(0, filled);
+    }
   } catch (error) {
     if (scanCtx.signal?.aborted) throw error;
+    if (
+      scanCtx.fs.pathGuard.isSensitive(entryPath) ||
+      (isFsError(error) && error.message.startsWith('Sensitive file'))
+    ) {
+      return { kind: 'sensitive' };
+    }
     return { kind: 'inaccessible' };
   }
 
@@ -293,8 +397,10 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
   // bytes a pattern could not have matched anyway.
   if (buffer.includes(0)) return { kind: 'binary' };
 
+  const literal = scanCtx.literal?.needsRe2(buffer) ? undefined : scanCtx.literal;
+  if (literal && !literal.mayMatch(buffer)) return { kind: 'scanned', matches: [] };
   const content = buffer.toString('utf-8');
-  if (canPrefilter(scanCtx.source, buffer)) {
+  if (!literal && canPrefilter(scanCtx.source, buffer)) {
     scanCtx.prefilter.lastIndex = 0;
     if (scanCtx.prefilter.exec(content) === null) return { kind: 'scanned', matches: [] };
   }
@@ -307,8 +413,9 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
     content.length === 0 ? 0 : content.endsWith('\n') ? lines.length - 1 : lines.length;
   // A single line past RE2_MAX_INPUT_BYTES OOMs the wasm module for the rest of
   // the process; report the file tooLarge instead. Only a buffer over the bound
-  // can hold such a line, so ordinary files skip the per-line measure.
-  const checkLineSize = buffer.length > RE2_MAX_INPUT_BYTES;
+  // can hold such a line, so ordinary files skip the per-line measure, and a
+  // literal match never hands a line to RE2.
+  const checkLineSize = !literal && buffer.length > RE2_MAX_INPUT_BYTES;
   const matches: SearchResult[] = [];
   const tick = createYielder(scanCtx.signal);
   for (let i = 0; i < lineCount; i++) {
@@ -321,7 +428,9 @@ async function scanFile(entryPath: string, scanCtx: ScanContext): Promise<FileSc
     if (await tick()) break;
     // One scan per line: the helper resets lastIndex itself, so it
     // doubles as the "does this line match" test.
-    const found = await findLineMatches(scanCtx.regex, line, tick);
+    const found = literal
+      ? literal.matchLine(line)
+      : await findLineMatches(scanCtx.regex, line, tick);
     if (found) {
       matches.push({
         file: entryPath,
@@ -382,6 +491,7 @@ export async function searchContent(
           baseNameMatch: true,
           includeHidden: Boolean(options.includeHidden),
           skipIgnored: Boolean(options.skipIgnored),
+          pathGuard,
           ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
           ...(options.signal ? { signal: options.signal } : {}),
           ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
@@ -394,12 +504,15 @@ export async function searchContent(
     let skippedTooLarge = 0;
     let skippedBinary = 0;
     const scanCtx: ScanContext = {
-      pathGuard,
+      fs: new GuardedFileSystem(pathGuard),
       signal: options.signal,
       maxFileSize,
       maxResults,
       regex,
       prefilter,
+      literal: options.isRegex
+        ? undefined
+        : createLiteralMatcher(pattern, Boolean(options.caseSensitive)),
       source,
       context,
     };
@@ -427,6 +540,8 @@ export async function searchContent(
       const scan = perFile.get(i);
       if (!scan) continue;
       switch (scan.kind) {
+        case 'sensitive':
+          break;
         case 'inaccessible':
           skippedInaccessible++;
           break;
@@ -483,36 +598,6 @@ function canPrefilter(source: string, buffer: Buffer): boolean {
   return true;
 }
 
-async function* guardedEntries(
-  entries: AsyncIterable<GlobEntry>,
-  pathGuard: PathGuard,
-  signal: AbortSignal | undefined,
-  counters: { skippedInaccessible: number; stoppedByAbort: boolean },
-): AsyncGenerator<GlobEntry> {
-  // The signal carries both client cancellation and the tool's search timeout,
-  // so an abort means "return what we have, marked incomplete" rather than
-  // throw — but it must never be reported as a finished scan. The walk itself
-  // throws when the signal stops it before a single entry is yielded.
-  try {
-    for await (const entry of entries) {
-      if (signal?.aborted) {
-        counters.stoppedByAbort = true;
-        return;
-      }
-      try {
-        await pathGuard.validateExistingPath(entry.path);
-      } catch {
-        counters.skippedInaccessible++;
-        continue;
-      }
-      yield entry;
-    }
-  } catch (error) {
-    if (!signal?.aborted) throw error;
-    counters.stoppedByAbort = true;
-  }
-}
-
 export async function searchFiles(
   directory: string,
   pattern: string,
@@ -545,6 +630,7 @@ export async function searchFiles(
     baseNameMatch: true,
     includeHidden: Boolean(options.includeHidden),
     skipIgnored: Boolean(options.skipIgnored),
+    pathGuard,
     ...(ceiling !== undefined ? { ignoreCeiling: ceiling } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
@@ -552,12 +638,47 @@ export async function searchFiles(
   });
   const results: { path: string }[] = [];
   let filesScanned = 0;
-  const counters = { skippedInaccessible: 0, stoppedByAbort: false };
+  let skippedInaccessible = 0;
+  const perFile = new Map<number, { path: string } | 'inaccessible' | 'sensitive'>();
+  let dispatched = 0;
+  let collected = 0;
+  const stopped = await processEntriesConcurrently(entries, {
+    signal: options.signal,
+    concurrency: PARALLEL_CONCURRENCY,
+    shouldStop: () => collected >= maxResults,
+    onEntry: () => {
+      dispatched++;
+    },
+    onError: () => undefined,
+    runEntry: async (entryPath) => {
+      const index = dispatched - 1;
+      try {
+        await pathGuard.validateExistingPath(entryPath);
+        perFile.set(index, { path: entryPath });
+        collected++;
+      } catch (error) {
+        if (
+          pathGuard.isSensitive(entryPath) ||
+          (isFsError(error) && error.message.startsWith('Sensitive file'))
+        ) {
+          perFile.set(index, 'sensitive');
+        } else {
+          perFile.set(index, 'inaccessible');
+        }
+      }
+    },
+  });
 
-  for await (const entry of guardedEntries(entries, pathGuard, options.signal, counters)) {
+  for (let i = 0; i < dispatched; i++) {
+    const item = perFile.get(i);
+    if (!item || item === 'sensitive') continue;
+    if (item === 'inaccessible') {
+      skippedInaccessible++;
+      continue;
+    }
     if (results.length >= maxResults) break;
     filesScanned++;
-    results.push({ path: entry.path });
+    results.push(item);
   }
 
   // Sorting — only name / path are supported; size / modified were removed
@@ -569,7 +690,10 @@ export async function searchFiles(
   }
 
   // Same precedence as above: the result cap wins over a same-iteration abort.
-  const stoppedReason = resolveStopReason(results.length >= maxResults, counters.stoppedByAbort);
+  const stoppedReason = resolveStopReason(
+    results.length >= maxResults,
+    stopped === 'timeout' || Boolean(options.signal?.aborted),
+  );
 
   return {
     basePath: directory,
@@ -578,8 +702,32 @@ export async function searchFiles(
       matched: results.length,
       filesScanned,
       truncated: stoppedReason !== undefined,
-      skippedInaccessible: counters.skippedInaccessible,
+      skippedInaccessible,
       ...(stoppedReason ? { stoppedReason } : {}),
     },
+  };
+}
+
+/** Explicit files bypass glob filtering; their parent is the directory walked. */
+export async function resolveSearchScope(
+  path: string | undefined,
+  fs: GuardedFileSystem,
+  signal?: AbortSignal,
+): Promise<{ basePath: string; explicitFile?: string }> {
+  const requested = fs.pathGuard.resolvePathOrRoot(path);
+  // One resolution, one stat: validateExistingDirectory would redo both.
+  const { stats, validPath: resolved } = await fs.stat(requested, { signal });
+  if (!stats.isFile()) {
+    if (!stats.isDirectory()) {
+      throw new FsError(ErrorCode.NOT_DIRECTORY, 'Not a directory', requested);
+    }
+    return { basePath: resolved };
+  }
+  return {
+    basePath: dirname(resolved),
+    // The name is NOT turned into a glob: `[slug].tsx` would read as a
+    // character class. searchContent scans exactly this file instead, and
+    // hidden/ignored filtering is moot for a file the caller named.
+    explicitFile: resolved,
   };
 }

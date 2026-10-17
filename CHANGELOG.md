@@ -5,6 +5,451 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.1] - 2026-10-16
+
+A security and fix patch. The denylist now covers the subtree of every
+directory its list names for every tool, the same hide `list` already
+held. `list` with sizes respects the per-call time limit, and raw `EPERM`
+failures are walked past the same as `EACCES`. Before upgrading, read
+Security if you relied on `find_files`, `search_text` or `replace_text`
+showing entries under a directory whose own name a `--deny` or
+`FS_DENYLIST` pattern covered; those calls now hide the subtree.
+
+### Security
+
+- `list` with `includeSizes` (or `sortBy: 'size'`) now stats each listed file
+  through the guarded filesystem, which re-validates the path before the
+  stat call. The unguarded call could describe an entry swapped in between
+  the walk and the stat.
+- `find_files`, `search_text` and `replace_text` now hide the contents of a
+  directory whose own name the denylist covers, the same subtree `list` already
+  hid. Before, those tools surfaced paths (and content matches) under a
+  denylisted directory name while `list` hid the whole subtree. The hide holds
+  through literal pattern prefixes (`vault.key/*.txt`) and through a
+  denylisted symlink standing in for the directory.
+
+### Added
+
+- Codex plugin manifest (`.codex-plugin/plugin.json`) at the repo root, so
+  Codex installs the server as a plugin, and continuous security analysis in
+  the repository's CI.
+
+### Fixed
+
+- Raw OS `EPERM` failures are now skipped during walks and sweeps, the same as
+  `EACCES`. Before, an unwrapped `EPERM` surfaced as a warning in path
+  completion and as a per-file failure in `replace_text` where an `EACCES`
+  was silently skipped.
+- `list` with `includeSizes` (or `sortBy: 'size'`) now respects the per-call
+  time limit: the guarded stat is raced against the call's abort signal, so a
+  stalled validation no longer holds the entry past the deadline.
+
+## [2.9.0] - 2026-10-15
+
+A feature and security release. `read` returns any binary file, `list`
+shows file sizes, `stat` counts a directory's entries, `create` makes
+empty directories, and the per-call time limit is configurable. Search
+results and relative paths now resolve against the root, so what a tool
+prints reads back as given, and a name that differs from the disk only in
+Unicode form resolves everywhere. Path validation follows symlink chains,
+and a denylist blocks every Unicode spelling of a name it covers. Some
+calls that used to succeed are now refused. Before upgrading, read
+Changed if you join `search_text`, `find_files` or `replace_text` result
+paths onto the folder you searched, or check calls against the published
+input schemas (`read`, `stat` and `edit` no longer publish a top-level
+`oneOf`, and `create`'s `files` is now optional). Read Security if you
+pass glob patterns with nested groups or long `*` runs, rely on a name
+whose Unicode spelling a denylist pattern missed, or write through
+chained or broken symlinks. Read Fixed if you run on Linux or macOS where
+clients send Windows-style paths, or send batches that name one target by
+two spellings.
+
+### Security
+
+- **A denylist pattern blocks every Unicode spelling of a name.** A
+  `--deny` or `FS_DENYLIST` pattern matched only the bytes it was typed
+  with. So `--deny 'café.txt'` did not block a `café.txt` stored
+  decomposed (NFD), and `--deny 'secret notes.txt'` did not block a name with
+  U+00A0 or U+202F, when a client sent the name exactly as stored. A pattern
+  now also matches after NFC normalization, with every space character read
+  as a plain space, and keeps every match it had. An `--allow` entry still
+  relieves only the spelling it names. The built-in list has no such
+  characters and is unchanged
+  ([#101](https://github.com/j0hanz/filesystem-mcp/issues/101)).
+- **A glob pattern can no longer freeze the server.** `find_files`,
+  `search_text` and `replace_text` refuse a pattern that puts `|`, `*` or a
+  nested group inside `*(…)` or `+(…)`, or that has more than three `*` runs
+  and extglob groups (`?(…)`, `@(…)`, `!(…)`, `+(…)`, `*(…)`) together in one
+  path segment. Node matches globs synchronously, and such
+  patterns backtracked for minutes on one long file name, blocking every
+  client. The refusal is the usual `Invalid glob or unsafe path` error.
+- **Path validation follows symlink chains.** A write target reached
+  through a symlink that pointed through another symlink, or through a
+  broken link, bypassed the root check. Ancestor resolution now follows
+  every hop before falling back to parent traversal, and a broken chain
+  is refused, so a write never resolves through a link the guard did not
+  check.
+- **Directory walks no longer name secret files in errors.** A
+  `search_text` or `replace_text` run that could not read or rewrite a
+  secret file reported its name in the failure list or the skipped-file
+  count. Walks now omit such entries from both.
+- **An ambiguity error no longer lists denylisted names.** A name the
+  denylist covered was refused, but a Unicode-equivalent spelling of it
+  listed the protected names and the real directory in the
+  `INVALID_INPUT` error. The denylist now wins before the ambiguity
+  check, so the error never names what it hides.
+- **A missing relative path no longer reports what is outside the
+  roots.** With several roots, deciding which root a relative name sat
+  under followed a symlink out of every root: a missing target answered
+  "exists under none of the roots" and a present one `ACCESS_DENIED`, so
+  the error told a caller whether an outside file exists. The probe now
+  goes through the same validation as the call, which refuses such a
+  path the same way whether or not the target exists, and refuses a
+  denylisted name before touching the filesystem.
+
+### Added
+
+- **`--tool-timeout` sets the time limit for one call.** `list`, `stat`,
+  `read`, `find_files`, `search_text` and `replace_text` stopped after a fixed
+  5 seconds, so a search over a large repository always ended early.
+  `--tool-timeout <ms>` or `FS_TOOL_TIMEOUT_MS` now sets the limit, from 1000
+  to 600000 ms. The default stays 5000, and `--print-config` reports the value
+  as `limits.toolTimeoutMs`. Most clients give up on a call after 60 seconds.
+- **`FS_READ_ONLY` turns on read-only mode from the environment**, like
+  `--read-only`, for clients that can only pass environment variables.
+- **The Claude Desktop extension can run read-only and block more files.**
+  Its settings gain a read-only switch and a comma-separated list of patterns
+  to block, passed to the server as `FS_READ_ONLY` and `FS_DENYLIST`.
+- **`create` makes empty directories.** A new `directories` list creates each
+  one like `mkdir -p`, and leaves one that already exists as it is. `files` is
+  now optional; a call needs at least one of the two. Directories are made only
+  after any overwrite confirmation is answered. The result lists them in
+  `directories`, and a failed one joins `failures`.
+- **`list` can show file sizes.** `includeSizes: true` adds each file's
+  size to the tree and a totals line of counts and bytes, so finding
+  what takes the space no longer needs a `stat` call per file
+  ([#99](https://github.com/j0hanz/filesystem-mcp/issues/99)).
+  `sortBy: "size"` orders each directory largest first; the default
+  name order is unchanged.
+- **`stat` on a directory reports `entryCount`**, the number of entries
+  directly inside it, so "is this folder empty?" takes one call
+  ([#56](https://github.com/j0hanz/filesystem-mcp/issues/56)). Hidden and
+  ignored entries count. Secret files, and symlinks to them or to anything
+  outside the allowed folders, do not, so the count never reveals what `list`
+  hides.
+- **`read` can return any binary file.** With `binary: true`, a full read of a
+  file that is not text, an image or audio (a PDF, zip, sqlite database, font,
+  …) returns it as an embedded `resource` block with its MIME type and base64
+  bytes, instead of refusing it as binary. The size limit is unchanged. Line
+  ranges of a binary file are still refused, and without the flag the refusal
+  now names it
+  ([#98](https://github.com/j0hanz/filesystem-mcp/issues/98)).
+
+### Changed
+
+- **`read`, `stat` and `edit` no longer publish a top-level `oneOf`**, and
+  `read` no longer publishes `dependentRequired`. The OpenAI and Anthropic
+  function-calling APIs reject a top-level `oneOf`, `anyOf` or `allOf`, so
+  these schemas could not go to a model as they were. The rules themselves are
+  unchanged and still checked when the tool runs: `path` or `paths`, `path`
+  with `edits` or `files`, and `endLine` needs `startLine`, which the `endLine`
+  description now says. A call that breaks one gets the same
+  `Input validation error`.
+- **A `replace_text` timeout says what it already wrote.** A live run that
+  hits its time limit keeps the files it already rewrote. Its text now
+  names them and warns that re-running the same replacement applies it to
+  them again.
+- **A relative path resolves against the root when the server runs outside
+  it.** Desktop hosts start the server outside the project, and an HTTP client
+  never shares its working directory, so `read` with `src/a.ts` failed with
+  "Outside allowed directories" right after `search_text` printed
+  `src/a.ts`. A relative path still resolves against the working directory
+  while that lands inside a root. Otherwise it resolves against the roots:
+  the one root, or with several, the one root it exists under. Only
+  configured roots and those a client declares count; a folder granted during
+  the session does not, so approving one never changes what a relative path
+  names. A relative path that exists under several roots, or under none of
+  several, is refused with `INVALID_INPUT` naming the roots. With a root
+  configured, a relative path no longer turns into a request to grant access
+  to the server's working directory. A `create` or `edit` batch that names
+  one file by both a relative and an absolute path is refused as a
+  duplicate, as two spellings of one absolute path already were.
+- **Search results name files from the root, so they read back as given.**
+  `search_text`, `find_files` and `replace_text` printed paths relative to
+  the folder they searched: a search of `src` printed `a.ts`, which `read`
+  or `edit` resolved to `<root>/a.ts`, another file when the root holds
+  one. They now print paths relative to the root holding that folder
+  (`src/a.ts`), in their text and in `matches[].file`, `results[].path` and
+  diff headers. `find_files`' `root` field now names that root, as
+  `list_roots` shows it, instead of the folder searched, and `search_text`
+  and `replace_text` gain the same field. A path whose relative spelling
+  would not read back as the same file is printed absolute instead: with
+  the working directory in a subfolder of a root, with several roots and the
+  working directory outside them, under a folder granted during the
+  session, or for a name such as `~` or a blank one. `list` keeps its
+  entries relative to the listed folder, but the tree's first line now names
+  a listed subfolder the same way (`src/core`, not `core`). `find_files`'
+  cached full result (its `resourceUri`) is now the whole result, an object
+  with `root` and `results`, like `search_text`'s, instead of a bare array.
+- **Literal `search_text` is about twice as fast.** A literal pattern (the
+  default, `isRegex: false`) is matched in native code instead of RE2, which
+  copied every file into its heap just to rule it out. Each file also costs
+  two fewer filesystem calls. On a 7,300-file tree, a literal search that
+  stopped at the 5-second limit after about 3,200 files now finishes in 2 to
+  4 seconds. Results are unchanged, with one exception: a literal search now
+  searches a line longer than 4 MiB, which RE2 cannot take, instead of
+  counting its file in `skippedTooLarge`. RE2 still handles regex searches,
+  case-insensitive patterns with non-ASCII letters, patterns holding U+FFFD,
+  and a case-insensitive pattern with a `k` or `s` in a file that holds the
+  Kelvin sign or the long s, which RE2 matches as those letters; there a line
+  over 4 MiB still counts its file in `skippedTooLarge`.
+- **A batched `read` counts image, audio and binary files at their base64
+  size** against its 512 KiB budget, because that is what it returns.
+- **Hidden-pattern variants walk in one pass.** `find_files`,
+  `search_text` and `replace_text` walk the hidden and dotted variants
+  of a pattern in one glob call, about a third faster on a large tree.
+  Results are unchanged; a run capped early keeps a different set of
+  the files it met. `list` over a directory past `entryCap` now keeps
+  the entries best by sort order instead of whichever the walk met
+  first.
+
+### Fixed
+
+- **A path that differs from the disk only in Unicode spelling resolves.**
+  `café` finds a folder stored decomposed (NFD), and `shot PM.png` finds a
+  macOS screenshot whose name holds U+202F. Both answered `Path not found`
+  although `list` showed them. A name missing as typed is now compared with
+  its folder's entries after NFC normalization, with every space character
+  read as U+0020. One match is used and checked like any other path: root
+  containment after each symlink, and the denylist on the on-disk name. Two
+  matches are refused as ambiguous, and no match is still `NOT_FOUND`. A
+  write to such a name lands on the existing entry, and a move that changes
+  only a name's Unicode form renames it
+  ([#101](https://github.com/j0hanz/filesystem-mcp/issues/101)).
+- **A Windows drive path is refused on Linux and macOS.** `C:\x`, `C:/x`
+  and `C:` were relative names there, so `create` made a file named
+  `C:\Users\x\f.txt`, or a `C:` folder, inside the root and reported success.
+  Every tool, the file resource and a positional root now refuse them with
+  `Windows-style path received on a POSIX host`, and no longer offer an
+  access grant for them. Windows is unchanged.
+- **A file whose name holds a backslash gets its own `resourceUri` on Linux
+  and macOS.** `a\b.txt` and `a/b.txt` shared one URI, and `resources/read`
+  and subscriptions on it went to `a/b.txt`.
+- **A cancelled or timed-out read no longer shuts the server down.** A file
+  read that started after its call was cancelled, for example a
+  `replace_text` worker opening its next file after the 5-second deadline,
+  raised an uncaught `AbortError` and the server exited.
+- **Write tools over stdio link only files `resources/read` can return.**
+  A written file whose `resources/read` result would exceed the stdio message
+  limit once JSON-encoded no longer gets a `resource_link` that the read
+  always refuses.
+- **Batch mutations refuse overlapping or duplicate paths.** A batch
+  that names one target by two spellings, through a symlinked parent or
+  another Unicode form, or a `delete` batch that names a path together
+  with its ancestor, is refused before anything runs, and parallel
+  writes that race on equivalent paths are serialized.
+- **A `replace_text` failure to write back is reported, not skipped.**
+  Only discovery and read errors skip a file now; a rewrite that fails
+  is listed as failed. A failure reading metadata after a finished
+  write no longer reports the write as failed.
+- **Renaming a link never destroys its target.** Moving a symlink onto
+  its own target, in any spelling, re-spelled the destination, skipped
+  the overwrite check, and renamed the link over the file it pointed
+  at. Such a move is now the no-op an exact self-move already was, and
+  a rename that changes only a name's Unicode form renames the link
+  itself.
+- **A `read` slice counts its lines exactly.** A newline is counted
+  only between retained lines, so `head`, `tail` and range results
+  report the line count the returned text has.
+- **A directory's `entryCount` holds up under races and deadlines.** A
+  directory or ancestor swapped for a symlink between validation and
+  the count could have another directory's entries counted; the opened
+  directory is now re-checked, and every entry is checked under its
+  real spelling, as `list` does. A `stat` that runs out of time while
+  counting ends `TIMEOUT` instead of returning success without
+  `entryCount`, and a stalled directory open or read is released at
+  the deadline instead of holding the call.
+- **`create` progress counts directories and files against one
+  total.** Each phase reported progress from one, so a call with at
+  least as many directories as files lost every file-phase tick and
+  its total jumped between phases.
+- **`search_text` reads virtual files and stops on cancel.** A file
+  that reports a size of 0 while holding text, such as procfs, was
+  searched as empty; it is now read to its end. A large file was also
+  read in one call that never checked the cancel signal, so a search
+  on a slow filesystem could hold past its deadline; reads now go in
+  chunks with a signal check.
+- **Image and audio reads honor `includeHash`**, and their per-path
+  value now reports `size`, `modified` and a `resourceUri` alongside
+  the media block.
+
+## [2.8.1] - 2026-10-13
+
+A maintenance release. Internal refactors give the read path, paged
+snapshots, confirmations and shared helpers one owner each; no tool, input
+or output field changed. Read Changed if you match on the text of a `read`
+size refusal.
+
+### Changed
+
+- **`read` size refusals share one wording.** A file, single line or tail
+  that exceeds the size limit now reports
+  `File exceeds size limit (<bytes> > <limit> bytes[, <detail>])` instead of
+  `File too large (...)`, and the remedy ("Use head to preview.", "Use a
+  narrower range or head.", "Use a narrower tail or head.") moves from the
+  message into the error's `suggestion`. The `TOO_LARGE` code is unchanged.
+
+## [2.8.0] - 2026-10-13
+
+A security and reliability release. It closes four sandbox gaps: glob
+patterns that reached above the searched folder, reads that followed a
+symlink swapped in mid-read, a recursive-delete confirmation that could be
+spent on a different directory, and completion and grant checks that drifted
+from the path guard. Over stdio, a response or request that would overflow
+the transport is now refused instead of dropping the connection. No tool or
+input field was removed; `read` `startLine` and `endLine` now accept values
+above 100,000. Some calls that used to succeed are now refused. Before
+upgrading, read Security if you pass glob patterns with brace sets, ranges or
+drive prefixes, grant client roots through a symlinked `FS_ROOT_BOUNDARY`, or
+have a recursive `delete` prompt open across the upgrade. Read Changed if you
+use stdio with request IDs or progress tokens over 1 KiB or results near
+10 MiB, batch `move` or `copy` entries whose destinations nest, match on the
+empty `oldText` or `searchPattern` error text, or start stdio with
+`FS_API_KEY`. Read Fixed if you rely on `includeHidden` matching dotfiles
+through a literal pattern.
+
+### Security
+
+- **A glob `pattern` can no longer reach outside the `path` it searches
+  ([#68](https://github.com/j0hanz/filesystem-mcp/issues/68)).** `find_files`,
+  `search_text` and `replace_text` rejected `../*.txt` but not a pattern that
+  builds `..` or a root from parts: brace sets (`..{,x}/*.txt`,
+  `.{.,}/*.txt`, `{/etc,x}/*`), one-character classes (`[.][.]/*.txt`), letter
+  ranges (`.{Z..a}./*.txt`), or a leading backslash on Linux and macOS
+  (`\etc\*`). Below an allowed root, `replace_text` rewrote files in the
+  parent folder; at an allowed root, the names of entries above it leaked
+  through skip counts and per-file errors. The pattern check now looks at
+  every brace alternative the way the glob engine reads it, and the walk
+  itself drops any match outside its `path`, so a pattern the check does not
+  foresee narrows the search instead of widening it. A drive-rooted
+  alternative (`C:/x`, `{C:,x}/y`) is now refused on every host, as `C:x`
+  already was.
+- **A glob with a huge brace range no longer freezes the server.** The glob
+  engine expands `{1..100000}` and compares the alternatives pairwise on the
+  event loop, which blocked every other request for most of a minute. A
+  pattern that expands to more than 1024 alternatives is now refused.
+- **`search_text`, batch `read`, and an append's result now read through the
+  same symlink-swap guard as every other read.** `search_text` read each
+  file by name after validating it, so a symlink swapped in between returned
+  matches from a file outside the allowed folders. A batch `read`, and the
+  MIME type and line count an append reports, skipped the Linux check that
+  the opened file still sits inside the allowed folders, so swapping a
+  parent folder for a symlink leaked them there. These reads now refuse a
+  swapped final symlink on Linux and macOS and, on Linux, re-check the
+  opened file's real location. Windows has no equivalent open flag, so
+  there the swap window stays as narrow as for every other read; creating
+  a symlink on Windows needs privilege. Exploiting this took a local
+  process able to write inside an allowed folder.
+- **A recursive `delete` confirmation now authorizes only the directory it
+  asked about.** The confirmation sealed only the path, so a directory
+  replaced at that path while the prompt was open was deleted on the retry.
+  It now also seals each directory's identity (type, device, inode and birth
+  time), and a retry whose target no longer matches is refused for that path
+  with `INVALID_INPUT`. A confirmed directory swapped for a file or symlink
+  is reported per path and never deleted. One removed during the prompt gets
+  its own `NOT_FOUND` (or a no-op with `ignoreIfNotExists`) instead of
+  failing the whole batch. A confirmation minted by 2.7.6 carries no
+  identities and cannot authorize a recursive delete; repeat the call.
+- **Path completion no longer lists inside a directory the guard refuses,
+  and an access grant follows the startup boundary rule.** Completion used
+  its own copy of the directory check, so it listed the contents of a
+  directory whose own name is sensitive (such as `vault.key`). It now asks
+  the guard, and a refusal still returns the matching roots. A client root
+  that does not exist yet, spelled through a symlinked `FS_ROOT_BOUNDARY`,
+  was refused as a grant although the same spelling is kept as a startup
+  root; grants now project it the same way. The same rule refuses two grants
+  the old lexical fallback accepted: a missing folder under an in-boundary
+  symlink that points outside the boundary, and one whose parent cannot be
+  resolved. The sensitive-file check moves into the one access check that
+  runs it.
+
+### Changed
+
+- **Over stdio, a response that would overflow the client's 10 MiB message
+  reader returns `TOO_LARGE` instead of dropping the connection.** This
+  covers read-only tools, any tool called with `dryRun: true`, and
+  `resources/read`, at 10 MiB less 256 KiB of JSON-encoded result. The
+  refusal says what to do instead (smaller slices, fewer files per preview,
+  or HTTP), and the call keeps none of the links or cursors it cached. A
+  file resource over the limit is refused from its size before it is read,
+  and a cached result too large to read back over stdio is no longer handed
+  out as a link. HTTP is unchanged, and a mutating call is never measured
+  after it commits.
+- **Over stdio, a request ID or `_meta.progressToken` over 1024
+  JSON-encoded bytes is refused with `InvalidRequest` before dispatch**, so
+  the call never runs. Every response echoes the ID and every progress frame
+  the token, so a multi-megabyte value could push a frame past the client's
+  reader. The progress-token refusal carries the request ID.
+
+- **Leaner internals from the fourth over-engineering audit.** Net -39 lines
+  across 8 files: `ToolCtx` drops three fields only the executor read,
+  `delete` inlines its one-caller removal helper and shares one identity
+  check, stdio reuses `normalizeUnknownError`, and the link-returning tools
+  return once instead of branching on whether a link exists.
+- **One declaration of the tool dependencies, one way to build an error.**
+  Net -31 lines across 3 files: the tool registrar extends `ToolDeps`
+  instead of re-declaring and copying its six fields, and every `Problem`
+  in `errors.ts`, including `FsError`'s, goes through the one builder that
+  drops unset keys. ADR-002 records that its legacy-harness migration
+  covers 15 test files, not six.
+- **`find_files` walks its entries inline.** The one-caller generator that
+  validated each walked path is folded into its caller, with the same
+  abort, refusal and cap order (net -10 lines, no behavior change).
+- **An empty `edit` `oldText` or `search_text`/`replace_text` `searchPattern`
+  is refused with the same message as a blank one**, "… cannot be empty or
+  whitespace-only", instead of "oldText required" or the validator's
+  generic too-short text. The three fields now share one non-blank text
+  schema. The write tools spread the shared file metadata instead of
+  copying it field by field, and `list`, `find_files`, `search_text`,
+  `edit` and `replace_text` drop one-caller wrappers (net -111 lines
+  across 8 files).
+- **One helper for a notification that can fail only because the client
+  left.** The resource-updated and list-changed sends in stdio, the
+  resource registrar and the server each wrote their own catch-and-log;
+  `voidSend` now owns it, and the registrar builds its contracts through
+  the same `getResourceContracts` list the tests exercise (net -6 lines, no
+  behavior change; the list-changed debug line now formats its error like
+  the other two).
+- **The API key stops at the HTTP host.** The server used the key only to
+  mark its cacheable lists `private`; the HTTP host now passes that scope
+  instead of the secret. A stdio server started with `FS_API_KEY`, where
+  the key has no effect, now reports those lists as `public` to 2026-era
+  clients. The CLI result is passed through instead of being rebuilt
+  twice, and stdio's oversized-ID refusal uses the shared JSON-RPC error
+  builder.
+
+### Fixed
+
+- **`read` continues past line 100,000.** `startLine` and `endLine` now
+  accept any positive 32-bit integer (the declared maximum is 2147483647);
+  `head` and `tail` stay capped at 100,000. Lines before `startLine` are
+  counted without being decoded.
+- **A line ending inside an incomplete UTF-8 sequence no longer corrupts
+  the next line.** The decoder carried the leftover bytes across the
+  newline; each line now decodes on its own.
+- **`move` and `copy` refuse batch entries whose destinations nest.** Two
+  recursive copies into `out` and `out/sub` raced over shared files. Both
+  entries are now refused, as overlapping source and destination pairs
+  already were.
+- **A "skip" answer for a directory survives the directory being emptied
+  while the prompt is open.** The retry treated the emptied directory as no
+  longer needing confirmation and deleted it.
+- **`includeHidden` no longer widens literal pattern segments.** Every
+  segment got a dot variant, so `foo.txt` also matched `.foo.txt` and
+  `foo*.txt` matched `.foo1.txt`. Only a segment that starts with `*` or `?`
+  gets one now. With `includeHidden`, a `.gitignore` inside a hidden
+  directory now applies to the walk.
+
 ## [2.7.6] - 2026-10-12
 
 A security and reliability release. It closes a symlink-swap sandbox escape

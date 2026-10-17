@@ -18,11 +18,12 @@ import { joinRoster, pathLabel } from '../core/fmt.ts';
 import type { FileType, GuardedFileSystem } from '../core/fs.ts';
 import {
   confirmKey,
-  describeRefusal,
+  type PendingDeleteIdentity,
   pendingRoundTrip,
-  readAcceptedChoice,
+  type PendingState,
+  readPendingVerdict,
 } from '../core/input-required.ts';
-import { resolveEntryType } from '../core/path-utils.ts';
+import { isPathInsideDirectory, resolveEntryType } from '../core/path-utils.ts';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.ts';
 import { PARALLEL_CONCURRENCY } from '../core/util.ts';
 import { type BatchResult, isTotalFailure, type PerPathResult, summarize } from './batch.ts';
@@ -156,25 +157,17 @@ async function planPath(
       return { status: 'fail', failure: toDeleteFailure(inputPath, error) };
     }
   }
-  const pending = hasChildren;
-  return { status: 'plan', plan: { inputPath, validPath, itemType, firstStats, pending } };
+  return {
+    status: 'plan',
+    plan: { inputPath, validPath, itemType, firstStats, pending: hasChildren },
+  };
 }
 
-async function performDeletion(
-  validPath: string,
-  args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
-  isDirectory: boolean,
-  fsOps: Pick<GuardedFileSystem, 'rm' | 'rmdir'>,
-): Promise<void> {
-  if (isDirectory && !args.recursive) {
-    await fsOps.rmdir(validPath);
-  } else {
-    await fsOps.rm(validPath, {
-      recursive: args.recursive,
-      force: args.ignoreIfNotExists,
-    });
-  }
-}
+type Identity = Pick<LstatResult['stats'], 'dev' | 'ino' | 'birthtimeMs'>;
+
+/** Same filesystem object. birthtimeMs joins dev/ino, which read 0 on some non-POSIX drivers. */
+const sameIdentity = (a: Identity, b: Identity): boolean =>
+  a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 
 /**
  * Phase 2 (mutation): TOCTOU re-stat against the plan's first stat, then
@@ -202,10 +195,7 @@ async function finalizeDeletion(
   // the type but changes dev/ino/birthtimeMs. birthtimeMs is the primary
   // cross-platform signal — dev/ino can read 0 on some non-POSIX drivers — so
   // combine all three rather than trusting dev/ino alone.
-  const identityChanged =
-    plan.firstStats.stats.dev !== currentStats.stats.dev ||
-    plan.firstStats.stats.ino !== currentStats.stats.ino ||
-    plan.firstStats.stats.birthtimeMs !== currentStats.stats.birthtimeMs;
+  const identityChanged = !sameIdentity(plan.firstStats.stats, currentStats.stats);
   if (plan.itemType !== 'other' && (currentItemType !== plan.itemType || identityChanged)) {
     return {
       failure: {
@@ -219,7 +209,9 @@ async function finalizeDeletion(
   }
 
   try {
-    await performDeletion(plan.validPath, args, currentStats.stats.isDirectory(), ctx.fs);
+    if (currentStats.stats.isDirectory() && !args.recursive) await ctx.fs.rmdir(plan.validPath);
+    else
+      await ctx.fs.rm(plan.validPath, { recursive: args.recursive, force: args.ignoreIfNotExists });
   } catch (error) {
     return { failure: toDeleteFailure(plan.inputPath, error) };
   }
@@ -239,19 +231,32 @@ async function executePlan(
   args: Pick<DeleteInput, 'recursive' | 'ignoreIfNotExists'>,
   ctx: Pick<ToolCtx, 'fs' | 'inputResponses' | 'droppedInputResponseKeys' | 'log'>,
   pendingSorted: readonly string[],
+  confirmationState: PendingState | undefined,
 ): Promise<{ deleted: string } | { failure: DeleteFailure } | { skipped: true; path: string }> {
   if (plan.pending) {
-    const key = confirmKey(pendingSorted.indexOf(plan.validPath));
-    const choice = readAcceptedChoice(ctx.inputResponses, key);
-    if (choice === 'skip') {
+    const verdict = readPendingVerdict(ctx, pendingSorted, plan.validPath, 'delete');
+    if (verdict === 'skipped') {
       return { skipped: true as const, path: plan.validPath };
     }
-    if (choice !== 'delete') {
+    if (verdict !== 'accepted') {
       return {
         failure: {
           path: plan.validPath,
-          error: Problem.cancelled(
-            `Delete cancelled: confirmation was ${describeRefusal(ctx, key)}`,
+          error: Problem.cancelled(`Delete cancelled: confirmation was ${verdict.refused}`, {
+            path: plan.validPath,
+          }),
+        },
+      };
+    }
+    const identity = confirmationState?.deleteIdentities?.find(
+      (entry) => entry.path === plan.validPath,
+    );
+    if (identity?.itemType !== plan.itemType || !sameIdentity(identity, plan.firstStats.stats)) {
+      return {
+        failure: {
+          path: plan.validPath,
+          error: Problem.invalidInput(
+            'Delete failed: item identity changed or is missing from the confirmation.',
             { path: plan.validPath },
           ),
         },
@@ -266,7 +271,9 @@ async function handleDelete(
   ctx: ToolCtx,
 ): Promise<DeleteOutput | InputRequiredResult> {
   // Duplicate paths collapse: results are keyed by path, so a repeated entry
-  // would emit two rows for one deletion and inflate `summary.total`.
+  // would emit two rows for one deletion and inflate `summary.total`. Exact
+  // repeats go here; other spellings of one entry collapse after planning,
+  // by validated path, so two on-disk names that fold alike both stay.
   const paths = [...new Set(args.paths)];
 
   // Phase 1 (no mutation): plan every path.
@@ -278,17 +285,65 @@ async function handleDelete(
   );
 
   const out = new Array<DeletePerPathResult | undefined>(paths.length).fill(undefined);
-  const plans: { plan: DeletePlan; index: number }[] = [];
+  let plans: { plan: DeletePlan; index: number }[] = [];
+  const confirmationState = ctx.requestState?.<PendingState>();
+  const previouslyPendingPaths = new Set(
+    confirmationState?.op === 'delete' ? confirmationState.paths : [],
+  );
+  const seenTargets = new Set<string>();
+  const duplicates = new Set<number>();
   for (const { index, value: r } of planned.results) {
-    if (r.status === 'fail') out[index] = { path: r.failure.path, error: r.failure.error };
-    else if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
-    else plans.push({ plan: r.plan, index });
+    if (r.status === 'fail') {
+      out[index] = { path: r.failure.path, error: r.failure.error };
+      continue;
+    }
+    const target = r.status === 'noop' ? r.deleted : r.plan.validPath;
+    if (seenTargets.has(target)) {
+      duplicates.add(index);
+      continue;
+    }
+    seenTargets.add(target);
+    if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
+    else {
+      // Emptying a directory while its prompt is open must not discard the
+      // answer. Keep that path pending so the verified retry still honors skip.
+      r.plan.pending ||= previouslyPendingPaths.has(r.plan.validPath);
+      plans.push({ plan: r.plan, index });
+    }
   }
   for (const { index, error } of planned.errors) {
     out[index] = {
       path: paths[index] ?? '(unknown)',
       error: { code: ErrorCode.UNKNOWN, message: error.message },
     };
+  }
+
+  // One entry inside another would race the other's recursive delete, and
+  // accepting the parent would remove a child whose own prompt was skipped.
+  // Refuse both sides before any prompt or mutation.
+  const nested = new Set<number>();
+  for (const [i, a] of plans.entries()) {
+    for (const b of plans.slice(i + 1)) {
+      if (
+        isPathInsideDirectory(a.plan.validPath, b.plan.validPath) ||
+        isPathInsideDirectory(b.plan.validPath, a.plan.validPath)
+      ) {
+        nested.add(a.index).add(b.index);
+      }
+    }
+  }
+  if (nested.size > 0) {
+    for (const { plan, index } of plans) {
+      if (!nested.has(index)) continue;
+      out[index] = {
+        path: plan.validPath,
+        error: Problem.invalidInput(
+          'Delete refused: this path contains, or is inside, another path in the batch. Delete the outer one alone.',
+          { path: plan.validPath },
+        ),
+      };
+    }
+    plans = plans.filter(({ index }) => !nested.has(index));
   }
 
   // Pending set: recursive + non-empty directories, sorted and de-duplicated.
@@ -300,13 +355,22 @@ async function handleDelete(
     ...new Set(plans.filter((p) => p.plan.pending).map((p) => p.plan.validPath)),
   ].sort();
 
-  if (pendingSorted.length > 0) {
+  // With no actionable plans, preserve per-path NOT_FOUND / ignoreIfNotExists
+  // results. Otherwise even an empty pending set must be checked before an
+  // unrelated non-pending batch entry can mutate.
+  if (pendingSorted.length > 0 || (confirmationState?.op === 'delete' && plans.length > 0)) {
     // Round 1 returns input_required (atomic — R14: nothing deleted yet, not
     // even the non-pending items in the same call); a retry whose verified
     // state does not bind this pending set throws (R9) via `pendingRoundTrip`.
     const round = await pendingRoundTrip(ctx, {
       op: 'delete',
       pending: pendingSorted,
+      deleteIdentities: plans
+        .filter(({ plan }) => plan.pending)
+        .map(({ plan }): PendingDeleteIdentity => {
+          const { dev, ino, birthtimeMs } = plan.firstStats.stats;
+          return { path: plan.validPath, itemType: plan.itemType, dev, ino, birthtimeMs };
+        }),
       buildInputs: (ps) =>
         ps.map((p, i) => ({
           key: confirmKey(i),
@@ -320,7 +384,7 @@ async function handleDelete(
   // Phase 2 (mutation): execute deletions for every planned path.
   const executed = await processInParallel(
     plans,
-    ({ plan }) => executePlan(plan, args, ctx, pendingSorted),
+    ({ plan }) => executePlan(plan, args, ctx, pendingSorted, confirmationState),
     PARALLEL_CONCURRENCY,
     ctx.signal,
   );
@@ -347,14 +411,15 @@ async function handleDelete(
 
   // Emit in the caller's input order so `results[i]` lines up with `paths[i]`
   // the way read/stat guarantee.
-  const results: DeletePerPathResult[] = paths.map((requested, i) => {
+  const results: DeletePerPathResult[] = paths.flatMap((requested, i) => {
+    if (duplicates.has(i)) return [];
     const entry = out[i];
-    return (
+    return [
       entry ?? {
         path: requested,
         error: { code: ErrorCode.UNKNOWN, message: 'Unknown delete failure' },
-      }
-    );
+      },
+    ];
   });
 
   return { results, summary: summarize(results) };
@@ -374,7 +439,7 @@ export const DELETE = defineTool<typeof DeleteInputSchema, DeleteOutput>({
         ? basename(args.paths[0] ?? '')
         : `${String(args.paths.length)} paths`,
   }),
-  accessPaths: (args) => [...args.paths],
+  mapPaths: (args, fn) => ({ ...args, paths: args.paths.map(fn) }),
   run: async (args, ctx) => {
     const structured = await handleDelete(args, ctx);
     // input_required is a return value, not a completed call: surface it

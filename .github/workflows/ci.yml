@@ -1,3 +1,4 @@
+# Runs on agent PRs without manual approval: keep this workflow secret-free and contents:read.
 name: CI
 
 on:
@@ -8,27 +9,59 @@ on:
 permissions:
   contents: read
 
+# Pull requests cancel their own superseded runs. Pushes get one group per
+# ref and commit, so every commit on main/dev keeps a complete result: the
+# release workflow checks that result before it tags (plan 063).
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: true
 
 jobs:
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       # One OS failing must not cancel the other: the point is to see both.
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+    # Mirrors package.json's check script (check:static + test) as separate
+    # steps, so one failure does not hide the others. Keep the two in sync.
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
-      - run: npm run check
+      - name: Install
+        id: install
+        run: npm ci
+      - name: Build
+        id: build
+        run: npm run build
+      - name: Type-check tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run type-check:test
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run lint
+      - name: Format
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npx prettier --check .
+      - name: Knip
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npx knip
+      - name: Test
+        # dist-smoke boots dist/index.js, so tests need a successful build.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.os != 'ubuntu-latest' }}
+        run: npm test
+      - name: Test with coverage floor
+        # Ubuntu runs the POSIX-only sandbox branches; the floor lives in
+        # package.json test:coverage. Raise it when coverage rises; never lower it
+        # without a recorded reason.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.os == 'ubuntu-latest' }}
+        run: npm run test:coverage
 
   release-paths:
     name: Release build paths
@@ -37,10 +70,24 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci --ignore-scripts
       - run: bash scripts/check-release-paths.sh
+
+  plugin-security:
+    name: Plugin security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashgraph-online/ai-plugin-scanner-action@1fb7eef6f7387abd0512e91ee8f336ac8bf07c95 # v1.2.789
+        with:
+          plugin_dir: .
+          min_score: 80
+          fail_on_severity: high

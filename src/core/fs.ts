@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Stats } from 'node:fs';
+import { constants, existsSync } from 'node:fs';
+import type { Dir, Dirent, Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
   chmod as fsChmod,
@@ -17,7 +18,7 @@ import {
   unlink as fsUnlink,
   writeFile as fsWriteFile,
 } from 'node:fs/promises';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { runExclusive, withAbort } from './concurrency.ts';
 import {
@@ -28,10 +29,10 @@ import {
   isNodeError,
   isNotFoundErrno,
 } from './errors.ts';
-import { detectMimeFromContent } from './mime.ts';
+import { detectMimeFromContent, type FileKind, MIME_SAMPLE_SIZE } from './mime.ts';
 import { Logger } from './observability.ts';
 import type { EntryType as FileType } from './path-utils.ts';
-import { normalizePath, respellCaseOnlyTarget } from './path-utils.ts';
+import { isSamePath, normalizePath, respellSpellingOnlyTarget } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
 import type { ReadFileResult, ReadSpec } from './read.ts';
 import {
@@ -39,6 +40,7 @@ import {
   APPEND_NOFOLLOW,
   assertFileStats,
   createTooLargeError,
+  O_NOFOLLOW,
   READ_NOFOLLOW,
   readFileWithStats,
 } from './read.ts';
@@ -47,69 +49,18 @@ import { getMaxTextFileSize } from './util.ts';
 export type { FileType };
 export type { Stats };
 
+// Directory open for countEntries. O_NOFOLLOW refuses a symlink named as the
+// directory; used only under COUNT_THROUGH_FD, like the re-check it feeds.
+const DIR_NOFOLLOW = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW;
+// The descriptor re-check and the read through /proc/self/fd need Linux with procfs mounted,
+// as the read path's re-check does; elsewhere the count reads the directory by path.
+const COUNT_THROUGH_FD = process.platform === 'linux' && existsSync('/proc/self/fd');
+
 // ─── Domain primitives ────────────────────────────────────────────────────────
-
-/**
- * validatePathForWrite + symlink resolution: a write aimed at a link must land
- * on its revalidated target, not create a new file beside the link. ENOENT is
- * the normal new-file case, so it falls through with the original path.
- */
-async function resolveForWrite(pathGuard: PathGuard, filePath: string): Promise<string> {
-  let validPath = await pathGuard.validatePathForWrite(filePath);
-
-  try {
-    const stats = await fsLstat(validPath);
-    if (stats.isSymbolicLink()) {
-      const target = await fsReadlink(validPath);
-      const resolvedTarget = isAbsolute(target) ? target : resolve(dirname(validPath), target);
-      validPath = await pathGuard.validatePathForWrite(resolvedTarget);
-    }
-  } catch (error) {
-    if (!isNotFoundErrno(error)) {
-      throw error;
-    }
-  }
-
-  return validPath;
-}
 
 const CHAR_LF = 10;
 
 const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
-
-/**
- * Line count for a file on disk, counting newline bytes in fixed 64 KiB
- * chunks so an arbitrarily large file (one append's result metadata) costs
- * bounded memory. NOT FileHandle.readLines: it decodes each physical line
- * whole, so a multi-GB single-line log OOMs the server after the append has
- * already landed — a reported failure invites a retry that appends twice.
- * Matches read.ts's countLines semantics: a trailing newline does not open
- * a new line, an unterminated final line counts, an empty file is 0.
- */
-export async function countFileLines(filePath: string): Promise<number> {
-  const handle = await fsOpen(filePath, READ_NOFOLLOW);
-  try {
-    let newlines = 0;
-    let lastByte = 0;
-    let totalBytes = 0;
-    const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
-    for (;;) {
-      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
-      if (bytesRead === 0) break;
-      totalBytes += bytesRead;
-      for (let i = 0; i < bytesRead; i++) {
-        const byte = chunk[i] ?? 0;
-        if (byte === CHAR_LF) newlines++;
-        lastByte = byte;
-      }
-    }
-    // totalBytes is the empty-file sentinel: a NUL (0x00) final byte is real
-    // content and must count as an unterminated final line, not "empty".
-    return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
-  } finally {
-    await handle.close();
-  }
-}
 
 export class GuardedFileSystem {
   readonly pathGuard: PathGuard;
@@ -123,13 +74,17 @@ export class GuardedFileSystem {
    * for a symlink after validation still passes. Re-read the open descriptor's
    * real path (Linux `/proc/self/fd`; skipped elsewhere) and require it to stay
    * inside the roots. Run before any byte is read or written through `handle`.
+   * Resolves to the normalized real path checked, or undefined when /proc is unreadable.
    */
-  async #assertFdWithinRoots(handle: FileHandle, requestedPath: string): Promise<void> {
+  async #assertFdWithinRoots(
+    handle: FileHandle,
+    requestedPath: string,
+  ): Promise<string | undefined> {
     let fdPath: string;
     try {
       fdPath = await fsReadlink(`/proc/self/fd/${String(handle.fd)}`);
     } catch {
-      return;
+      return undefined;
     }
     // A replaced target reads back as "<path> (deleted)".
     const inRoots =
@@ -144,6 +99,64 @@ export class GuardedFileSystem {
         requestedPath,
       );
     }
+    return normalizePath(fdPath);
+  }
+
+  /** The one read open: O_NOFOLLOW, then the descriptor re-check above. */
+  async #openVerified(
+    validPath: string,
+    requestedPath: string,
+    signal?: AbortSignal,
+  ): Promise<FileHandle> {
+    const opening = fsOpen(validPath, READ_NOFOLLOW);
+    let handle: FileHandle;
+    try {
+      handle = await withAbort(opening, signal);
+    } catch (error) {
+      // An open the signal abandoned still lands; close it then.
+      void opening
+        .then(
+          (late) => late.close(),
+          () => undefined,
+        )
+        .catch((closeErr: unknown) => {
+          Logger.warn(
+            `Failed to close file handle for ${validPath} after abort: ${formatUnknownErrorMessage(closeErr)}`,
+          );
+        });
+      throw error;
+    }
+    try {
+      await this.#assertFdWithinRoots(handle, requestedPath);
+      return handle;
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+  }
+
+  /**
+   * Waits for `pending` until `signal` fires. A result that lands after the abort goes to
+   * `release` without anyone waiting on it, so a stalled open or read never holds the caller.
+   */
+  async #abandonOnAbort<T>(
+    pending: Promise<T>,
+    signal: AbortSignal | undefined,
+    release: (late: T) => Promise<unknown>,
+    label: string,
+  ): Promise<T> {
+    try {
+      return await withAbort(pending, signal);
+    } catch (error) {
+      void pending
+        .then(release, () => undefined)
+        .catch((releaseErr: unknown) => {
+          Logger.warn(
+            `Failed to release ${label} after abort: ${formatUnknownErrorMessage(releaseErr)}`,
+          );
+        });
+      throw error;
+    }
   }
 
   /**
@@ -153,7 +166,7 @@ export class GuardedFileSystem {
    * do not take the lock, so `fn` may call them.
    */
   async lockForWrite<T>(filePath: string, fn: (resolvedTarget: string) => Promise<T>): Promise<T> {
-    const key = await resolveForWrite(this.pathGuard, filePath);
+    const key = await this.pathGuard.validatePathForWrite(filePath);
     return runExclusive(key, () => fn(key));
   }
 
@@ -168,7 +181,7 @@ export class GuardedFileSystem {
 
   async lstat(
     filePath: string,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<{ stats: Stats; validPath: string }> {
     const validPath = await this.pathGuard.validatePathForDelete(filePath);
     const stats = await withAbort(fsLstat(validPath), options?.signal);
@@ -198,8 +211,17 @@ export class GuardedFileSystem {
     // link would rename its target and leave the link dangling.
     const validOld = await this.pathGuard.validatePathForDelete(oldPath);
     let validNew = await this.pathGuard.validatePathForWrite(newPath);
-    // Renaming a path onto itself is only meaningful as a case-only rename.
-    if (validOld === validNew) validNew = respellCaseOnlyTarget(newPath, validNew);
+    // A new path naming the old entry itself, in another case or Unicode
+    // spelling, renames that entry. Probed without following a final link:
+    // validatePathForWrite resolved a link to its target, and renaming onto
+    // that would replace the target with the link.
+    const sameEntry = await this.pathGuard.validatePathForDelete(newPath).then(
+      (entry) => isSamePath(entry, validOld),
+      () => false,
+    );
+    if (sameEntry || validOld === validNew) {
+      validNew = respellSpellingOnlyTarget(newPath, sameEntry ? validOld : validNew);
+    }
     await fsRename(validOld, validNew);
   }
 
@@ -209,7 +231,7 @@ export class GuardedFileSystem {
     options: { signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
     const { signal } = options;
-    const validPath = await resolveForWrite(this.pathGuard, filePath);
+    const validPath = await this.pathGuard.validatePathForWrite(filePath);
 
     const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
     const tempPath = `${validPath}.${tempSuffix}.tmp`;
@@ -277,7 +299,7 @@ export class GuardedFileSystem {
     options: { signal?: AbortSignal | undefined } = {},
   ): Promise<{ validPath: string }> {
     const { signal } = options;
-    const validPath = await resolveForWrite(this.pathGuard, filePath);
+    const validPath = await this.pathGuard.validatePathForWrite(filePath);
     // Non-regular targets must be rejected before the open: 'a' on a FIFO
     // (POSIX) blocks until a reader appears, and fsOpen takes no signal, so
     // the call would hang unabortable and pin its concurrency slot. The
@@ -347,16 +369,41 @@ export class GuardedFileSystem {
    * file — an append's result must describe the resulting file (which may be
    * a multi-GB log), not the chunk that was appended.
    */
-  async readLeadingSample(filePath: string, size: number): Promise<Buffer> {
-    const { validPath } = await this.stat(filePath);
-    const handle = await fsOpen(validPath, READ_NOFOLLOW);
-    try {
-      const buffer = Buffer.alloc(size);
-      const { bytesRead } = await handle.read(buffer, 0, size, 0);
-      return buffer.subarray(0, bytesRead);
-    } finally {
-      await handle.close();
+  async readLeadingSample(filePath: string): Promise<Buffer> {
+    await using handle = await this.open(filePath);
+    const buffer = Buffer.alloc(MIME_SAMPLE_SIZE);
+    const { bytesRead } = await handle.read(buffer, 0, MIME_SAMPLE_SIZE, 0);
+    return buffer.subarray(0, bytesRead);
+  }
+
+  /**
+   * Line count for a file on disk, counting newline bytes in fixed 64 KiB
+   * chunks so an arbitrarily large file (one append's result metadata) costs
+   * bounded memory. NOT FileHandle.readLines: it decodes each physical line
+   * whole, so a multi-GB single-line log OOMs the server after the append has
+   * already landed — a reported failure invites a retry that appends twice.
+   * Matches read.ts's countLines semantics: a trailing newline does not open
+   * a new line, an unterminated final line counts, an empty file is 0.
+   */
+  async countFileLines(filePath: string): Promise<number> {
+    await using handle = await this.open(filePath);
+    let newlines = 0;
+    let lastByte = 0;
+    let totalBytes = 0;
+    const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
+    for (;;) {
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      totalBytes += bytesRead;
+      for (let i = 0; i < bytesRead; i++) {
+        const byte = chunk[i] ?? 0;
+        if (byte === CHAR_LF) newlines++;
+        lastByte = byte;
+      }
     }
+    // totalBytes is the empty-file sentinel: a NUL (0x00) final byte is real
+    // content and must count as an unterminated final line, not "empty".
+    return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
   }
 
   async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<void> {
@@ -385,8 +432,8 @@ export class GuardedFileSystem {
     spec.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     const stats = await withAbort(fsStat(validPath), spec.signal);
-    return readFileWithStats(filePath, validPath, stats, spec, (handle) =>
-      this.#assertFdWithinRoots(handle, filePath),
+    return readFileWithStats(filePath, validPath, stats, spec, () =>
+      this.#openVerified(validPath, filePath, spec.signal),
     );
   }
 
@@ -414,7 +461,7 @@ export class GuardedFileSystem {
         strictUtf8: true,
         ...(options?.signal ? { signal: options.signal } : {}),
       },
-      (handle) => this.#assertFdWithinRoots(handle, filePath),
+      () => this.#openVerified(validPath, filePath, options?.signal),
     );
     return { validPath, content, stats };
   }
@@ -422,7 +469,14 @@ export class GuardedFileSystem {
   async readRaw(
     filePath: string,
     options?: { signal?: AbortSignal },
-  ): Promise<{ content: Buffer; mimeType: string; isBinary: boolean }> {
+  ): Promise<{
+    content: Buffer;
+    mimeType: string;
+    kind: FileKind;
+    isBinary: boolean;
+    validPath: string;
+    modified: string;
+  }> {
     options?.signal?.throwIfAborted();
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     options?.signal?.throwIfAborted();
@@ -435,9 +489,8 @@ export class GuardedFileSystem {
       throw createTooLargeError(stats.size, maxTextFileSize, filePath);
     }
     let content: Buffer;
-    const handle = await fsOpen(validPath, READ_NOFOLLOW);
+    await using handle = await this.#openVerified(validPath, filePath);
     try {
-      await this.#assertFdWithinRoots(handle, filePath);
       content = await fsReadFile(handle, options);
     } catch (error) {
       // Node wraps even a TimeoutError signal reason in AbortError.
@@ -445,27 +498,20 @@ export class GuardedFileSystem {
         options?.signal?.throwIfAborted();
       }
       throw error;
-    } finally {
-      await handle.close();
     }
     const mimeInfo = detectMimeFromContent(validPath, content);
     return {
       content,
       mimeType: mimeInfo.mimeType,
+      kind: mimeInfo.kind,
       isBinary: mimeInfo.kind !== 'text',
+      validPath,
+      modified: stats.mtime.toISOString(),
     };
   }
 
   async open(filePath: string): Promise<FileHandle> {
-    const validPath = await this.pathGuard.validateExistingPath(filePath);
-    const handle = await fsOpen(validPath, READ_NOFOLLOW);
-    try {
-      await this.#assertFdWithinRoots(handle, filePath);
-    } catch (error) {
-      await handle.close();
-      throw error;
-    }
-    return handle;
+    return this.#openVerified(await this.pathGuard.validateExistingPath(filePath), filePath);
   }
 
   // Single resolution + stat: validateExistingPathDetailed resolves the real
@@ -491,6 +537,116 @@ export class GuardedFileSystem {
       await dir.close().catch((closeErr: unknown) => {
         Logger.warn(
           `Failed to close dir handle for ${dirPath}: ${formatUnknownErrorMessage(closeErr)}`,
+        );
+      });
+    }
+  }
+
+  /**
+   * Direct children of a directory, leaving out entries the guard treats as
+   * sensitive so the count never reveals what listings hide. Hidden and
+   * ignored entries count: this answers "is it empty?", not "what would list show?".
+   * A symlinked child counts only when list would show it. The path validation, open, opendir,
+   * each read and each link check race the signal, so a stalled mount ends the call at its
+   * deadline.
+   */
+  async countEntries(dirPath: string, options?: { signal?: AbortSignal }): Promise<number> {
+    const signal = options?.signal;
+    // Refuse an already-cancelled call before any validation or I/O.
+    signal?.throwIfAborted();
+    // A late validation result is a plain object, so a stalled realpath needs no release.
+    const { resolvedPath } = await withAbort(
+      this.pathGuard.validateExistingPathDetailed(dirPath),
+      signal,
+    );
+    // With procfs (COUNT_THROUGH_FD), open the directory itself with O_NOFOLLOW and check where
+    // the open descriptor really is, so a directory or ancestor swapped for a symlink after
+    // validation is refused. Then read entries through the descriptor, which a later swap cannot
+    // redirect.
+    const handle = COUNT_THROUGH_FD
+      ? await this.#abandonOnAbort(
+          fsOpen(resolvedPath, DIR_NOFOLLOW),
+          signal,
+          (late) => late.close(),
+          `directory descriptor for ${resolvedPath}`,
+        )
+      : undefined;
+    let dir: Dir | undefined;
+    let pendingRead: Promise<Dirent | null> | undefined;
+    try {
+      const openedPath = handle ? await this.#assertFdWithinRoots(handle, dirPath) : undefined;
+      // An in-root swap passes the roots check, but the children would be filtered under the
+      // validated directory's spelling, not the one actually opened.
+      if (openedPath !== undefined && !isSamePath(openedPath, resolvedPath)) {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Path changed under validation and now resolves to another directory (TOCTOU).',
+          dirPath,
+        );
+      }
+      const readPath = handle ? `/proc/self/fd/${String(handle.fd)}` : resolvedPath;
+      dir = await this.#abandonOnAbort(
+        fsOpendir(readPath),
+        signal,
+        (late) => late.close(),
+        `directory stream for ${resolvedPath}`,
+      );
+      let count = 0;
+      for (;;) {
+        // Each read races the signal, so a read that stalls ends the call at its deadline.
+        const read = dir.read();
+        pendingRead = read;
+        const entry = await withAbort(read, signal);
+        pendingRead = undefined;
+        if (entry === null) break;
+        if (this.pathGuard.isSensitive(join(dirPath, entry.name))) continue;
+        // list walks the real directory, so it checks every child, links
+        // included, under its real spelling: a deny rule naming the real
+        // directory hides the child under an alias too.
+        if (this.pathGuard.isSensitive(join(resolvedPath, entry.name))) continue;
+        // A link counts only when list would show it: same rule, same error policy.
+        if (
+          entry.isSymbolicLink() &&
+          !(await withAbort(
+            this.pathGuard.isEntryAccessible(join(resolvedPath, entry.name)),
+            signal,
+          ))
+        ) {
+          continue;
+        }
+        count += 1;
+      }
+      // A deadline that fired during the last read still ends the call, even with no entries left.
+      signal?.throwIfAborted();
+      return count;
+    } finally {
+      if (dir) {
+        const stream = dir;
+        if (pendingRead) {
+          // close() queues behind a read still in flight, so awaiting it would hold the TIMEOUT
+          // response on a stalled mount. Close once that read settles, without waiting for it.
+          void pendingRead
+            .then(
+              () => stream.close(),
+              () => stream.close(),
+            )
+            .catch((closeErr: unknown) => {
+              Logger.warn(
+                `Failed to close dir handle for ${resolvedPath} after abort: ${formatUnknownErrorMessage(closeErr)}`,
+              );
+            });
+        } else {
+          await stream.close().catch((closeErr: unknown) => {
+            Logger.warn(
+              `Failed to close dir handle for ${resolvedPath}: ${formatUnknownErrorMessage(closeErr)}`,
+            );
+          });
+        }
+      }
+      // A failed close must not replace the error the count threw, so it is logged, not thrown.
+      await handle?.close().catch((closeErr: unknown) => {
+        Logger.warn(
+          `Failed to close dir descriptor for ${resolvedPath}: ${formatUnknownErrorMessage(closeErr)}`,
         );
       });
     }

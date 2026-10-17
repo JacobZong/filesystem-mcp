@@ -1,38 +1,30 @@
-import { stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
-
 import * as z from 'zod/v4';
 
-import { paginate } from '../core/cursor.ts';
-import { ErrorCode, FsError } from '../core/errors.ts';
+import { pageQueryKey, paginate } from '../core/cursor.ts';
 import { formatCount, pageTrailer, truncateProgressPattern, zeroMatchHint } from '../core/fmt.ts';
-import { toPosixRelative } from '../core/path.ts';
+import type { ResultPaths } from '../core/path.ts';
 import {
   CursorSchema,
   defaultFalseBoolean,
   IncludeHidden,
   IncludeIgnored,
-  isBlank,
+  mapOptionalPath,
   MaxDepth,
+  nonBlankString,
   OptionalPath,
   SafeGlobPattern,
 } from '../core/schema.ts';
-import { searchContent } from '../core/search.ts';
+import { resolveSearchScope, searchContent } from '../core/search.ts';
 import type { JsonResourceResult } from '../core/store.ts';
 import { putJsonResource } from '../core/store.ts';
-import {
-  DEFAULT_SEARCH_CONTENT_RESULTS,
-  DEFAULT_SEARCH_TIMEOUT_MS,
-  MAX_SEARCH_RESULTS,
-} from '../core/util.ts';
-import { defineTool, type ToolCtx } from './define.ts';
+import { DEFAULT_SEARCH_CONTENT_RESULTS, MAX_SEARCH_RESULTS } from '../core/util.ts';
+import { defineTool } from './define.ts';
 
 // Type Definitions
-type SearchInput = z.infer<typeof GrepInputSchema>;
 type SearchResultValue = Awaited<ReturnType<typeof searchContent>>;
 type SearchMatchPayload = SearchResultValue['matches'][number];
-/** The engine's own summary is the page metadata; nothing is copied out of it. */
-type SearchContentPageMetadata = SearchResultValue['summary'];
+/** The engine's own summary, plus the root the match paths are relative to. */
+type SearchContentPageMetadata = SearchResultValue['summary'] & { readonly root: string };
 
 const GrepInputSchema = z.strictObject({
   path: OptionalPath.describe(
@@ -41,13 +33,8 @@ const GrepInputSchema = z.strictObject({
   pattern: SafeGlobPattern.optional().describe(
     'Glob to restrict search to specific file types (e.g. **/*.ts); default: all text files',
   ),
-  searchPattern: z
-    .string()
-    .min(1)
+  searchPattern: nonBlankString('searchPattern')
     .max(10000)
-    .refine((val) => !isBlank(val), {
-      message: 'searchPattern cannot be empty or whitespace-only',
-    })
     .describe(
       'Exact literal text or RE2 regex pattern to search for in file contents. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences). Cannot be empty or whitespace-only.',
     ),
@@ -75,6 +62,8 @@ const GrepInputSchema = z.strictObject({
 });
 
 interface SearchOutput {
+  /** The root `matches[].file` is relative to; a file that would not read back from it is absolute. */
+  root: string;
   matches: SearchMatchPayload[];
   totalMatches?: number;
   filesMatched?: number;
@@ -144,6 +133,7 @@ function searchContentOutput(
   resourceUri: string | undefined,
 ): SearchOutput {
   return {
+    root: metadata.root,
     matches: [...matches],
     totalMatches: metadata.matchingLines,
     filesScanned: metadata.filesScanned,
@@ -158,14 +148,14 @@ function searchContentOutput(
   };
 }
 
-function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
+function buildSortedPayloads(result: SearchResultValue, paths: ResultPaths): SearchMatchPayload[] {
   const relativeByFile = new Map<string, string>();
 
   const getRelativeFile = (file: string): string => {
     const cached = relativeByFile.get(file);
     if (cached !== undefined) return cached;
 
-    const rel = toPosixRelative(result.basePath, file);
+    const rel = paths.show(file);
     relativeByFile.set(file, rel);
     return rel;
   };
@@ -184,112 +174,15 @@ function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
   return payloads;
 }
 
-/** Explicit files bypass glob filtering; their parent anchors the relative result paths. */
-async function resolveSearchScope(
-  path: string | undefined,
-  ctx: ToolCtx,
-): Promise<{ basePath: string; explicitFile?: string }> {
-  const requested = ctx.fs.pathGuard.resolvePathOrRoot(path);
-  // One resolution, one stat: validateExistingDirectory would redo both.
-  const resolved = await ctx.fs.pathGuard.validateExistingPath(requested);
-  const stats = await stat(resolved);
-  if (!stats.isFile()) {
-    if (!stats.isDirectory()) {
-      throw new FsError(ErrorCode.NOT_DIRECTORY, 'Not a directory', requested);
-    }
-    return { basePath: resolved };
-  }
-  return {
-    basePath: dirname(resolved),
-    // The name is NOT turned into a glob: `[slug].tsx` would read as a
-    // character class. searchContent scans exactly this file instead, and
-    // hidden/ignored filtering is moot for a file the caller named.
-    explicitFile: resolved,
-  };
-}
-
-async function handleSearchContent(
-  args: SearchInput,
-  ctx: ToolCtx,
-): Promise<{
-  structured: SearchOutput;
-  offset: number;
-  total: number;
-  link?: ReturnType<typeof putJsonResource>['link'];
-}> {
-  const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
-  const queryKey = JSON.stringify({
-    method: 'search_text',
-    path: requestedPath,
-    pattern: args.pattern,
-    searchPattern: args.searchPattern,
-    isRegex: args.isRegex,
-    includeHidden: args.includeHidden,
-    includeIgnored: args.includeIgnored,
-    caseSensitive: args.caseSensitive,
-    maxDepth: args.maxDepth,
-    context: args.context,
-  });
-  const paged = await paginate<SearchMatchPayload, SearchContentPageMetadata, JsonResourceResult>({
-    store: ctx.pageStore,
-    queryKey,
-    cursor: args.cursor,
-    pageSize: args.maxResults,
-    produce: async () => {
-      const { basePath, explicitFile } = await resolveSearchScope(args.path, ctx);
-
-      const result = await searchContent(
-        basePath,
-        args.searchPattern,
-        {
-          includeHidden: args.includeHidden,
-          filePattern: args.pattern ?? '**/*',
-          caseSensitive: args.caseSensitive,
-          isRegex: args.isRegex,
-          maxResults: MAX_SEARCH_RESULTS,
-          skipIgnored: !args.includeIgnored,
-          context: args.context,
-          ...(explicitFile !== undefined ? { explicitFile } : {}),
-          ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
-          signal: ctx.signal,
-        },
-        ctx.fs.pathGuard,
-      );
-
-      return {
-        items: buildSortedPayloads(result),
-        metadata: result.summary,
-        truncated: result.summary.truncated,
-      };
-    },
-    externalize: (matches, metadata) =>
-      putJsonResource(ctx.resourceStore, `'${args.searchPattern}' matches`, {
-        ...searchContentOutput(matches, metadata, undefined, undefined),
-      }),
-  });
-
-  return {
-    structured: searchContentOutput(
-      paged.page,
-      paged.metadata,
-      paged.nextCursor,
-      paged.resource?.entry.uri,
-    ),
-    offset: paged.offset,
-    total: paged.metadata.matchingLines,
-    ...(paged.resource ? { link: paged.resource.link } : {}),
-  };
-}
-
 export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   name: 'search_text',
   title: 'Search Content',
   description:
     'Search file contents for literal text or an RE2 regex, like grep; returns matching lines with line numbers ' +
-    'and paths relative to the searched directory. Patterns match within one line. find_files matches file names.',
+    'and paths relative to the root, ready to pass to read or edit. Patterns match within one line. find_files matches file names.',
   input: GrepInputSchema,
   readOnlyHint: true,
-  timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
+  deadline: true,
   progress: (args) => ({
     label: 'Search',
     subject: truncateProgressPattern(args.searchPattern),
@@ -297,9 +190,65 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
   progressDone: (_args, result) => ({
     detail: buildSearchMatchDetail(result.totalMatches ?? 0, result.filesMatched ?? 0),
   }),
-  accessPaths: (args) => (args.path ? [args.path] : []),
+  mapPaths: mapOptionalPath,
   run: async (args, ctx) => {
-    const { structured, offset, total, link } = await handleSearchContent(args, ctx);
+    const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
+    const paged = await paginate<SearchMatchPayload, SearchContentPageMetadata, JsonResourceResult>(
+      {
+        store: ctx.pageStore,
+        queryKey: pageQueryKey('search_text', { ...args, path: requestedPath }, [
+          'cursor',
+          'maxResults',
+        ]),
+        cursor: args.cursor,
+        pageSize: args.maxResults,
+        produce: async () => {
+          const { basePath, explicitFile } = await resolveSearchScope(
+            args.path,
+            ctx.fs,
+            ctx.signal,
+          );
+
+          const result = await searchContent(
+            basePath,
+            args.searchPattern,
+            {
+              includeHidden: args.includeHidden,
+              filePattern: args.pattern ?? '**/*',
+              caseSensitive: args.caseSensitive,
+              isRegex: args.isRegex,
+              maxResults: MAX_SEARCH_RESULTS,
+              skipIgnored: !args.includeIgnored,
+              context: args.context,
+              ...(explicitFile !== undefined ? { explicitFile } : {}),
+              ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
+              signal: ctx.signal,
+            },
+            ctx.fs.pathGuard,
+          );
+
+          // Relative to the root, not to basePath: `a.ts` from a search of
+          // `src` would name `<root>/a.ts` when passed back.
+          const paths = ctx.fs.pathGuard.resultPaths(basePath);
+          return {
+            items: buildSortedPayloads(result, paths),
+            metadata: { ...result.summary, root: paths.root },
+            truncated: result.summary.truncated,
+          };
+        },
+        externalize: (matches, metadata) =>
+          putJsonResource(ctx.resourceStore, `'${args.searchPattern}' matches`, {
+            ...searchContentOutput(matches, metadata, undefined, undefined),
+          }),
+      },
+    );
+
+    const structured = searchContentOutput(
+      paged.page,
+      paged.metadata,
+      paged.nextCursor,
+      paged.resource?.entry.uri,
+    );
     const rows = renderRows(structured.matches, args.context > 0);
     const body =
       rows.length > 0
@@ -321,9 +270,9 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
     const text =
       body +
       pageTrailer({
-        offset,
+        offset: paged.offset,
         shown: structured.matches.length,
-        total,
+        total: paged.metadata.matchingLines,
         noun: 'matches',
         tool: 'search_text',
         nextCursor: structured.nextCursor,
@@ -332,9 +281,6 @@ export const SEARCH_TEXT = defineTool<typeof GrepInputSchema, SearchOutput>({
         skippedTooLarge: structured.skippedTooLarge,
         skippedInaccessible: structured.skippedInaccessible,
       });
-    if (link) {
-      return { structured, text, resources: [link] };
-    }
-    return { structured, text };
+    return { structured, text, resources: paged.resource ? [paged.resource.link] : [] };
   },
 });

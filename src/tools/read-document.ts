@@ -190,7 +190,7 @@ const readDocumentDef: ToolDef<typeof ReadDocumentInputSchema, ReadDocumentOutpu
   timeoutMs: CONVERT_TIMEOUT_MS + 30_000,
   defaultErrorCode: ErrorCode.NOT_FILE,
   progress: (args) => ({ label: 'Read document', subject: basename(args.path) }),
-  accessPaths: (args) => [args.path],
+  mapPaths: (args, fn) => ({ ...args, path: fn(args.path) }),
   run: async (args, ctx) => {
     const { stats, validPath } = await ctx.fs.stat(args.path, { signal: ctx.signal });
     if (!stats.isFile()) throw new FsError(ErrorCode.NOT_FILE, 'Not a file.', args.path);

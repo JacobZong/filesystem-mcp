@@ -1,7 +1,6 @@
 import {
   createMcpHandler,
   LATEST_PROTOCOL_VERSION,
-  PROTOCOL_VERSION_META_KEY,
   SUPPORTED_PROTOCOL_VERSIONS,
 } from '@modelcontextprotocol/server';
 
@@ -15,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import { normalizePath } from '../src/core/path-utils.ts';
 import { createServer } from '../src/server.ts';
-import { cleanupTestRoot, createTestRoot } from './helpers.ts';
+import { cleanupTestRoot, createTestRoot, modernClientMeta } from './helpers.ts';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -94,6 +93,25 @@ describe('CLI (real subprocess)', () => {
     assert.deepStrictEqual(config.policy.builtinDeny, []);
   });
 
+  it('--tool-timeout and FS_TOOL_TIMEOUT_MS set the per-call deadline in --print-config', async () => {
+    const deadlineMs = async (
+      args: readonly string[],
+      env: Record<string, string | undefined> = {},
+    ): Promise<number> => {
+      const { code, stdout, stderr } = await runCli(['--print-config', ...args, root], env);
+      assert.strictEqual(code, 0, stderr);
+      return (JSON.parse(stdout) as { limits: { toolTimeoutMs: number } }).limits.toolTimeoutMs;
+    };
+    assert.strictEqual(await deadlineMs([]), 5000);
+    assert.strictEqual(await deadlineMs(['--tool-timeout', '20000']), 20000);
+    assert.strictEqual(await deadlineMs([], { FS_TOOL_TIMEOUT_MS: '15000' }), 15000);
+    assert.strictEqual(
+      await deadlineMs(['--tool-timeout', '20000'], { FS_TOOL_TIMEOUT_MS: '15000' }),
+      20000,
+    );
+    assert.strictEqual(await deadlineMs([], { FS_TOOL_TIMEOUT_MS: '50' }), 5000);
+  });
+
   it('--print-config reports both protocol eras and the pinned SDK versions', async () => {
     const { code, stdout, stderr } = await runCli(['--print-config', root]);
     assert.strictEqual(code, 0, stderr);
@@ -142,11 +160,7 @@ describe('CLI (real subprocess)', () => {
             id: 1,
             method: 'server/discover',
             params: {
-              _meta: {
-                [PROTOCOL_VERSION_META_KEY]: MODERN_PROTOCOL_REVISION,
-                'io.modelcontextprotocol/clientCapabilities': {},
-                'io.modelcontextprotocol/clientInfo': { name: 'cli-test', version: '1.0.0' },
-              },
+              _meta: modernClientMeta('cli-test'),
             },
           }),
         }),
@@ -193,11 +207,44 @@ describe('CLI (real subprocess)', () => {
     assert.deepStrictEqual(config.allowedRoots, []);
   });
 
+  it(
+    'a positional Windows drive path exits 1 on a POSIX host instead of resolving under the cwd',
+    { skip: process.platform === 'win32' && 'a drive path is native on Windows' },
+    async () => {
+      for (const path of ['C:\\proj', 'C:/proj']) {
+        const { code, stderr } = await runCli(['--print-config', path]);
+        assert.strictEqual(code, 1, `${path} must fail`);
+        assert.match(stderr, /Windows-style path received on a POSIX host/);
+      }
+    },
+  );
+
   it('--port outside 1-65535 exits 1 with a message naming the flag', async () => {
     for (const port of ['0', '70000', 'abc']) {
       const { code, stderr } = await runCli(['--port', port, root]);
       assert.strictEqual(code, 1, `--port ${port} must fail`);
       assert.match(stderr, /--port \/ FS_PORT must be an integer between 1 and 65535/);
     }
+  });
+
+  it('FS_READ_ONLY turns on read-only mode like --read-only', async () => {
+    const printed = async (args: string[], env?: Record<string, string>) => {
+      const { code, stdout, stderr } = await runCli(['--print-config', ...args, root], env);
+      assert.strictEqual(code, 0, stderr);
+      return JSON.parse(stdout) as { readOnly: boolean; tools: string[] };
+    };
+
+    const on = await printed([], { FS_READ_ONLY: 'true' });
+    assert.strictEqual(on.readOnly, true);
+    assert.ok(!on.tools.includes('create'));
+    assert.ok(on.tools.includes('read'));
+
+    assert.strictEqual((await printed([], { FS_READ_ONLY: '1' })).readOnly, true);
+
+    const off = await printed([], { FS_READ_ONLY: '0' });
+    assert.strictEqual(off.readOnly, false);
+    assert.ok(off.tools.includes('create'));
+
+    assert.strictEqual((await printed(['--read-only'])).readOnly, true);
   });
 });

@@ -20,9 +20,9 @@ import {
  */
 export interface RuntimeConfig {
   /** `--http-host` or `FS_HTTP_HOST`. The HTTP bind defaults to loopback without it. */
-  httpHost?: string;
+  httpHost?: string | undefined;
   /** `--api-key` or `FS_API_KEY`. Unset means open access (loopback dev mode). */
-  apiKey?: string;
+  apiKey?: string | undefined;
 }
 
 /** The request id of a parsed JSON-RPC body, for error-envelope echo. */
@@ -34,14 +34,20 @@ export function jsonRpcRequestId(parsedBody: unknown): string | number | null {
 /**
  * The one JSON-RPC error envelope both legs refuse in. HTTP wraps it in
  * `sendJsonRpcError` to add status and headers; stdio hands it straight to the
- * wire. A second hand-built literal is how the two drift apart.
+ * wire. A second hand-built literal is how the two drift apart. An `undefined`
+ * id is omitted, not sent as `null`: stdio refuses an oversized ID without
+ * echoing one.
  */
 export function jsonRpcError<Id extends string | number | null>(
   code: number,
   message: string,
-  id: Id,
-): { jsonrpc: typeof JSONRPC_VERSION; id: Id; error: { code: number; message: string } } {
-  return { jsonrpc: JSONRPC_VERSION, id, error: { code, message } };
+  id: Id | undefined,
+): { jsonrpc: typeof JSONRPC_VERSION; id?: Id; error: { code: number; message: string } } {
+  return {
+    jsonrpc: JSONRPC_VERSION,
+    ...(id === undefined ? {} : { id }),
+    error: { code, message },
+  };
 }
 
 /**

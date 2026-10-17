@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -21,8 +20,8 @@ import {
 // allowed-directory view. These pin the behavior so future regressions fail
 // loudly. Real tmpdir paths; no stubbed realpath — the TOCTOU window is real.
 
-const mkDir = async (created: string[], prefix: string): Promise<string> => {
-  const d = await mkdtemp(join(tmpdir(), prefix));
+const mkDir = async (created: string[]): Promise<string> => {
+  const d = await createTestRoot();
   created.push(d);
   return d;
 };
@@ -59,7 +58,7 @@ describe('PathGuard grant round-trip', () => {
 
   it('TC-PG-002: within FS_ROOT_BOUNDARY, precheckAccess offers the ancestor and applyGrant extends access', async () => {
     const boundary = tmpdir();
-    const outOfRoot = await mkDir(createdDirs, 'fsmcp-pg002-');
+    const outOfRoot = await mkDir(createdDirs);
     process.env['FS_ROOT_BOUNDARY'] = boundary;
 
     const guard = new PathGuard({ cliAllowedDirs: [root] });
@@ -84,7 +83,7 @@ describe('PathGuard grant round-trip', () => {
   it('TC-PG-003: outside FS_ROOT_BOUNDARY, precheckAccess offers nothing and applyGrant denies', async () => {
     // Boundary is the test root itself: any sibling tmpdir is outside it.
     process.env['FS_ROOT_BOUNDARY'] = root;
-    const outOfRoot = await mkDir(createdDirs, 'fsmcp-pg003-');
+    const outOfRoot = await mkDir(createdDirs);
 
     const guard = new PathGuard({ cliAllowedDirs: [root] });
     await guard.recomputeAllowedDirectories();
@@ -122,7 +121,7 @@ describe('PathGuard grant round-trip', () => {
     // baseline (cliAllowedDirs), which a granted dir is outside by definition.
     // applyGrant returned true and the allowed set never changed, so the whole
     // round-trip prompted the user and then did nothing.
-    const outOfRoot = await mkDir(createdDirs, 'fsmcp-pg005-');
+    const outOfRoot = await mkDir(createdDirs);
 
     delete process.env['FS_ROOT_BOUNDARY'];
     const guard = new PathGuard({ cliAllowedDirs: [root] });
@@ -151,8 +150,8 @@ describe('PathGuard grant round-trip', () => {
   it('TC-PG-005b: a granted dir survives an unrelated later recompute', async () => {
     // The grant is session-lived (R8): anything that recomputes the allowed set
     // afterwards — another grant, a roots refresh — must not drop it.
-    const first = await mkDir(createdDirs, 'fsmcp-pg005b1-');
-    const second = await mkDir(createdDirs, 'fsmcp-pg005b2-');
+    const first = await mkDir(createdDirs);
+    const second = await mkDir(createdDirs);
 
     delete process.env['FS_ROOT_BOUNDARY'];
     const guard = new PathGuard({ cliAllowedDirs: [root] });
@@ -169,8 +168,8 @@ describe('PathGuard grant round-trip', () => {
 
   it('TC-PG-006: two concurrent applyGrant calls on different dirs both land', async () => {
     process.env['FS_ROOT_BOUNDARY'] = tmpdir();
-    const dir1 = await mkDir(createdDirs, 'fsmcp-pg006a-');
-    const dir2 = await mkDir(createdDirs, 'fsmcp-pg006b-');
+    const dir1 = await mkDir(createdDirs);
+    const dir2 = await mkDir(createdDirs);
 
     const guard = new PathGuard({ cliAllowedDirs: [root] });
     await guard.recomputeAllowedDirectories();
@@ -212,7 +211,7 @@ describe('PathGuard grant round-trip', () => {
     // unsafe target with it — and the confirmation prompt showed the alias.
     delete process.env['FS_ROOT_BOUNDARY'];
     const unsafeDir = process.platform === 'win32' ? 'C:\\Windows' : '/etc';
-    const holder = await mkDir(createdDirs, 'fsmcp-pg012-');
+    const holder = await mkDir(createdDirs);
     const alias = join(holder, 'innocuous');
     if (!(await trySymlink(unsafeDir, alias, () => t.skip('symlink creation not permitted')))) {
       return;
@@ -260,7 +259,7 @@ describe('PathGuard grant round-trip', () => {
 
   it('TC-PG-014: FS_ROOT_BOUNDARY drops an outside positional root at startup', async () => {
     process.env['FS_ROOT_BOUNDARY'] = root;
-    const outside = await mkDir(createdDirs, 'fsmcp-pg014-');
+    const outside = await mkDir(createdDirs);
 
     const guard = new PathGuard({ cliAllowedDirs: [root, outside] });
     await guard.recomputeAllowedDirectories();
@@ -274,7 +273,7 @@ describe('PathGuard grant round-trip', () => {
 
   it('TC-PG-015: FS_ROOT_BOUNDARY drops an outside FS_ALLOWED_DIRS root at startup', async () => {
     process.env['FS_ROOT_BOUNDARY'] = root;
-    const outside = await mkDir(createdDirs, 'fsmcp-pg015-');
+    const outside = await mkDir(createdDirs);
 
     await withEnv({ FS_ALLOWED_DIRS: outside }, async () => {
       const guard = new PathGuard({ cliAllowedDirs: [root] });
@@ -303,7 +302,7 @@ describe('PathGuard grant round-trip', () => {
   it('TC-PG-017: a missing startup root under a symlinked FS_ROOT_BOUNDARY is kept', async (t) => {
     // The boundary is realpath-canonicalized; a missing root spelled through the
     // link must be projected through its existing ancestor before comparing.
-    const target = await mkDir(createdDirs, 'fsmcp-pg017-target-');
+    const target = await mkDir(createdDirs);
     const link = join(root, 'boundary-link');
     const made = await trySymlink(target, link, () => t.skip('symlinks not permitted here'));
     if (!made) return;
@@ -316,6 +315,23 @@ describe('PathGuard grant round-trip', () => {
         containsPath(guard.getRoots(), missing),
         'missing root under the linked boundary stays',
       );
+    });
+  });
+
+  it('TC-PG-018: applyGrant admits a missing directory spelled through a symlinked FS_ROOT_BOUNDARY', async (t) => {
+    // Grants follow the startup-root rule (TC-PG-017): a missing target is
+    // projected through its nearest existing ancestor, not compared lexically.
+    const target = await mkDir(createdDirs);
+    const link = join(root, 'boundary-link');
+    const made = await trySymlink(target, link, () => t.skip('symlinks not permitted here'));
+    if (!made) return;
+    process.env['FS_ROOT_BOUNDARY'] = link;
+    const missing = join(link, 'not-yet');
+    await withEnv({ FS_ALLOW_MISSING_ROOTS: '1' }, async () => {
+      const guard = new PathGuard({ cliAllowedDirs: [target] });
+      await guard.recomputeAllowedDirectories();
+      assert.strictEqual(await guard.applyGrant(missing), true);
+      assert.ok(containsPath(guard.getRoots(), missing), 'the granted directory is a root');
     });
   });
 });
@@ -375,7 +391,7 @@ describe('Write/Delete PathGuard', () => {
   });
 
   it('TC-PG-010: validatePathForDelete denies deleting a non-symlink whose realpath escapes the root', async (t) => {
-    const outsideDir = await mkdtemp(join(tmpdir(), 'fsmcp-pg010-'));
+    const outsideDir = await createTestRoot();
     const linkPath = join(root, 'escape_link');
     if (!(await trySymlink(outsideDir, linkPath, () => t.skip('symlink not permitted')))) return;
     // A real (non-symlink) file living under the symlinked ancestor. The

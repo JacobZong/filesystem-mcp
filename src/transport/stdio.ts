@@ -11,11 +11,11 @@ import {
 
 import { fileURLToPath } from 'node:url';
 
-import { formatUnknownErrorMessage } from '../core/errors.ts';
-import { Logger } from '../core/observability.ts';
+import { formatUnknownErrorMessage, normalizeUnknownError } from '../core/errors.ts';
+import { Logger, voidSend } from '../core/observability.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PathGuard } from '../core/path.ts';
-import { getMaxInboundMessageBytes } from '../core/util.ts';
+import { getMaxInboundMessageBytes, MAX_STDIO_REQUEST_ID_BYTES } from '../core/util.ts';
 import { createWatcherRegistry } from '../core/watcher-registry.ts';
 import type { FilesystemServerContext } from '../server.ts';
 import { createServer } from '../server.ts';
@@ -38,6 +38,28 @@ interface StdioListenState {
 // otherwise make the second read a compile-time constant.
 function isListenCancelled(state: StdioListenState): boolean {
   return state.cancelled;
+}
+
+/**
+ * The client-chosen string a request would have echoed into a frame of its
+ * own, when it encodes past the envelope reserve: the ID into its response, or
+ * `_meta.progressToken` into every progress notification. `undefined` when
+ * both fit, or for anything that is not a request.
+ */
+function oversizedEcho(message: unknown): 'request ID' | 'progress token' | undefined {
+  if (typeof message !== 'object' || message === null) return undefined;
+  const request = message as {
+    method?: unknown;
+    id?: unknown;
+    params?: { _meta?: { progressToken?: unknown } };
+  };
+  if (request.method === undefined || request.id === undefined) return undefined;
+  const tooLong = (value: unknown): boolean =>
+    typeof value === 'string' &&
+    Buffer.byteLength(JSON.stringify(value), 'utf8') > MAX_STDIO_REQUEST_ID_BYTES;
+  if (tooLong(request.id)) return 'request ID';
+  if (tooLong(request.params?._meta?.progressToken)) return 'progress token';
+  return undefined;
 }
 
 function cancelledRequestId(message: unknown): string | number | null {
@@ -82,7 +104,7 @@ export async function seedRootsFromClient(ctx: FilesystemServerContext): Promise
       continue; // not a file:// root
     }
     try {
-      if (await ctx.pathGuard.applyGrant(dir)) granted += 1;
+      if (await ctx.pathGuard.applyGrant(dir, 'workspace')) granted += 1;
       else Logger.debug('[Stdio] client root refused by grant policy', { dir });
     } catch (err: unknown) {
       Logger.debug('[Stdio] client root grant failed', {
@@ -116,8 +138,11 @@ export async function seedRootsFromClient(ctx: FilesystemServerContext): Promise
  *
  * Watcher leases are tracked by listen request ID and released on cancellation,
  * rejection, graceful completion, or connection close.
+ *
+ * `_config` is unused: an API key has no meaning on stdio. The parameter keeps
+ * the `./transport` export's signature.
  */
-export function startServer(options: ServerOptions, config: RuntimeConfig = {}): StdioServerHandle {
+export function startServer(options: ServerOptions, _config?: RuntimeConfig): StdioServerHandle {
   let closed = false;
   let activeCtx: FilesystemServerContext | undefined;
   const pathGuard = new PathGuard(options);
@@ -136,7 +161,6 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
       pathGuard,
       era,
       transport: 'stdio',
-      ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
     });
     if (closed) {
       // The connection went away while this instance was being built.
@@ -171,12 +195,8 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
   // not callbacks). Reads `activeCtx` when it fires rather than capturing it, so
   // it never pins a disposed instance.
   const sink = (uri: string): void => {
-    // A failed notify means the connection went away; nothing to recover.
-    void activeCtx?.mcp.server.sendResourceUpdated({ uri }).catch((err: unknown) => {
-      Logger.debug('[Stdio] resource update not delivered', {
-        uri,
-        error: formatUnknownErrorMessage(err),
-      });
+    voidSend(activeCtx?.mcp.server.sendResourceUpdated({ uri }), '[Stdio] resource update', {
+      uri,
     });
   };
 
@@ -277,6 +297,27 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
   }
   let gated = Promise.resolve();
   wire.onmessage = (message) => {
+    const oversized = oversizedEcho(message);
+    if (oversized !== undefined) {
+      // Never echo an oversized ID: it could overflow even a compact error. A
+      // short ID with an oversized progress token is answered under that ID.
+      // Reject before dispatch so no write, subscription or progress frame
+      // can take effect.
+      const shorter = oversized === 'request ID' ? 'ID' : 'token';
+      const id = oversized === 'progress token' && 'id' in message ? message.id : undefined;
+      void wire
+        .send(
+          jsonRpcError(
+            ProtocolErrorCode.InvalidRequest,
+            `Stdio ${oversized} exceeds ${String(MAX_STDIO_REQUEST_ID_BYTES)} JSON-encoded bytes. Use a shorter ${shorter}.`,
+            id,
+          ),
+        )
+        .catch((error: unknown) => {
+          wire.onerror?.(normalizeUnknownError(error));
+        });
+      return;
+    }
     const cancelId = cancelledRequestId(message);
     if (cancelId !== null) {
       const state = listens.get(cancelId);
@@ -333,8 +374,7 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
       })
       .catch(async (error: unknown) => {
         releaseListen(id);
-        const failure =
-          error instanceof Error ? error : new Error(formatUnknownErrorMessage(error));
+        const failure = normalizeUnknownError(error);
         wire.onerror?.(failure);
         // The gate swallowed the message, so nothing downstream will answer it.
         // Without this the client waits out its whole request timeout.

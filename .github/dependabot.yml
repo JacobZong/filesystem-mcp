@@ -1,0 +1,34 @@
+version: 2
+updates:
+  # One PR per week for all action bumps instead of one PR per action.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    groups:
+      # Patch and minor bumps land together; a major still gets its own PR
+      # because it usually needs code changes.
+      npm-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Typings track the minimum supported runtime (engines.node >=24).
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # typescript-eslint pins its typescript peer range; bump typescript's
+      # major by hand once typescript-eslint supports it.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']

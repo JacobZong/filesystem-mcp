@@ -7,11 +7,11 @@ import { McpServer } from '@modelcontextprotocol/server';
 
 import packageJson from '../package.json' with { type: 'json' };
 import { requestStateCodec } from './core/input-required.ts';
-import { Logger } from './core/observability.ts';
+import { Logger, voidSend } from './core/observability.ts';
 import type { ServerOptions } from './core/path.ts';
 import { PathGuard } from './core/path.ts';
 import { PageSnapshotStore, ResourceStore } from './core/store.ts';
-import { MAX_TOOL_INPUT_ELEMENTS } from './core/util.ts';
+import { MAX_OUTBOUND_RESULT_BYTES, MAX_TOOL_INPUT_ELEMENTS } from './core/util.ts';
 import type { WatcherRegistry } from './core/watcher-registry.ts';
 import { INSTRUCTIONS_SUMMARY, INSTRUCTIONS_URI } from './instructions.ts';
 import { registerPrompts } from './prompts.ts';
@@ -63,15 +63,18 @@ export async function createServer(
     pageStore?: PageSnapshotStore;
     /** The protocol era this instance serves; omitted where the caller does not know. */
     era?: 'legacy' | 'modern';
-    /** Only `stdio` has the SDK's fixed 10 MiB ReadBuffer, so only there does `read` cap its result. */
+    /**
+     * Only `stdio` has the SDK's fixed 10 MiB ReadBuffer, so only there are
+     * results capped: any tool call that changed nothing, any resource read,
+     * and a result-store entry by the size of its read (define.ts,
+     * resources.ts, store.ts).
+     */
     transport?: 'stdio' | 'http';
     /**
-     * The resolved HTTP credential, from `--api-key` or `FS_API_KEY`. Lives here
-     * rather than on `ServerOptions` because that object is `PathGuard`'s
-     * constructor argument and is exposed on its public `options` field — a
-     * bearer secret has no business being reachable from a tool handler.
+     * `private` when the HTTP host requires a bearer key, so a shared cache
+     * never serves one tenant's listing to another. Default `public`.
      */
-    apiKey?: string;
+    cacheScope?: 'private' | 'public';
   },
 ): Promise<FilesystemServerContext> {
   // Only `resources` is declared: `McpServer` advertises `tools` and `prompts`
@@ -94,7 +97,7 @@ export async function createServer(
     resources: { subscribe: !legacyHttp, listChanged: !legacyHttp },
   } satisfies ServerCapabilities;
 
-  const cacheScope: 'private' | 'public' = extraDeps?.apiKey ? 'private' : 'public';
+  const cacheScope = extraDeps?.cacheScope ?? 'public';
   const serverConfig: NonNullable<ConstructorParameters<typeof McpServer>[1]> = {
     capabilities,
     enforceStrictCapabilities: true,
@@ -156,18 +159,19 @@ export async function createServer(
     return Promise.resolve();
   };
 
-  // A failed send means the connection went away; nothing to recover.
   const resourceStore =
     extraDeps?.resourceStore ??
-    new ResourceStore(() => {
-      if (extraDeps?.notifier) {
-        extraDeps.notifier.resourcesChanged();
-        return;
-      }
-      void server.server.sendResourceListChanged().catch((error: unknown) => {
-        Logger.debug('resource list_changed not delivered', { error: String(error) });
-      });
-    });
+    new ResourceStore(
+      () => {
+        if (extraDeps?.notifier) {
+          extraDeps.notifier.resourcesChanged();
+          return;
+        }
+        voidSend(server.server.sendResourceListChanged(), 'resource list_changed');
+      },
+      // A tool hands out no result-store link that this connection's resources/read refuses; file links are gated in writtenFileLinks.
+      extraDeps?.transport === 'stdio' ? { maxReadResultBytes: MAX_OUTBOUND_RESULT_BYTES } : {},
+    );
   const pageStore = extraDeps?.pageStore ?? new PageSnapshotStore();
 
   const pathGuard = extraDeps?.pathGuard ?? new PathGuard(options);
@@ -185,7 +189,7 @@ export async function createServer(
     pageStore,
     resourceStore,
     cacheScope,
-    ...(options.readOnly ? { readOnly: true } : {}),
+    readOnly: options.readOnly ?? false,
     ...(extraDeps?.watcherRegistry ? { watcherRegistry: extraDeps.watcherRegistry } : {}),
     ...(extraDeps?.notifier ? { notifier: extraDeps.notifier } : {}),
     ...(extraDeps?.era ? { era: extraDeps.era } : {}),

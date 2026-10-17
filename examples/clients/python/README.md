@@ -59,7 +59,8 @@ Each part maps to one piece of the Python SDK:
   `create_mcp_http_client(headers=...)`, which carries the API key. The
   client is used as `async with Client(...) as client`.
 - **Paths over HTTP.** A running server resolves a relative path against its
-  own working directory, not its root. So with `--url` the script calls
+  own working directory when that is inside a root, which the script cannot
+  know. So with `--url` the script calls
   `list_roots` and resolves a missing or relative `dir`, and with it `--out`,
   against the root. If the server has no root or several, the script stops
   with an error asking for an absolute `dir`.

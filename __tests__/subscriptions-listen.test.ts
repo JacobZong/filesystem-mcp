@@ -2,7 +2,7 @@ import { Client, type McpSubscription } from '@modelcontextprotocol/client';
 import { LATEST_PROTOCOL_VERSION, ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -78,6 +78,25 @@ describe('HTTP watcher fan-out and listen admission', () => {
       assert.equal((err as { code?: unknown }).code, ProtocolErrorCode.InvalidParams);
       return true;
     });
+  });
+
+  it('rejects an out-of-root or sensitive resource before acknowledging the listen', async () => {
+    const other = await createTestRoot();
+    try {
+      const outside = await writeTestFile(other, 'outside.txt', 'x');
+      const sensitive = await writeTestFile(tmpDir, '.env', 'x');
+      for (const p of [outside, sensitive]) {
+        await assert.rejects(
+          client.listen({ resourceSubscriptions: [buildFileResourceUri(p)] }),
+          (err: unknown) => {
+            assert.equal((err as { code?: unknown }).code, ProtocolErrorCode.InvalidParams);
+            return true;
+          },
+        );
+      }
+    } finally {
+      await cleanupTestRoot(other);
+    }
   });
 
   it('rejects a mixed valid/invalid batch and leaves the valid URI reusable', async () => {
@@ -347,7 +366,7 @@ describe('HTTP resourcesListChanged listen filter', () => {
 
   before(async () => {
     rootDir = await createTestRoot();
-    outDir = await mkdtemp(join(tmpdir(), 'fsmcp-listchanged-'));
+    outDir = await createTestRoot();
     outFile = await writeTestFile(outDir, 'granted.txt', 'initial');
 
     http = await bootHttpTest([rootDir], { FS_ROOT_BOUNDARY: tmpdir() });

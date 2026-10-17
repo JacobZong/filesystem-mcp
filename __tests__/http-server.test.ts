@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { json } from 'node:stream/consumers';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 
+import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import { getMaxInboundMessageBytes, MIB } from '../src/core/util.ts';
 import { MAX_WATCHERS } from '../src/core/watcher-registry.ts';
 import { startHttpServer } from '../src/transport.ts';
@@ -18,6 +19,7 @@ import {
   createTestRoot,
   firstTextBlock,
   type HttpTestContext,
+  modernClientMeta,
   TEST_API_KEY,
   writeTestFile,
 } from './helpers.ts';
@@ -80,6 +82,13 @@ describe('Real HTTP Server integration', () => {
       body: '{}',
     });
     assert.strictEqual(r.status, 401);
+  });
+
+  it('an API-keyed server marks its cacheable lists private', async () => {
+    const client = await http.makeClient('cache-scope');
+    const discover = client.getDiscoverResult() as { cacheScope?: string } | undefined;
+    assert.ok(discover, 'a modern connection must retain its discover result');
+    assert.strictEqual(discover.cacheScope, 'private');
   });
 
   for (const contentType of ['text/plain', undefined]) {
@@ -154,7 +163,7 @@ describe('Real HTTP Server integration', () => {
           authorization: ['Bearer', TEST_API_KEY].join(' '),
           'content-type': contentType,
           'mcp-method': 'server/discover',
-          'mcp-protocol-version': '2026-07-28',
+          'mcp-protocol-version': MODERN_PROTOCOL_REVISION,
           accept: 'application/json, text/event-stream',
         },
         body: JSON.stringify({
@@ -162,11 +171,7 @@ describe('Real HTTP Server integration', () => {
           id: 'admission',
           method: 'server/discover',
           params: {
-            _meta: {
-              'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-              'io.modelcontextprotocol/clientCapabilities': {},
-              'io.modelcontextprotocol/clientInfo': { name: 'admission-test', version: '1.0.0' },
-            },
+            _meta: modernClientMeta('admission-test'),
           },
         }),
       });

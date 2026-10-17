@@ -4,7 +4,6 @@ import type {
   McpServer,
   ReadResourceResult,
   Resource,
-  ResourceUpdatedNotificationParams,
   Role,
   ServerContext,
   ServerNotifier,
@@ -28,10 +27,17 @@ import {
   FILESYSTEM_FILE_URI_TEMPLATE,
 } from './core/file-uri.ts';
 import { GuardedFileSystem } from './core/fs.ts';
-import { Logger } from './core/observability.ts';
+import { Logger, voidSend } from './core/observability.ts';
 import { suggestPaths } from './core/path-completer.ts';
 import type { PathGuard } from './core/path.ts';
 import type { ResourceStore } from './core/store.ts';
+import { entryReadResult } from './core/store.ts';
+import {
+  base64EncodedBytes,
+  getMaxTextFileSize,
+  jsonBytesOver,
+  MAX_OUTBOUND_RESULT_BYTES,
+} from './core/util.ts';
 import {
   createWatcherRegistry,
   MAX_WATCHERS,
@@ -64,6 +70,8 @@ export interface ResourceRegistrationOptions {
   notifier?: ServerNotifier;
   /** The protocol era this instance serves; omitted where the caller does not know. */
   era?: 'legacy' | 'modern';
+  /** Only stdio has the SDK's fixed-size read buffer. */
+  transport?: 'stdio' | 'http';
   /**
    * Scope for shared-content cache hints. 'private' when the endpoint is
    * API-key gated, mirroring the list hints in server.ts — a shared cache must
@@ -72,10 +80,9 @@ export interface ResourceRegistrationOptions {
   cacheScope?: 'public' | 'private';
 }
 
-type ResourceRegistrarDeps = Omit<ResourceRegistrationOptions, 'pathGuard' | 'readOnly'> & {
+type ResourceRegistrarDeps = Omit<ResourceRegistrationOptions, 'pathGuard'> & {
   readonly server: McpServer;
   readonly pathGuard: PathGuard;
-  readonly readOnly?: boolean;
 };
 
 /**
@@ -220,7 +227,22 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
       }
       await options.pathGuard.validateExistingPath(rawPath);
       const fs = new GuardedFileSystem(options.pathGuard);
+      const stdio = options.transport === 'stdio';
+      if (stdio) {
+        // Text encodes to at least its own bytes and base64 to 4/3 of them,
+        // so a file over the limit is refused before it is read. One past the
+        // file size limit is left to readRaw, whose refusal names that limit:
+        // HTTP would not serve it either.
+        const { stats } = await fs.stat(rawPath, { signal: ctx.mcpReq.signal });
+        if (stats.size > MAX_OUTBOUND_RESULT_BYTES && stats.size <= getMaxTextFileSize()) {
+          throw tooLargeForStdio(stats.size, true);
+        }
+      }
       const readResult = await fs.readRaw(rawPath, { signal: ctx.mcpReq.signal });
+      if (stdio && readResult.isBinary) {
+        const base64Bytes = base64EncodedBytes(readResult.content.length);
+        if (base64Bytes > MAX_OUTBOUND_RESULT_BYTES) throw tooLargeForStdio(base64Bytes, true);
+      }
 
       return {
         contents: [
@@ -249,9 +271,14 @@ function createFilesystemResource(options: ResourceRegistrationOptions): Subscri
     },
 
     subscribe(uri, notify) {
-      // Already subscribed on this connection: the watcher is live and the sink
-      // is registered, so this is a no-op success rather than a second lease.
-      if (leasedUris.has(uri)) return undefined;
+      // Already subscribed on this connection with a live watcher: this is a
+      // no-op success rather than a second lease. If the OS watcher errored and
+      // was dropped, release the dead lease and re-acquire.
+      if (leasedUris.has(uri)) {
+        if (registry.hasWatcher(uri)) return undefined;
+        leasedUris.delete(uri);
+        registry.release(uri);
+      }
       // A subscribe for this URI is mid-acquire: share its outcome instead of
       // taking a second lease the lease set cannot represent.
       const pending = inflight.get(uri);
@@ -369,9 +396,7 @@ function createResultResource(options: ResourceRegistrationOptions): ResourceCon
         }
         throw err;
       }
-      return {
-        contents: [{ uri: entry.uri, mimeType: entry.mimeType, text: entry.text }],
-      };
+      return entryReadResult(entry);
     },
   };
 }
@@ -380,7 +405,11 @@ function createResultResource(options: ResourceRegistrationOptions): ResourceCon
 // export contracts
 // ═══════════════════════════════════════════════════════════════
 
-export function getResourceContracts(options: ResourceRegistrationOptions): ResourceContract[] {
+// The file template last and typed as subscribable, so the registrar can
+// wire its subscribe handlers from the same list it registers.
+export function getResourceContracts(
+  options: ResourceRegistrationOptions,
+): readonly [ResourceContract, ResourceContract, SubscribableContract] {
   return [
     createInstructionsResource(options),
     createResultResource(options),
@@ -408,10 +437,29 @@ function fsErrorToProtocolError(error: FsError): ProtocolError {
   });
 }
 
-function wrapRead(contract: ResourceContract) {
+/**
+ * The refusal for a result stdio's fixed-size reader cannot carry. `atLeast`
+ * when `bytes` is a lower bound known before the result was encoded.
+ */
+function tooLargeForStdio(bytes: number, atLeast = false): ProtocolError {
+  const suggestion = 'Read smaller slices/pages with tools, or connect over HTTP.';
+  return new ProtocolError(
+    ProtocolErrorCode.InvalidParams,
+    `Resource result too large to return (${atLeast ? 'at least ' : ''}${String(bytes)} bytes once JSON-encoded, over the ${String(MAX_OUTBOUND_RESULT_BYTES)}-byte stdio message limit). ${suggestion}`,
+    { code: ErrorCode.TOO_LARGE, suggestion },
+  );
+}
+
+function wrapRead(contract: ResourceContract, transport: ResourceRegistrationOptions['transport']) {
   return async (uri: URL, variables: Record<string, string | string[]>, ctx: ServerContext) => {
     try {
-      return await contract.read(uri, variables, ctx);
+      const result = await contract.read(uri, variables, ctx);
+      if (transport === 'stdio') {
+        // Cache/file bytes exclude outer JSON escaping and binary base64.
+        const encodedBytes = jsonBytesOver(result, MAX_OUTBOUND_RESULT_BYTES);
+        if (encodedBytes !== undefined) throw tooLargeForStdio(encodedBytes);
+      }
+      return result;
     } catch (error) {
       // The SDK brands ProtocolError with `static [Symbol.hasInstance]`, so this
       // holds across separately bundled SDK copies and realms.
@@ -441,22 +489,23 @@ function wrapRead(contract: ResourceContract) {
  * matched `filesystem-mcp://result/…` — and any other scheme — to the file
  * template.
  */
+const TEMPLATE_MATCHERS = new Map<string, UriTemplate>();
+
 function owns(contract: ResourceContract, uri: string): boolean {
   if (contract.uri !== undefined) return uri === contract.uri;
-  return (
-    contract.uriTemplate !== undefined && new UriTemplate(contract.uriTemplate).match(uri) !== null
-  );
+  if (contract.uriTemplate === undefined) return false;
+  let matcher = TEMPLATE_MATCHERS.get(contract.uriTemplate);
+  if (!matcher) {
+    matcher = new UriTemplate(contract.uriTemplate);
+    TEMPLATE_MATCHERS.set(contract.uriTemplate, matcher);
+  }
+  return matcher.match(uri) !== null;
 }
 
 export function registerResources(deps: ResourceRegistrarDeps): { dispose(): void } {
   const server = deps.server;
-  const options = { ...deps, readOnly: deps.readOnly ?? false };
-  const file = createFilesystemResource(options);
-  const resourceContracts = [
-    createInstructionsResource(options),
-    createResultResource(options),
-    file,
-  ];
+  const resourceContracts = getResourceContracts(deps);
+  const file = resourceContracts[2];
 
   for (const contract of resourceContracts) {
     const config = {
@@ -473,10 +522,10 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
         ...(contract.complete ? { complete: contract.complete } : {}),
       });
 
-      server.registerResource(contract.name, template, config, wrapRead(contract));
+      server.registerResource(contract.name, template, config, wrapRead(contract, deps.transport));
     } else if (contract.uri) {
       server.registerResource(contract.name, contract.uri, config, (uri: URL, ctx: ServerContext) =>
-        wrapRead(contract)(uri, {}, ctx),
+        wrapRead(contract, deps.transport)(uri, {}, ctx),
       );
     }
   }
@@ -487,9 +536,7 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
   // reach. A legacy instance on the HTTP leg (the one built with a `notifier`)
   // lives for one request: a subscription accepted there would take a watcher
   // lease for an instance that is gone before the file changes. Leave the
-  // handlers off so the SDK refuses the verb, and no lease is taken. The
-  // predicate mirrors the capability gate in server.ts exactly, so the
-  // handler is registered if and only if `resources.subscribe` is advertised.
+  // handlers off so the SDK refuses the verb, and no lease is taken.
   // sunset(SEP-2577): removal trigger in docs/adr/002-legacy-protocol-paths-sunset.md.
   const legacyHttp = deps.era === 'legacy' && deps.notifier !== undefined;
   if (deps.era !== 'modern' && !legacyHttp) {
@@ -503,17 +550,8 @@ export function registerResources(deps: ResourceRegistrarDeps): { dispose(): voi
     // (which only ends a lease) removed none of them. Subscribe is per-URI on
     // the wire, so the sink must be too — this makes it idempotent.
     const notifyUpdated = (updatedUri: string): void => {
-      if (deps.notifier) {
-        deps.notifier.resourceUpdated(updatedUri);
-        return;
-      }
-      const updatePayload: ResourceUpdatedNotificationParams = { uri: updatedUri };
-      // A failed notify means the connection went away; nothing to recover.
-      void server.server.sendResourceUpdated(updatePayload).catch((err: unknown) => {
-        Logger.debug('resource update not delivered', {
-          uri: updatedUri,
-          error: formatUnknownErrorMessage(err),
-        });
+      voidSend(server.server.sendResourceUpdated({ uri: updatedUri }), 'resource update', {
+        uri: updatedUri,
       });
     };
 

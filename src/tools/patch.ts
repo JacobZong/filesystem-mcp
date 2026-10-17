@@ -18,9 +18,8 @@ const PatchInputSchema = z.strictObject({
   dryRun: defaultFalseBoolean('Preview the result without writing (default: false)'),
 });
 
-type PatchOutput = Omit<WrittenFileMeta, 'resourceUri' | 'resourceLink'> & {
+type PatchOutput = Omit<WrittenFileMeta, 'resourceLink'> & {
   path: string;
-  resourceUri?: string;
   modified: string;
   linesAdded: number;
   linesRemoved: number;
@@ -57,7 +56,7 @@ export const PATCH = defineTool<typeof PatchInputSchema, PatchOutput>({
     label: args.dryRun ? 'Patch [dry run]' : 'Patch',
     subject: basename(args.path),
   }),
-  accessPaths: (args) => [args.path],
+  mapPaths: (args, fn) => ({ ...args, path: fn(args.path) }),
   run: async (args, ctx) =>
     // A dry run never writes, so it needs no lock.
     args.dryRun
@@ -141,31 +140,34 @@ async function applyPatchOnce(args: z.infer<typeof PatchInputSchema>, ctx: ToolC
   // `modified` is read from a post-write stat and is advisory: under a concurrent
   // writer it may reflect that writer's mtime while `size`/content come from this
   // patch's atomic write. The file content itself is always consistent.
-  const fileStats = args.dryRun
-    ? stats
-    : (await ctx.fs.stat(args.path, { signal: ctx.signal })).stats;
+  let modified = stats.mtime.toISOString();
+  if (!args.dryRun) {
+    try {
+      modified = (await ctx.fs.stat(validPath)).stats.mtime.toISOString();
+    } catch {
+      modified = new Date().toISOString();
+    }
+  }
   const meta = buildWrittenFileMeta({
     validPath,
     content: patched,
     dryRun: args.dryRun,
-    lastModified: fileStats.mtime.toISOString(),
+    lastModified: modified,
+    transport: ctx.transport,
   });
+  const { resourceLink, ...fileMeta } = meta;
   return {
     structured: {
       path: validPath,
-      size: meta.size,
-      lineCount: meta.lineCount,
-      mimeType: meta.mimeType,
-      kind: meta.kind,
-      modified: fileStats.mtime.toISOString(),
+      ...fileMeta,
+      modified,
       linesAdded,
       linesRemoved,
-      ...(meta.resourceUri !== undefined ? { resourceUri: meta.resourceUri } : {}),
       ...(args.dryRun ? { diff: args.diff } : {}),
     },
     // A dry run exists to be previewed, so it keeps returning the patched
     // text; only the write path summarizes, where the bytes are on disk.
     text: args.dryRun ? patched : summaryText,
-    ...(meta.resourceLink !== undefined ? { resources: [meta.resourceLink] } : {}),
+    ...(resourceLink !== undefined ? { resources: [resourceLink] } : {}),
   };
 }

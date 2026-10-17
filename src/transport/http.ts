@@ -22,11 +22,10 @@ import type { Express, NextFunction, Request, Response } from 'express';
 
 import { formatUnknownErrorMessage } from '../core/errors.ts';
 import { Logger } from '../core/observability.ts';
-import { parseTrueEnvFlag } from '../core/path-utils.ts';
 import { PathGuard } from '../core/path.ts';
 import type { ServerOptions } from '../core/path.ts';
 import { PageSnapshotStore, ResourceStore } from '../core/store.ts';
-import { getMaxInboundMessageBytes, parseEnvInt } from '../core/util.ts';
+import { getMaxInboundMessageBytes, parseEnvInt, parseTrueEnvFlag } from '../core/util.ts';
 import { createWatcherRegistry, type WatcherRegistry } from '../core/watcher-registry.ts';
 import { createServer } from '../server.ts';
 import {
@@ -304,7 +303,7 @@ export async function startHttpServer(
         pageStore: sharedPageStore,
         era,
         transport: 'http',
-        ...(apiKey !== undefined ? { apiKey } : {}),
+        cacheScope: apiKey ? 'private' : 'public',
       });
       return c.mcp;
     },
@@ -358,6 +357,7 @@ export async function startHttpServer(
   const teardown = (): Promise<void> => {
     sharedRegistry.destroy();
     sharedPageStore.clear();
+    sharedStore.clear();
     return modernHandler.close().catch((err: unknown) => {
       Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));
     });

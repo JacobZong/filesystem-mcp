@@ -1,6 +1,11 @@
 import * as z from 'zod/v4';
 
-import { isSafeGlobSyntax } from './glob.ts';
+import {
+  isSafeGlobSyntax,
+  MAX_BRACE_ALTERNATIVES,
+  MAX_DOTDOT_CHECK_CHARS,
+  MAX_SEGMENT_WILDCARDS,
+} from './glob.ts';
 import { MAX_SEARCH_DEPTH } from './util.ts';
 
 export const PositiveInt = z
@@ -11,7 +16,20 @@ const MAX_PATH_LENGTH = 4096;
 
 const LINE_BREAK_RE = /[\n\r]/;
 
-export const isBlank = (val: string): boolean => val.trim().length === 0;
+const isBlank = (val: string): boolean => val.trim().length === 0;
+
+/**
+ * Text that must carry non-blank content. `min(1)` stays so `minLength: 1`
+ * still publishes on the wire; it aborts so an empty value reports one
+ * message, not the same one twice.
+ */
+export function nonBlankString(label: string): z.ZodString {
+  const message = `${label} cannot be empty or whitespace-only`;
+  return z
+    .string()
+    .min(1, { message, abort: true })
+    .refine((val) => !isBlank(val), { message });
+}
 
 function refineSafeText(
   label: string,
@@ -55,7 +73,9 @@ export const SafeGlobPattern = z
   .max(1000, { message: 'Max 1000 chars' })
   .superRefine(
     refineSafeText('Pattern', (val) =>
-      isSafeGlobSyntax(val) ? undefined : 'Invalid glob or unsafe path (absolute/.. forbidden)',
+      isSafeGlobSyntax(val)
+        ? undefined
+        : `Invalid glob or unsafe path (absolute/.. forbidden, at most ${String(MAX_BRACE_ALTERNATIVES)} brace alternatives, ${String(MAX_DOTDOT_CHECK_CHARS)} traversal-check characters, and ${String(MAX_SEGMENT_WILDCARDS)} * runs and extglob groups together per path segment; no |, * or nested group inside *(…) or +(…))`,
     ),
   )
   .describe('Relative glob pattern under the search root (e.g. "**/*.ts", "src/**/*.js").')
@@ -173,28 +193,40 @@ export function singleOrBatchPathsInput<TExtra extends z.ZodRawShape>(
     }
   });
 
-  // Mirror the superRefine above on the wire: exactly one input mode. `{}` and
-  // `path`+`paths` both fail this oneOf, matching the runtime rule.
-  return base.meta({
-    oneOf: [{ required: ['path'] }, { required: ['paths'] }],
-  }) as z.ZodObject<SingleOrBatchShape<TExtra>>;
+  // No top-level oneOf on the wire: OpenAI and Anthropic reject top-level
+  // oneOf/anyOf/allOf in function parameters. The superRefine enforces
+  // "exactly one of path/paths" at call time.
+  return base as z.ZodObject<SingleOrBatchShape<TExtra>>;
 }
 
 /**
- * Extract the filesystem paths from a {@link singleOrBatchPathsInput} shape
- * (`{ path?, paths?, files?[{path}] }`) for the executor's access-grant
- * pre-check. Exactly one of the three is set (enforced by the schema's
- * superRefine), so they are checked in priority order.
+ * `ToolDef.mapPaths` for a {@link singleOrBatchPathsInput} shape
+ * (`{ path?, paths?, files?[{path}] }`). The schema's superRefine lets exactly
+ * one of the three through; each present one is mapped.
  */
-export function singleOrBatchAccessPaths(args: {
-  path?: string | undefined;
-  paths?: string[] | undefined;
-  files?: readonly { path: string }[] | undefined;
-}): string[] {
-  if (args.path) return [args.path];
-  if (args.paths) return [...args.paths];
-  if (args.files) return args.files.map((f) => f.path);
-  return [];
+export function mapSingleOrBatchPaths<
+  T extends {
+    path?: string | undefined;
+    paths?: string[] | undefined;
+    files?: readonly { path: string }[] | undefined;
+  },
+>(args: T, fn: (path: string) => string): T {
+  return {
+    ...args,
+    ...(args.path !== undefined ? { path: fn(args.path) } : {}),
+    ...(args.paths !== undefined ? { paths: args.paths.map(fn) } : {}),
+    ...(args.files !== undefined
+      ? { files: args.files.map((file) => ({ ...file, path: fn(file.path) })) }
+      : {}),
+  };
+}
+
+/** `ToolDef.mapPaths` for a tool whose one `path` is optional (omitted = the root). */
+export function mapOptionalPath<T extends { path?: string | undefined }>(
+  args: T,
+  fn: (path: string) => string,
+): T {
+  return args.path === undefined ? args : { ...args, path: fn(args.path) };
 }
 
 // ponytail: charset regex, not z.base64url() — the SDK's AJV warns on the

@@ -55,6 +55,24 @@ export function formatCount(count: number, singular: string, plural = `${singula
   return `${String(count)} ${count === 1 ? singular : plural}`;
 }
 
+const SIZE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+
+/** Human-readable byte size for tree lines and summary text: `5 B`, `1 KiB`, `1.5 KiB`, `20 KiB`. */
+export function formatByteSize(bytes: number): string {
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  let rounded = unit === 0 || value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  if (rounded >= 1024 && unit < SIZE_UNITS.length - 1) {
+    rounded = 1;
+    unit++;
+  }
+  return `${String(rounded)} ${SIZE_UNITS[unit]}`;
+}
+
 /**
  * Short label for a path in summary text. `basename` returns '' for a root
  * (`C:\`, `/`) and for a trailing-slash path, which rendered as a bare

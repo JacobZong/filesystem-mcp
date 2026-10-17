@@ -94,7 +94,7 @@ export const WRITE_BINARY = defineTool<typeof WriteBinaryInputSchema, WriteBinar
     'file_sha256 on the last chunk. Use create for text.',
   input: WriteBinaryInputSchema,
   readOnlyHint: false,
-  accessPaths: (args) => [args.path],
+  mapPaths: (args, fn) => ({ ...args, path: fn(args.path) }),
   run: async (args, ctx) => {
     const bytes = Buffer.from(args.data_base64, 'base64');
     const sha256 = createHash('sha256').update(bytes).digest('hex');

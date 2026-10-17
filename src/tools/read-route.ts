@@ -23,6 +23,18 @@ const VIDEO_EXTS = new Set([
   '.ts',
   '.3gp',
 ]);
+/** MPEG-TS packets are 188 bytes, each starting with the 0x47 sync byte. */
+const TS_PACKET_BYTES = 188;
+const TS_SYNC_BYTE = 0x47;
+
+/**
+ * `.ts` is also TypeScript source: only route it as video when the file
+ * starts with two MPEG-TS packets, so a .ts source file stays a text read.
+ */
+async function isMpegTransportStream(path: string, ctx: ToolCtx): Promise<boolean> {
+  const head = await ctx.fs.readLeadingSample(path);
+  return head[0] === TS_SYNC_BYTE && head[TS_PACKET_BYTES] === TS_SYNC_BYTE;
+}
 /** Formats `read` hands to read_document (converted to Markdown). */
 const DOCUMENT_EXTS = new Set([
   '.epub',
@@ -71,6 +83,7 @@ interface ReadArgsLike {
   tail?: number | undefined;
   startLine?: number | undefined;
   endLine?: number | undefined;
+  binary?: boolean | undefined;
 }
 
 /** Whatever the routed tool returned; `read` passes it through unchanged. */
@@ -94,6 +107,8 @@ export async function routeBinaryRead(
   ctx: ToolCtx,
 ): Promise<Routed | undefined> {
   if (args.path === undefined || args.paths !== undefined) return undefined;
+  // binary: true asks for the raw file, so it is never routed.
+  if (args.binary === true) return undefined;
   if ([args.head, args.tail, args.startLine, args.endLine].some((v) => v !== undefined)) {
     return undefined;
   }
@@ -108,7 +123,7 @@ export async function routeBinaryRead(
       `// read routed this ${ext} file to read_pdf_pages (pages ${AUTO_PAGES}); call read_pdf_pages with "pages" for more.`,
     );
   }
-  if (VIDEO_EXTS.has(ext)) {
+  if (VIDEO_EXTS.has(ext) && (ext !== '.ts' || (await isMpegTransportStream(args.path, ctx)))) {
     const result = await runReadVideoFrames(
       ReadVideoFramesInputSchema.parse({ path: args.path }),
       ctx,

@@ -24,7 +24,7 @@ const OPTIONS_HELP: HelpRow[] = [
   },
   {
     flags: '--read-only',
-    desc: `Disable write tools: ${[...MUTATING_TOOL_NAMES].sort().join(', ')}`,
+    desc: `Disable write tools: ${[...MUTATING_TOOL_NAMES].sort().join(', ')} (env: FS_READ_ONLY)`,
   },
   { flags: '--print-config', desc: 'Print the active configuration as JSON and exit' },
   {
@@ -47,6 +47,10 @@ const OPTIONS_HELP: HelpRow[] = [
   {
     flags: '--max-file-size <bytes>',
     desc: 'Maximum file size for reads and for one create call, in bytes; the per-message wire limit is 3 × this + 1 MiB (env: FS_MAX_FILE_SIZE)',
+  },
+  {
+    flags: '--tool-timeout <ms>',
+    desc: 'Time limit for one list, stat, read, search or replace_text call, in ms (default 5000, 1000-600000) (env: FS_TOOL_TIMEOUT_MS)',
   },
   {
     flags: '--walk-cwd',
@@ -88,6 +92,10 @@ const ENV_HELP: HelpRow[] = [
     desc: 'Maximum file size for reads and for one create call, in bytes; sizes the wire limit (3 × this + 1 MiB)',
   },
   {
+    flags: 'FS_TOOL_TIMEOUT_MS',
+    desc: 'Time limit for one list, stat, read, search or replace_text call, in ms (default 5000, 1000-600000)',
+  },
+  {
     flags: 'FS_ALLOWED_DIRS',
     desc: 'Allowed dirs: colon-separated (Unix), semicolon-separated (Windows)',
   },
@@ -104,6 +112,7 @@ const ENV_HELP: HelpRow[] = [
     flags: 'FS_ALLOW_MISSING_ROOTS',
     desc: 'Start even if configured allowed directories do not exist ("true" or "1" enables this)',
   },
+  { flags: 'FS_READ_ONLY', desc: 'Disable write tools ("true" or "1" enables this)' },
   {
     flags: 'FS_ALLOWED_HOSTS',
     desc: 'Comma-separated Host header values to accept (HTTP transport)',

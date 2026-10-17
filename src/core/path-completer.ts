@@ -1,17 +1,10 @@
-import { opendir, stat } from 'node:fs/promises';
+import { opendir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
 import { isSkippableErrno, rethrowIfAborted } from './errors.ts';
 import { Logger } from './observability.ts';
-import {
-  isPathWithinDirectories,
-  isSamePath,
-  isSlash,
-  normalizePath,
-  toPosixPath,
-} from './path-utils.ts';
+import { isSamePath, isSlash, normalizePath, toPosixPath } from './path-utils.ts';
 import type { PathGuard } from './path.ts';
-import { resolveRealPath } from './path.ts';
 
 // ─── pure path-completion helpers ───────────────────────────────────────────
 
@@ -59,27 +52,6 @@ function resolveNamedRootContext(
   return resolveFromBase(root, parsed.remainder, trailingSeparator);
 }
 
-async function isAllowedCompletionDirectory(
-  path: string,
-  allowed: readonly string[],
-): Promise<boolean> {
-  if (!isPathWithinDirectories(path, allowed)) return false;
-  try {
-    const stats = await stat(path);
-    if (!stats.isDirectory()) return false;
-    const real = await resolveRealPath(path);
-    return real !== null && isPathWithinDirectories(real, allowed);
-  } catch (err) {
-    if (!isSkippableErrno(err)) {
-      Logger.debug('isAllowedCompletionDirectory: unexpected probe error', {
-        path,
-        error: String(err),
-      });
-    }
-    return false;
-  }
-}
-
 function withDirectorySeparator(value: string): string {
   return value.endsWith(sep) ? value : `${value}${sep}`;
 }
@@ -125,11 +97,17 @@ function mergeCompletionMatches(
 async function findMatchesInDirectory(
   searchDir: string,
   prefix: string,
-  allowed: readonly string[],
-  isSensitive?: (path: string) => boolean,
+  pathGuard: PathGuard,
 ): Promise<string[]> {
   const matches: string[] = [];
-  if (!(await isAllowedCompletionDirectory(searchDir, allowed))) return matches;
+  // The guard owns what a listing may enter: containment through the real
+  // path, device names, the sensitive list, is-a-directory. A refusal is
+  // "nothing to list", never an error, so root suggestions survive it.
+  const listable = await pathGuard.validateExistingDirectory(searchDir).then(
+    (validated) => validated,
+    () => undefined,
+  );
+  if (listable === undefined) return matches;
   try {
     // Stream via opendir and collect every match. Do not cap here: the
     // SDK's completion result keeps the first 100 values and reports the
@@ -137,13 +115,15 @@ async function findMatchesInDirectory(
     // and already sorted (mergeCompletionMatches). Capping here would
     // keep the opendir-first 100, not the alphabetically-first 100, and
     // hide the true count from the client.
-    const dir = await opendir(searchDir);
+    // The directory the guard validated: a spelling that differs from the
+    // disk only in Unicode (#101) passes validation but is not on disk as typed.
+    const dir = await opendir(listable);
     try {
       const lowerPrefix = prefix.toLowerCase();
       for await (const entry of dir) {
         if (prefix !== '' && !entry.name.toLowerCase().startsWith(lowerPrefix)) continue;
         const fullPath = join(searchDir, entry.name);
-        if (isSensitive?.(fullPath)) continue;
+        if (pathGuard.isSensitive(fullPath)) continue;
         matches.push(entry.isDirectory() ? `${fullPath}${sep}` : fullPath);
       }
     } finally {
@@ -185,10 +165,8 @@ function getSearchContext(
  * every match, sorted; the SDK truncates to 100 and reports the total.
  */
 export async function suggestPaths(pathGuard: PathGuard, value: string): Promise<string[]> {
-  // Roots to pick, name and list; the containment set also holds each root's
-  // realpath alias, so it only gates what a directory listing may enter.
+  // Roots to pick, name and list.
   const roots = pathGuard.getRoots();
-  const allowed = pathGuard.getAllowedDirectories();
 
   try {
     if (!value) {
@@ -201,9 +179,7 @@ export async function suggestPaths(pathGuard: PathGuard, value: string): Promise
     }
 
     const { searchDir, prefix } = context;
-    const dirMatches = await findMatchesInDirectory(searchDir, prefix, allowed, (p) =>
-      pathGuard.isSensitive(p),
-    );
+    const dirMatches = await findMatchesInDirectory(searchDir, prefix, pathGuard);
     const rootMatches = findMatchingRoots(searchDir, prefix, roots);
     return mergeCompletionMatches(dirMatches, rootMatches);
   } catch (error) {

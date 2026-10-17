@@ -74,7 +74,7 @@ const readVideoFramesDef: ToolDef<typeof ReadVideoFramesInputSchema, ReadVideoFr
   timeoutMs: FRAME_TIMEOUT_MS * 4,
   defaultErrorCode: ErrorCode.NOT_FILE,
   progress: (args) => ({ label: 'Read video', subject: basename(args.path) }),
-  accessPaths: (args) => [args.path],
+  mapPaths: (args, fn) => ({ ...args, path: fn(args.path) }),
   run: async (args, ctx) => {
     const { stats, validPath } = await ctx.fs.stat(args.path, { signal: ctx.signal });
     if (!stats.isFile()) throw new FsError(ErrorCode.NOT_FILE, 'Not a file.', args.path);

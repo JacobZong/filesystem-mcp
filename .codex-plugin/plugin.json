@@ -1,0 +1,31 @@
+{
+  "name": "filesystem-mcp",
+  "version": "2.9.1",
+  "description": "Secure filesystem MCP server for reading, writing, searching, diffing, and patching files. Requires Node.js 24+.",
+  "author": { "name": "j0hanz", "url": "https://github.com/j0hanz" },
+  "homepage": "https://github.com/j0hanz/filesystem-mcp#readme",
+  "repository": "https://github.com/j0hanz/filesystem-mcp",
+  "license": "MIT",
+  "keywords": ["mcp", "filesystem", "search", "diff", "patch", "security"],
+  "mcpServers": "./mcp.json",
+  "interface": {
+    "displayName": "Filesystem MCP",
+    "shortDescription": "Read, search, edit and patch files in the folders you choose.",
+    "longDescription": "Gives your AI client file tools limited to the folders you allow. Secret files like .env and private keys stay hidden by default, deleting a folder or overwriting a file waits for your confirmation, and read-only mode removes every tool that changes files. Runs locally and sends no data anywhere.",
+    "developerName": "j0hanz",
+    "category": "Coding",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "List the files in this folder, largest first",
+      "Search the project for TODO comments",
+      "Show me a diff of these two files"
+    ],
+    "websiteURL": "https://github.com/j0hanz/filesystem-mcp#readme",
+    "privacyPolicyURL": "https://github.com/j0hanz/filesystem-mcp/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/j0hanz/filesystem-mcp/blob/main/LICENSE",
+    "brandColor": "#5599FE",
+    "composerIcon": "./assets/logo.png",
+    "logo": "./assets/logo.png",
+    "screenshots": ["./examples/clients/browser/screenshot.png"]
+  }
+}

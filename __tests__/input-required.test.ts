@@ -7,10 +7,11 @@ import {
 } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { MODERN_PROTOCOL_REVISION } from '../src/core/config.ts';
 import { ErrorCode } from '../src/core/errors.ts';
 import {
   buildInputRequired,
@@ -27,6 +28,7 @@ import {
   createTestRoot,
   firstTextBlock,
   fsErrorMatcher,
+  modernClientMeta,
   writeTestFile,
 } from './helpers.ts';
 
@@ -107,7 +109,7 @@ describe('input_required multi-round-trip infrastructure', () => {
       { name: 'url-only-test', version: '1.0.0' },
       {
         capabilities: { elicitation: { url: {} } },
-        versionNegotiation: { mode: { pin: '2026-07-28' } },
+        versionNegotiation: { mode: { pin: MODERN_PROTOCOL_REVISION } },
       },
     );
     let elicitations = 0;
@@ -196,6 +198,37 @@ describe('input_required multi-round-trip infrastructure', () => {
     );
     assert.ok(result !== undefined);
     assert.strictEqual(isInputRequiredResult(result), true);
+  });
+
+  it('delete identity state survives minting and reissue without adopting retry identities', async () => {
+    const deleteIdentities = [
+      { path: '/x', itemType: 'directory' as const, dev: 1, ino: 2, birthtimeMs: 3 },
+    ];
+    const opts = {
+      op: 'delete' as const,
+      pending: ['/x'],
+      deleteIdentities,
+      buildInputs: () => [{ key: 'confirm_0', message: 'Delete /x?' }],
+    };
+    const first = await pendingRoundTrip({ serverCtx: bindContext() }, opts);
+    assert.ok(first);
+    const original = await requestStateCodec.verify(first.requestState ?? '', bindContext());
+    assert.deepStrictEqual(original.deleteIdentities, deleteIdentities);
+    const second = await pendingRoundTrip(
+      {
+        requestState: () => original,
+        droppedInputResponseKeys: ['confirm_0'],
+        serverCtx: bindContext(),
+      },
+      {
+        ...opts,
+        deleteIdentities: [{ path: '/x', itemType: 'file', dev: 4, ino: 5, birthtimeMs: 6 }],
+      },
+    );
+    assert.ok(second);
+    const reissued = await requestStateCodec.verify(second.requestState ?? '', bindContext());
+    assert.deepStrictEqual(reissued.deleteIdentities, deleteIdentities);
+    assert.strictEqual(reissued.reissued, true);
   });
 
   it('4. pendingRoundTrip same-op + same paths returns undefined (proceed)', async () => {
@@ -546,11 +579,7 @@ describe('describeRefusal', () => {
 });
 
 describe('wrapped inputResponses over the modern wire', () => {
-  const META = {
-    'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-    'io.modelcontextprotocol/clientCapabilities': { elicitation: { form: {} } },
-    'io.modelcontextprotocol/clientInfo': { name: 'raw-modern-test', version: '1.0.0' },
-  };
+  const META = modernClientMeta('raw-modern-test', { elicitation: { form: {} } });
 
   async function post(
     handler: ReturnType<typeof createMcpHandler>,
@@ -567,7 +596,7 @@ describe('wrapped inputResponses over the modern wire', () => {
           // 2026-07-28 request missing any of them before dispatch
           // (`validateStandardRequestHeaders` in the SDK). `Mcp-Name` must
           // equal `params.name` for tools/call.
-          'mcp-protocol-version': '2026-07-28',
+          'mcp-protocol-version': MODERN_PROTOCOL_REVISION,
           'mcp-method': 'tools/call',
           'mcp-name': String(params['name']),
         },
@@ -585,6 +614,112 @@ describe('wrapped inputResponses over the modern wire', () => {
         ).slice(5)
       : text;
     return JSON.parse(json) as { result?: Record<string, unknown>; error?: { message?: string } };
+  }
+
+  for (const missing of ['legacy', 'empty', 'wrong path']) {
+    it(`delete refuses accepted ${missing} identity state even after the original becomes empty`, async () => {
+      const root = await createTestRoot();
+      const handler = createMcpHandler(
+        async ({ era }) => (await createServer({ cliAllowedDirs: [root] }, { era })).mcp,
+        { legacy: 'reject' },
+      );
+      try {
+        const dir = join(root, 'victim');
+        const child = await writeTestFile(root, 'victim/f.txt', 'original');
+        const args = { paths: [dir], recursive: true };
+        const first = await post(handler, 1, { name: 'delete', arguments: args, _meta: META });
+        assert.strictEqual(first.result?.['resultType'], 'input_required');
+        const state = await requestStateCodec.verify(
+          first.result['requestState'] as string,
+          bindContext(),
+        );
+        const requestState = await requestStateCodec.mint(
+          {
+            op: state.op,
+            paths: state.paths,
+            ...(missing === 'legacy'
+              ? {}
+              : {
+                  deleteIdentities:
+                    missing === 'empty'
+                      ? []
+                      : (state.deleteIdentities?.map((identity) => ({
+                          ...identity,
+                          path: join(root, 'other'),
+                        })) ?? []),
+                }),
+          },
+          bindContext(),
+        );
+        await rm(child);
+        const result = await post(handler, 2, {
+          name: 'delete',
+          arguments: args,
+          _meta: META,
+          requestState,
+          inputResponses: { confirm_0: { action: 'accept', content: { choice: 'delete' } } },
+        });
+        assert.strictEqual(result.result?.['isError'], true, JSON.stringify(result));
+        assert.match(JSON.stringify(result), /identity/);
+        await access(dir);
+      } finally {
+        await handler.close();
+        await cleanupTestRoot(root);
+      }
+    });
+  }
+
+  for (const replace of [false, true]) {
+    it(`a reissued delete confirmation ${replace ? 'refuses a replacement' : 'accepts the original identity'}`, async () => {
+      const root = await createTestRoot();
+      const handler = createMcpHandler(
+        async ({ era }) => (await createServer({ cliAllowedDirs: [root] }, { era })).mcp,
+        { legacy: 'reject' },
+      );
+      try {
+        const dir = join(root, 'victim');
+        await writeTestFile(root, 'victim/f.txt', 'original');
+        const args = { paths: [dir], recursive: true };
+        const first = await post(handler, 1, { name: 'delete', arguments: args, _meta: META });
+        assert.strictEqual(first.result?.['resultType'], 'input_required');
+        if (replace) {
+          await rename(dir, join(root, 'original'));
+          await writeTestFile(root, 'victim/f.txt', 'replacement');
+        }
+        const second = await post(handler, 2, {
+          name: 'delete',
+          arguments: args,
+          _meta: META,
+          requestState: first.result['requestState'],
+          inputResponses: {
+            confirm_0: {
+              method: 'elicitation/create',
+              result: { action: 'accept', content: { choice: 'delete' } },
+            },
+          },
+        });
+        assert.strictEqual(second.result?.['resultType'], 'input_required');
+        const third = await post(handler, 3, {
+          name: 'delete',
+          arguments: args,
+          _meta: META,
+          requestState: second.result['requestState'],
+          inputResponses: { confirm_0: { action: 'accept', content: { choice: 'delete' } } },
+        });
+        if (replace) {
+          assert.strictEqual(third.result?.['isError'], true, JSON.stringify(third));
+          assert.match(JSON.stringify(third.result), /identity/);
+          assert.strictEqual(await readFile(join(dir, 'f.txt'), 'utf8'), 'replacement');
+          assert.strictEqual(await readFile(join(root, 'original/f.txt'), 'utf8'), 'original');
+        } else {
+          assert.notStrictEqual(third.result?.['isError'], true, JSON.stringify(third));
+          await assert.rejects(access(dir), { code: 'ENOENT' });
+        }
+      } finally {
+        await handler.close();
+        await cleanupTestRoot(root);
+      }
+    });
   }
 
   it('a wrapped confirmation is asked again once, then named in the refusal', async () => {

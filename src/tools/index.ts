@@ -1,10 +1,6 @@
-import type { McpServer } from '@modelcontextprotocol/server';
-
 import { startIndexScheduler } from '../core/file-index.ts';
-import type { PathGuard } from '../core/path.ts';
-import type { PageSnapshotStore, ResourceStore } from '../core/store.ts';
 import { CREATE } from './create.ts';
-import type { DefinedTool } from './define.ts';
+import type { DefinedTool, ToolDeps } from './define.ts';
 import { DELETE } from './delete.ts';
 import { DIFF } from './diff.ts';
 import { EDIT } from './edit.ts';
@@ -60,27 +56,13 @@ export function registeredTools(readOnly: boolean): readonly DefinedTool[] {
 // MUTATING_TOOL_NAMES and ALL_TOOLS instead.
 export { LIST, LIST_ROOTS, READ, SEARCH_TEXT, FIND_FILES, STAT };
 
-interface ToolRegistrarDeps {
-  readonly server: McpServer;
-  readonly pathGuard: PathGuard;
-  readonly pageStore: PageSnapshotStore;
-  readonly resourceStore: ResourceStore;
-  readonly readOnly?: boolean;
-  readonly era?: 'legacy' | 'modern';
-  readonly transport?: 'stdio' | 'http';
+interface ToolRegistrarDeps extends ToolDeps {
+  readonly readOnly: boolean;
 }
 
 export function registerTools(deps: ToolRegistrarDeps): void {
-  const toolDeps = {
-    server: deps.server,
-    pathGuard: deps.pathGuard,
-    pageStore: deps.pageStore,
-    resourceStore: deps.resourceStore,
-    ...(deps.era ? { era: deps.era } : {}),
-    ...(deps.transport ? { transport: deps.transport } : {}),
-  };
-  for (const tool of registeredTools(deps.readOnly ?? false)) {
-    tool.register(toolDeps);
+  for (const tool of registeredTools(deps.readOnly)) {
+    tool.register(deps);
   }
   // Fork: load the saved filename index (or build it) and rebuild it nightly; starts once per process.
   startIndexScheduler(() => deps.pathGuard.getAllowedDirectories());
